@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "DraftForge ESPN Companion",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Securely connects DraftForge to your signed-in ESPN Fantasy draft room.",
   "permissions": ["storage", "tabs"],
   "host_permissions": [
@@ -19,6 +19,7 @@
       "matches": [
         "http://localhost:3000/*",
         "http://127.0.0.1:3000/*",
+        "https://*.chatgpt.site/*",
         "https://*.openai.site/*",
         "https://*.sites.openai.com/*"
       ],
