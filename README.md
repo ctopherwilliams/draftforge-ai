@@ -1,5 +1,7 @@
 # DraftForge AI
 
+Moving the project to another computer or Codex account? Start with [MIGRATION.md](MIGRATION.md) and [AGENT_HANDOFF.md](AGENT_HANDOFF.md).
+
 DraftForge is an ESPN-only fantasy football draft control room. It imports the league's real settings through a narrowly scoped Chrome extension, follows a live snake or salary-cap draft, combines five public player-intelligence feeds, and recommends the next selection, nomination, or bid.
 
 Post-draft league management is intentionally out of scope.
