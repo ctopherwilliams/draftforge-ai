@@ -7,16 +7,17 @@ type SourceResult = {
   status: "ok" | "error";
   updatedAt: string | null;
   attribution: string;
+  url: string;
   players: FeedPlayer[];
   sampleSize?: number;
   error?: string;
 };
 
 const SOURCE_INFO = {
-  ffc: { name: "Fantasy Football Calculator", kind: "market" as const, weight: .15, attribution: "fantasyfootballcalculator.com" },
-  mfl: { name: "MyFantasyLeague", kind: "market" as const, weight: .15, attribution: "myfantasyleague.com" },
-  tradyr: { name: "Tradyr", kind: "composite" as const, weight: .20, attribution: "tradyr.app" },
-  gng: { name: "The GNG Pigskin Rankings", kind: "model" as const, weight: .20, attribution: "thegng.us/ranks" },
+  ffc: { name: "Fantasy Football Calculator", kind: "market" as const, weight: .15, attribution: "Fantasy Football Calculator", url: "https://fantasyfootballcalculator.com" },
+  mfl: { name: "MyFantasyLeague", kind: "market" as const, weight: .15, attribution: "MyFantasyLeague", url: "https://www.myfantasyleague.com" },
+  tradyr: { name: "Tradyr", kind: "composite" as const, weight: .20, attribution: "Powered by Tradyr", url: "https://tradyr.app" },
+  gng: { name: "The GNG Pigskin Rankings", kind: "model" as const, weight: .20, attribution: "The GNG rankings", url: "https://www.thegng.us/ranks" },
 };
 
 async function fetchJson(url: string, init?: RequestInit) {

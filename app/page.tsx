@@ -11,6 +11,7 @@ import {
   type StrategyId,
 } from "./lib/draft-engine";
 import { mergeConsensus, type IntelligenceSource } from "./lib/consensus";
+import { profileForEspnRoom, upsertDraftProfile, type DraftProfile } from "./lib/profiles";
 
 const DEMO_PLAYERS: DraftPlayer[] = [
   { id: 1, name: "Ja'Marr Chase", team: "CIN", pos: "WR", rank: 1, adp: 1.4, auction: 61, projected: 312 },
@@ -82,9 +83,45 @@ export default function Home() {
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(1);
   const [actionState, setActionState] = useState("Waiting for ESPN connection.");
+  const [profiles, setProfiles] = useState<Record<string, DraftProfile>>({});
   const lastAutoAction = useRef("");
+  const profilesRef = useRef<Record<string, DraftProfile>>({});
+  const activeLeagueRef = useRef("demo");
+
+  function activateProfile(profile: DraftProfile, roomContext?: EspnContext) {
+    activeLeagueRef.current = profile.league.id;
+    setLeague(profile.league);
+    setEspnPlayers(profile.espnPlayers);
+    setPicks(profile.picks);
+    setSettingsConfirmed(profile.settingsConfirmed);
+    setStrategy(profile.strategy);
+    setLeagueId(profile.league.id);
+    setAutoDraft(false);
+    setContext((current) => ({ ...current, ...(roomContext || {}) }));
+    setExtension("connected");
+    setSettingsOpen(!profile.settingsConfirmed);
+    setActionState(`${profile.league.name} loaded. Auto-Draft is off.`);
+  }
+
+  function startAnotherLeague() {
+    activeLeagueRef.current = "demo";
+    setLeague(DEMO_LEAGUE);
+    setEspnPlayers(DEMO_PLAYERS);
+    setPicks([]);
+    setLeagueId("");
+    setSettingsConfirmed(false);
+    setAutoDraft(false);
+    setExtension("ready");
+    setSettingsOpen(true);
+    setActionState("Open the other ESPN league, then import it.");
+  }
 
   useEffect(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem("draftforge-leagues-v1") || "{}");
+      profilesRef.current = saved;
+      setProfiles(saved);
+    } catch { /* ignore an invalid local draft cache */ }
     const timeout = window.setTimeout(() => setExtension((status) => status === "checking" ? "missing" : status), 1200);
     function onMessage(event: MessageEvent) {
       if (event.source !== window || event.origin !== window.location.origin || event.data?.source !== "draftforge-extension") return;
@@ -92,8 +129,14 @@ export default function Home() {
       if (type === "EXTENSION_READY") {
         setExtension("ready");
         setContext(payload?.context || {});
+        const profile = profileForEspnRoom(profilesRef.current, payload?.context?.leagueId);
+        if (profile) activateProfile(profile, payload.context);
       }
-      if (type === "DF_ESPN_CONTEXT") setContext(payload || {});
+      if (type === "DF_ESPN_CONTEXT") {
+        setContext(payload || {});
+        const profile = payload?.inDraftRoom ? profileForEspnRoom(profilesRef.current, payload?.leagueId) : undefined;
+        if (profile && profile.league.id !== activeLeagueRef.current) activateProfile(profile, payload);
+      }
       if (type === "DF_IMPORT_SUCCESS" || (type === "COMMAND_RESULT" && payload?.data?.league)) {
         const data = type === "DF_IMPORT_SUCCESS" ? payload : payload.data;
         setLeague(data.league);
@@ -105,6 +148,9 @@ export default function Home() {
         setSettingsOpen(true);
         setSettingsConfirmed(false);
         setActionState("ESPN settings imported. Confirm them before drafting.");
+        const profile: DraftProfile = { league: data.league, espnPlayers: data.players?.length ? data.players : DEMO_PLAYERS, picks: data.picks || [], settingsConfirmed: false, strategy: "BALANCED", savedAt: new Date().toISOString() };
+        profilesRef.current = upsertDraftProfile(profilesRef.current, profile);
+        setProfiles(profilesRef.current);
       }
       if (type === "DF_DRAFT_UPDATE") {
         setPicks(payload.picks || []);
@@ -125,6 +171,17 @@ export default function Home() {
     window.addEventListener("message", onMessage);
     return () => { window.clearTimeout(timeout); window.removeEventListener("message", onMessage); };
   }, []);
+
+  useEffect(() => {
+    profilesRef.current = profiles;
+    window.localStorage.setItem("draftforge-leagues-v1", JSON.stringify(profiles));
+  }, [profiles]);
+
+  useEffect(() => {
+    if (league.id === "demo" || extension !== "connected") return;
+    activeLeagueRef.current = league.id;
+    setProfiles((current) => upsertDraftProfile(current, { league, espnPlayers, picks, settingsConfirmed, strategy, savedAt: new Date().toISOString() }));
+  }, [league, espnPlayers, picks, settingsConfirmed, strategy, extension]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -221,7 +278,7 @@ export default function Home() {
     </header>
 
     <section className="context-strip">
-      <div><span className="platform-chip">E</span><div><b>{league.name}</b><small>ESPN · {league.size}-team · {league.scoringLabel} · {league.draftType === "AUCTION" ? `$${league.auctionBudget} salary cap` : "Snake"}</small></div></div>
+      <div><span className="platform-chip">E</span><div><select className="league-switcher" value={league.id} onChange={(event) => { if (event.target.value === "__new") startAnotherLeague(); else { const profile = profiles[event.target.value]; if (profile) activateProfile(profile); } }}><option value="demo">{league.id === "demo" ? league.name : "Choose draft"}</option>{Object.values(profiles).sort((a, b) => a.league.name.localeCompare(b.league.name)).map((profile) => <option key={profile.league.id} value={profile.league.id}>{profile.league.name}</option>)}<option value="__new">＋ Import another ESPN league</option></select><small>ESPN · {league.size}-team · {league.scoringLabel} · {league.draftType === "AUCTION" ? `$${league.auctionBudget} salary cap` : "Snake"}</small></div></div>
       <div className="progress-wrap"><span>Draft progress</span><div className="progress"><i style={{ width: `${Math.min(100, picks.length / Math.max(1, league.size * league.rosterSize) * 100)}%` }} /></div><b>{picks.length}/{league.size * league.rosterSize}</b></div>
       <div className={`sync-note ${extension === "connected" ? "connected" : ""}`}><span>●</span>{extension === "connected" ? `Synced · League ${league.id}` : extension === "missing" ? "Companion not detected" : extension === "connecting" ? "Connecting to ESPN…" : "ESPN companion ready"}</div>
     </section>
@@ -254,7 +311,7 @@ export default function Home() {
       <button className="engine-badge" onClick={() => setSourcesOpen((open) => !open)}><i>◆</i><span><b>{intelligenceLoading ? "Refreshing intelligence…" : `${1 + sources.filter((source) => source.status === "ok").length}/5 sources live`}</b><small>Weighted consensus · inspect sources</small></span></button>
       <div className={`action-feed ${actionState.includes("stopped") ? "error" : ""}`}><span>STATUS</span>{actionState}</div>
       {strategyOpen && <div className="strategy-menu">{STRATEGIES.map((item) => <button key={item.id} className={strategy === item.id ? "active" : ""} onClick={() => { setStrategy(item.id); setStrategyOpen(false); }}><b>{item.label}</b><small>{item.description}</small></button>)}</div>}
-      {sourcesOpen && <div className="sources-menu"><div><b>Decision intelligence</b><button onClick={() => setSourcesOpen(false)}>×</button></div><p>ESPN anchors league-specific projections at 30%. Four independent public feeds supply model rankings and real draft-market prices.</p><ul><li><span className="source-ok">●</span><b>ESPN Fantasy</b><small>30% · league projection, ADP, auction value</small></li>{sources.map((source) => <li key={source.id}><span className={source.status === "ok" ? "source-ok" : "source-error"}>●</span><b>{source.name}</b><small>{Math.round(source.weight * 100)}% · {source.kind}{source.sampleSize ? ` · ${source.sampleSize.toLocaleString()} drafts` : ""}</small></li>)}</ul><small>Sources that fail or become stale are removed and remaining weights are renormalized.</small></div>}
+      {sourcesOpen && <div className="sources-menu"><div><b>Decision intelligence</b><button onClick={() => setSourcesOpen(false)}>×</button></div><p>ESPN anchors league-specific projections at 30%. Four independent public feeds supply model rankings and real draft-market prices.</p><ul><li><span className="source-ok">●</span><b>ESPN Fantasy</b><small>30% · league projection, ADP, auction value</small></li>{sources.map((source) => <li key={source.id}><span className={source.status === "ok" ? "source-ok" : "source-error"}>●</span><b>{source.name}</b><small>{Math.round(source.weight * 100)}% · {source.kind}{source.sampleSize ? ` · ${source.sampleSize.toLocaleString()} drafts` : ""} · <a href={source.url} target="_blank" rel="noreferrer">source</a></small></li>)}</ul><small>Sources that fail or become stale are removed and remaining weights are renormalized.</small></div>}
     </section>
 
     <section className="workspace">

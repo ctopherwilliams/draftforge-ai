@@ -7,6 +7,18 @@
   text-decoration: none;
 }
 
+.league-switcher {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+  max-width: 250px;
+  padding: 0 16px 0 0;
+  cursor: pointer;
+}
+
 .engine-badge {
   border: 0;
   background: transparent;
@@ -44,6 +56,7 @@
 .sources-menu li { display: grid; grid-template-columns: 14px 1fr; align-items: center; padding: 6px 0; border-bottom: 1px solid #edf0ed; }
 .sources-menu li b { font-size: 9px; }
 .sources-menu li small { grid-column: 2; color: var(--muted); margin-top: 2px; }
+.sources-menu a { color: var(--green); }
 .source-ok { color: #24a66e; }
 .source-error { color: var(--red); }
 .auction-live { display: inline-block; margin: 10px 0 -5px; padding: 4px 7px; border-radius: 9px; background: #fff0e8; color: var(--red); font-size: 7px; font-weight: 900; letter-spacing: .7px; }

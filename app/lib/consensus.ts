@@ -19,6 +19,7 @@ export type IntelligenceSource = {
   status: "ok" | "error";
   updatedAt: string | null;
   attribution: string;
+  url?: string;
   players: IntelligencePlayer[];
   sampleSize?: number;
   error?: string;
@@ -75,7 +76,12 @@ function findSignal(player: DraftPlayer, source: IntelligenceSource) {
 }
 
 export function mergeConsensus(espnPlayers: DraftPlayer[], sources: IntelligenceSource[]): ConsensusPlayer[] {
-  const healthySources = sources.filter((source) => source.status === "ok" && source.players.length);
+  const healthySources = sources.filter((source) => {
+    if (source.status !== "ok" || !source.players.length) return false;
+    if (!source.updatedAt) return true;
+    const age = Date.now() - new Date(source.updatedAt).getTime();
+    return Number.isFinite(age) && age <= 14 * 24 * 60 * 60 * 1000;
+  });
   const enriched = espnPlayers.map((player) => {
     const sourceRanks: Record<string, number> = { espn: Number(player.rank || player.adp || 999) };
     const adps = [{ value: player.adp, weight: SOURCE_WEIGHTS.espn }];
