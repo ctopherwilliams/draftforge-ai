@@ -17,6 +17,10 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
     readFile(new URL("espn-content.js", root), "utf8"),
   ]);
   assert.doesNotMatch(background, /chrome\.storage|espn_s2|SWID/);
+  assert.match(background, /findEspnContext\(expectedLeagueId\)/);
+  assert.match(background, /findEspnContext\(message\.payload\?\.expectedLeagueId\)/);
+  assert.match(background, /receptionPoints === 0 \? "Standard"/);
+  assert.doesNotMatch(background, /pollDraft\(\{ \.\.\.message\.payload, season: 2026 \}\)/);
   assert.match(content, /NOT_ON_CLOCK/);
   assert.match(content, /WRONG_LEAGUE/);
   assert.match(content, /NOMINEE_MISMATCH/);

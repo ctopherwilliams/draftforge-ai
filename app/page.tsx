@@ -215,7 +215,7 @@ export default function Home() {
   function connect() {
     setExtension("connecting");
     setActionState("Reading your signed-in ESPN league…");
-    sendToExtension("CONNECT_ESPN", { leagueId: leagueId.trim() || undefined, season: 2026 });
+    sendToExtension("CONNECT_ESPN", { ...(leagueId.trim() ? { leagueId: leagueId.trim() } : {}), season: league.season || new Date().getFullYear() });
   }
 
   function submit(player = focusPlayer, automatic = false, operation?: "SELECT" | "NOMINATE" | "BID", amount?: number) {
