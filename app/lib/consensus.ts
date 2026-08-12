@@ -1,4 +1,4 @@
-import type { DraftPlayer } from "./draft-engine";
+import type { DraftPlayer, LeagueSettings } from "./draft-engine";
 
 export type IntelligencePlayer = {
   name: string;
@@ -32,9 +32,46 @@ export type ConsensusPlayer = DraftPlayer & {
   rankSpread: number;
   sourceCount: number;
   sourceRanks: Record<string, number>;
+  sourceAuctions: Record<string, number>;
 };
 
 const SOURCE_WEIGHTS: Record<string, number> = { espn: .30, gng: .20, tradyr: .20, ffc: .15, mfl: .15 };
+const MAX_SOURCE_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+
+type AuctionContext = Pick<LeagueSettings, "size" | "rosterSize" | "auctionBudget">;
+
+export function isIntelligenceSourceFresh(source: IntelligenceSource) {
+  if (source.status !== "ok" || !source.players.length) return false;
+  if (!source.updatedAt) return true;
+  const age = Date.now() - new Date(source.updatedAt).getTime();
+  return Number.isFinite(age) && age <= MAX_SOURCE_AGE_MS;
+}
+
+function createAuctionCurve(players: IntelligencePlayer[], context: AuctionContext) {
+  const rosterable = Math.max(1, Math.min(players.length, context.size * context.rosterSize));
+  const totalDollars = Math.max(context.size * context.rosterSize, context.size * context.auctionBudget);
+  const reserveDollars = context.size * context.rosterSize;
+  const discretionaryDollars = Math.max(0, totalDollars - reserveDollars);
+  const rankDenominator = Array.from({ length: rosterable }, (_, index) => ((rosterable - index) / rosterable) ** 3)
+    .reduce((sum, value) => sum + value, 0) || 1;
+  const nativeRows = [...players]
+    .filter((player) => Number(player.auction) > 0 && Number(player.rank || player.adp || 999) <= rosterable)
+    .sort((a, b) => Number(a.rank || a.adp || 999) - Number(b.rank || b.adp || 999))
+    .slice(0, rosterable);
+  const nativeExtras = nativeRows.reduce((sum, player) => sum + Math.max(0, Number(player.auction || 0) - 1), 0);
+  const nativeScale = nativeExtras > 0 ? discretionaryDollars / nativeExtras : 0;
+
+  return (player: IntelligencePlayer) => {
+    const rank = Math.max(1, Number(player.rank || player.adp || rosterable));
+    const rankScore = rank <= rosterable ? ((rosterable - rank + 1) / rosterable) ** 3 : 0;
+    const rankValue = 1 + discretionaryDollars * rankScore / rankDenominator;
+    if (!(Number(player.auction) > 0) || !nativeScale) return Math.max(1, rankValue);
+    const nativeValue = 1 + Math.max(0, Number(player.auction) - 1) * nativeScale;
+    // ESPN and MFL publish dollar markets; blend those league-normalized
+    // anchors with the same source's rank curve instead of double-counting.
+    return Math.max(1, nativeValue * .65 + rankValue * .35);
+  };
+}
 
 export function normalizePlayerName(value: string) {
   return value.toLowerCase()
@@ -75,17 +112,16 @@ function findSignal(player: DraftPlayer, source: IntelligenceSource) {
   });
 }
 
-export function mergeConsensus(espnPlayers: DraftPlayer[], sources: IntelligenceSource[]): ConsensusPlayer[] {
-  const healthySources = sources.filter((source) => {
-    if (source.status !== "ok" || !source.players.length) return false;
-    if (!source.updatedAt) return true;
-    const age = Date.now() - new Date(source.updatedAt).getTime();
-    return Number.isFinite(age) && age <= 14 * 24 * 60 * 60 * 1000;
-  });
+export function mergeConsensus(espnPlayers: DraftPlayer[], sources: IntelligenceSource[], league?: AuctionContext): ConsensusPlayer[] {
+  const context = league || { size: 12, rosterSize: 16, auctionBudget: 200 };
+  const healthySources = sources.filter(isIntelligenceSourceFresh);
+  const espnCurve = createAuctionCurve(espnPlayers, context);
+  const sourceCurves = new Map(healthySources.map((source) => [source.id, createAuctionCurve(source.players, context)]));
   const enriched = espnPlayers.map((player) => {
     const sourceRanks: Record<string, number> = { espn: Number(player.rank || player.adp || 999) };
+    const sourceAuctions: Record<string, number> = { espn: espnCurve(player) };
     const adps = [{ value: player.adp, weight: SOURCE_WEIGHTS.espn }];
-    const auctions = [{ value: player.auction, weight: SOURCE_WEIGHTS.espn }];
+    const auctions = [{ value: sourceAuctions.espn, weight: SOURCE_WEIGHTS.espn }];
     let weightedPercentile = SOURCE_WEIGHTS.espn * Math.max(0, 1 - (sourceRanks.espn - 1) / Math.max(espnPlayers.length - 1, 1));
     let totalWeight = SOURCE_WEIGHTS.espn;
 
@@ -100,7 +136,11 @@ export function mergeConsensus(espnPlayers: DraftPlayer[], sources: Intelligence
         totalWeight += source.weight;
       }
       if (signal.adp && signal.adp < 999) adps.push({ value: signal.adp, weight: source.weight });
-      if (signal.auction && signal.auction > 0) auctions.push({ value: signal.auction, weight: source.weight });
+      const sourceAuction = sourceCurves.get(source.id)?.(signal);
+      if (sourceAuction && sourceAuction > 0) {
+        sourceAuctions[source.id] = sourceAuction;
+        auctions.push({ value: sourceAuction, weight: source.weight });
+      }
     }
 
     const ranks = Object.values(sourceRanks);
@@ -111,7 +151,7 @@ export function mergeConsensus(espnPlayers: DraftPlayer[], sources: Intelligence
     const consensusConfidence = Math.round(Math.max(35, Math.min(98, 52 + coverage * 38 - Math.min(20, rankSpread * .65))));
     const weightedAdp = adps.reduce((sum, item) => sum + item.value * item.weight, 0) / adps.reduce((sum, item) => sum + item.weight, 0);
     const weightedAuction = auctions.reduce((sum, item) => sum + item.value * item.weight, 0) / auctions.reduce((sum, item) => sum + item.weight, 0);
-    return { ...player, adp: weightedAdp, auction: weightedAuction, consensusRank: 999, consensusScore, consensusConfidence, rankSpread, sourceCount, sourceRanks };
+    return { ...player, adp: weightedAdp, auction: weightedAuction, consensusRank: 999, consensusScore, consensusConfidence, rankSpread, sourceCount, sourceRanks, sourceAuctions };
   });
 
   const order = [...enriched].sort((a, b) => b.consensusScore - a.consensusScore);

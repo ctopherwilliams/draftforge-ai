@@ -1,3 +1,6 @@
+import { normalizePicks } from "./draft-normalizers.js";
+import { draftableRosterSizeFor, draftTypeFor, keeperCountFor } from "./league-normalizers.js";
+
 const appTabs = new Set();
 let espnContext = null;
 let lastPollAt = 0;
@@ -14,7 +17,18 @@ async function broadcast(type, payload) {
   }
 }
 
-async function findEspnContext(expectedLeagueId) {
+async function findEspnContext(expectedLeagueId, expectedTabId) {
+  if (Number.isInteger(expectedTabId)) {
+    try {
+      const tab = await chrome.tabs.get(expectedTabId);
+      if (!tab.url?.startsWith("https://fantasy.espn.com/")) return null;
+      const context = await chrome.tabs.sendMessage(expectedTabId, { type: "DF_GET_CONTEXT" });
+      if (expectedLeagueId && String(context?.leagueId) !== String(expectedLeagueId)) return null;
+      return { ...context, tabId: expectedTabId, lastAccessed: Number(tab.lastAccessed || 0) };
+    } catch {
+      return null;
+    }
+  }
   const tabs = await chrome.tabs.query({ url: "https://fantasy.espn.com/*" });
   const contexts = (await Promise.all(tabs.filter((tab) => tab.id).map(async (tab) => {
     try {
@@ -22,9 +36,33 @@ async function findEspnContext(expectedLeagueId) {
       return { ...context, tabId: tab.id, lastAccessed: Number(tab.lastAccessed || 0) };
     } catch { return null; }
   }))).filter(Boolean);
-  const exact = expectedLeagueId && contexts.find((context) => String(context.leagueId) === String(expectedLeagueId));
+  const requiresExactContext = Boolean(expectedLeagueId) || Number.isInteger(expectedTabId);
+  const exact = contexts.find((context) =>
+    (!expectedLeagueId || String(context.leagueId) === String(expectedLeagueId))
+    && (!Number.isInteger(expectedTabId) || Number(context.tabId) === Number(expectedTabId))
+  );
   if (exact) return exact;
+  // Import and submission must never fall back to a similarly shaped ESPN
+  // tab. A stale duplicate draft page is indistinguishable otherwise.
+  if (requiresExactContext) return null;
   return contexts.sort((a, b) => Number(b.inDraftRoom) - Number(a.inDraftRoom) || b.lastAccessed - a.lastAccessed)[0] || null;
+}
+
+async function findUniqueDraftRoomContext(expectedLeagueId, expectedTeamId) {
+  if (!expectedLeagueId || !Number.isInteger(expectedTeamId)) return null;
+  const tabs = await chrome.tabs.query({ url: "https://fantasy.espn.com/*" });
+  const matches = (await Promise.all(tabs.filter((tab) => tab.id).map(async (tab) => {
+    try {
+      const context = await chrome.tabs.sendMessage(tab.id, { type: "DF_GET_CONTEXT" });
+      if (String(context?.leagueId) !== String(expectedLeagueId)
+        || Number(context?.teamId) !== Number(expectedTeamId)
+        || context?.inDraftRoom !== true) return null;
+      return { ...context, tabId: tab.id, lastAccessed: Number(tab.lastAccessed || 0) };
+    } catch {
+      return null;
+    }
+  }))).filter(Boolean);
+  return matches.length === 1 ? matches[0] : null;
 }
 
 function leagueUrl(leagueId, season, views) {
@@ -46,12 +84,12 @@ function normalizeSettings(raw, context) {
   const roster = settings.rosterSettings || {};
   const scoring = settings.scoringSettings || {};
   const picks = raw.draftDetail?.picks || [];
-  const draftType = Number(draft.type) === 2 ? "AUCTION" : "SNAKE";
+  const draftType = draftTypeFor(draft.type);
   const scoringItems = scoring.scoringItems || [];
   const receptionRule = scoringItems.find((item) => Number(item.statId) === 53);
   const receptionPoints = Number(receptionRule?.points || 0);
   const scoringLabel = receptionPoints === 1 ? "PPR" : receptionPoints === 0.5 ? "Half PPR" : receptionPoints === 0 ? "Standard" : "Custom";
-  const keeperCount = (raw.teams || []).reduce((sum, team) => sum + (team.roster?.entries || []).filter((entry) => entry.keeperValue || entry.acquisitionType === "KEEPER").length, 0);
+  const keeperCount = keeperCountFor(draft, raw.teams || []);
 
   return {
     id: String(raw.id || context.leagueId),
@@ -63,7 +101,7 @@ function normalizeSettings(raw, context) {
     draftType,
     draftDate: draft.date || null,
     secondsPerPick: Number(draft.timePerSelection || 90),
-    rosterSize: Number(draft.slotCount || Object.values(roster.lineupSlotCounts || {}).reduce((a, b) => a + Number(b), 0) || 16),
+    rosterSize: draftableRosterSizeFor(draft, roster),
     auctionBudget: Number(draft.auctionBudget || draft.budget || 200),
     pickOrder: draft.pickOrder || [],
     lineupSlotCounts: roster.lineupSlotCounts || {},
@@ -79,17 +117,6 @@ function normalizeSettings(raw, context) {
     teams: (raw.teams || []).map((team) => ({ id: Number(team.id), name: team.name || `${team.location || ""} ${team.nickname || ""}`.trim(), abbrev: team.abbrev || "" })),
     rawSettings: settings,
   };
-}
-
-function normalizePicks(raw) {
-  return (raw.draftDetail?.picks || []).map((pick, index) => ({
-    playerId: Number(pick.playerId),
-    teamId: Number(pick.teamId),
-    overall: Number(pick.overallPickNumber || index + 1),
-    round: Number(pick.roundId || 0),
-    amount: Number(pick.bidAmount || 0),
-    keeper: Boolean(pick.keeper),
-  }));
 }
 
 function normalizePlayers(raw) {
@@ -142,6 +169,15 @@ async function pollDraft(context) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
+    if (message.type === "RELOAD_EXTENSION") {
+      let senderHost = "";
+      try { senderHost = new URL(sender.tab?.url || "").hostname; } catch { /* invalid sender URL */ }
+      if (!["localhost", "127.0.0.1"].includes(senderHost)) {
+        return { ok: false, code: "RELOAD_FORBIDDEN", message: "Companion self-reload is available only from the local DraftForge app." };
+      }
+      setTimeout(() => chrome.runtime.reload(), 100);
+      return { ok: true, code: "RELOADING", message: "Reloading the local DraftForge companion." };
+    }
     if (message.type === "APP_HELLO") {
       if (sender.tab?.id) appTabs.add(sender.tab.id);
       const context = await findEspnContext();
@@ -152,14 +188,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       await broadcast("DF_ESPN_CONTEXT", espnContext);
       return { ok: true };
     }
+    if (message.type === "REFRESH_ESPN_CONTEXT") {
+      const expectedTabId = Number(message.payload?.expectedTabId);
+      if (!Number.isInteger(expectedTabId)) return { ok: false, code: "DRAFT_TAB_REQUIRED", message: "Reconnect the exact ESPN draft tab before refreshing." };
+      let context = await findEspnContext(message.payload?.expectedLeagueId, expectedTabId);
+      if (!context) {
+        context = await findUniqueDraftRoomContext(message.payload?.expectedLeagueId, Number(message.payload?.expectedTeamId));
+        if (context) return { ok: true, context, rebound: true, previousTabId: expectedTabId };
+        return { ok: false, code: "DRAFT_TAB_CHANGED", message: "The imported ESPN draft tab changed or is ambiguous. Reconnect before submitting." };
+      }
+      return { ok: true, context };
+    }
     if (message.type === "CONNECT_ESPN") {
       if (sender.tab?.id) appTabs.add(sender.tab.id);
       const requestedLeagueId = message.payload?.leagueId;
       const detected = await findEspnContext(requestedLeagueId);
-      const context = { ...(detected || espnContext || {}) };
-      if (requestedLeagueId) context.leagueId = requestedLeagueId;
+      const context = { ...(detected || (!requestedLeagueId ? espnContext : {}) || {}) };
       if (message.payload?.season) context.season = message.payload.season;
-      if (!context.leagueId) return { ok: false, code: "NO_LEAGUE", message: "Open your ESPN league in another tab first." };
+      if (!context.leagueId || !context.tabId) return { ok: false, code: "NO_LEAGUE", message: "Open the exact ESPN league or draft tab, then connect again." };
       const data = await importLeague(context);
       espnContext = { ...context, season: data.league.season };
       await broadcast("DF_IMPORT_SUCCESS", data);
@@ -169,21 +215,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const now = Date.now();
       if (now - lastPollAt < 1800 || !message.payload?.leagueId) return { ok: true, skipped: true };
       lastPollAt = now;
-      const data = await pollDraft(message.payload);
+      const pollContext = { ...message.payload, tabId: sender.tab?.id };
+      const data = await pollDraft(pollContext);
       await broadcast("DF_DRAFT_UPDATE", data);
       return { ok: true };
     }
     if (message.type === "SUBMIT_ACTION") {
-      const context = await findEspnContext(message.payload?.expectedLeagueId);
-      if (!context?.tabId) return { ok: false, code: "NO_ESPN_TAB", message: "Open the ESPN draft room first." };
+      const expectedTabId = Number(message.payload?.expectedTabId);
+      if (!Number.isInteger(expectedTabId)) return { ok: false, code: "DRAFT_TAB_REQUIRED", message: "Reconnect the exact ESPN draft tab before submitting." };
+      const context = await findEspnContext(message.payload?.expectedLeagueId, expectedTabId);
+      if (!context?.tabId) return { ok: false, code: "DRAFT_TAB_CHANGED", message: "The imported ESPN draft tab changed. Reconnect before submitting." };
       const result = await chrome.tabs.sendMessage(context.tabId, { type: "DF_EXECUTE_ACTION", payload: message.payload });
-      await broadcast("DF_ACTION_RESULT", result);
-      return result;
+      const actionResult = { ...result, action: result?.action || message.payload };
+      await broadcast("DF_ACTION_RESULT", actionResult);
+      return actionResult;
     }
     return { ok: false, code: "UNKNOWN_MESSAGE" };
   })().then(sendResponse).catch(async (error) => {
     const code = error?.message || "EXTENSION_ERROR";
     const messageText = code === "ESPN_LOGIN_REQUIRED" ? "Sign in to ESPN in another tab, then try again." : `ESPN connection failed: ${code}`;
+    // Live mock rooms can disappear from ESPN's league API as soon as they
+    // finish. A stale room's background poll must not poison every connected
+    // DraftForge dashboard; explicit imports and actions still fail closed.
+    if (message.type === "ESPN_POLL") {
+      sendResponse({ ok: false, code, message: messageText });
+      return;
+    }
     await broadcast("DF_EXTENSION_ERROR", { code, message: messageText });
     sendResponse({ ok: false, code, message: messageText });
   });

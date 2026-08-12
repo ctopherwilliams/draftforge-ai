@@ -33,4 +33,19 @@ test("consensus combines sources deterministically and exposes provenance", () =
   assert.equal(bijan.sourceRanks.ffc, 1);
   assert.equal(bijan.sourceRanks.gng, 1);
   assert.equal(bijan.consensusRank, 1);
+  assert.ok(bijan.sourceAuctions.espn > 0);
+  assert.ok(bijan.sourceAuctions.ffc > 0);
+  assert.ok(bijan.sourceAuctions.gng > 0);
+});
+
+test("every healthy ranking source produces a deterministic league-normalized auction value", () => {
+  const league = { size: 8, rosterSize: 16, auctionBudget: 200 };
+  const merged = mergeConsensus(espn, sources, league);
+
+  for (const player of merged) {
+    assert.ok(Number.isFinite(player.auction));
+    assert.ok(player.auction >= 1);
+    assert.equal(Object.keys(player.sourceAuctions).length, player.sourceCount);
+  }
+  assert.deepEqual(merged, mergeConsensus(espn, sources, league));
 });
