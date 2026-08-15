@@ -102,7 +102,7 @@ const MIN_SNAKE_SELECTION_WINDOW_SECONDS = 10;
 const MIN_OTHER_ACTION_WINDOW_SECONDS = 5;
 const RETRIABLE_SELECT_CODES = new Set(["PLAYER_NOT_FOUND", "ACTION_TIMEOUT", "ROSTER_NOT_CONFIRMED"]);
 const RETRIABLE_TURN_CODES = new Set(["ACTION_NOT_FOUND", "PLAYER_CONTROL_DRIFT", "PLAYER_POOL_STALE", "PICK_CHANGED", "NOT_ON_CLOCK", "CLOCK_TOO_SHORT", "BID_CHANGED", "BID_OUT_OF_SEQUENCE"]);
-const RETRIABLE_BID_CODES = new Set([...RETRIABLE_TURN_CODES, "NOMINEE_MISMATCH", "NOMINEE_UNKNOWN"]);
+const RETRIABLE_BID_CODES = new Set([...RETRIABLE_TURN_CODES, "ACTION_TIMEOUT", "NOMINEE_MISMATCH", "NOMINEE_UNKNOWN"]);
 const RETRIABLE_NOMINATION_CODES = new Set(["NOT_ON_CLOCK", "CLOCK_TOO_SHORT", "NOMINATION_ACTIVE"]);
 
 function normalizeImportedLeague(league: LeagueSettings) {
@@ -368,6 +368,11 @@ export default function Home() {
           if (selectedPlayerId > 0 && selectedPlayerName) {
             pendingSnakeActionRef.current.playerId = selectedPlayerId;
             pendingSnakeActionRef.current.playerName = selectedPlayerName;
+          }
+          if (payload.code === "ROSTER_CONFIRMED") {
+            pendingSnakeActionRef.current = null;
+            lastAutoAction.current = "";
+            setExtension("connected");
           }
         }
         if (!payload.ok && payload.action?.operation === "BID" && RETRIABLE_BID_CODES.has(String(payload.code || ""))) {

@@ -98,7 +98,7 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(page, /fillsMandatoryStarter: candidate\.fillsMandatoryStarter/);
   assert.match(page, /ACTION_CANDIDATE_LIMIT = 64/);
   assert.match(page, /position: candidate\.pos/);
-  assert.match(page, /RETRIABLE_BID_CODES = new Set\(\[\.\.\.RETRIABLE_TURN_CODES, "NOMINEE_MISMATCH", "NOMINEE_UNKNOWN"\]\)/);
+  assert.match(page, /RETRIABLE_BID_CODES = new Set\(\[\.\.\.RETRIABLE_TURN_CODES, "ACTION_TIMEOUT", "NOMINEE_MISMATCH", "NOMINEE_UNKNOWN"\]\)/);
   assert.match(page, /RETRIABLE_NOMINATION_CODES = new Set\(\["NOT_ON_CLOCK", "CLOCK_TOO_SHORT", "NOMINATION_ACTIVE"\]\)/);
   assert.match(page, /nominated \|\| context\.nominatedPlayer \|\| Number\(context\.currentBid \|\| 0\) > 0/);
   assert.match(content, /code: "NOMINATION_ACTIVE"/);
@@ -106,6 +106,11 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(page, /actionRequestId !== latestActionRequestRef\.current/);
   assert.match(page, /type === "DF_ACTION_RESOLVED"/);
   assert.match(page, /pending\.playerId = Number\(payload\.playerId\)/);
+  assert.match(page, /payload\.code === "ROSTER_CONFIRMED"/);
+  const rosterConfirmedHandler = page.match(/if \(payload\.code === "ROSTER_CONFIRMED"\) \{([\s\S]*?)\n\s*\}/)?.[1] || "";
+  assert.match(rosterConfirmedHandler, /pendingSnakeActionRef\.current = null/);
+  assert.match(rosterConfirmedHandler, /lastAutoAction\.current = ""/);
+  assert.doesNotMatch(rosterConfirmedHandler, /setActionRetryNonce/);
   assert.match(page, /contextMatchesActiveDraftTab/);
   assert.match(page, /expectedTabId/);
   assert.match(page, /REFRESH_ESPN_CONTEXT/);
