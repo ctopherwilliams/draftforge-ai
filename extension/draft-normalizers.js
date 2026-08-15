@@ -15,3 +15,9 @@ export function normalizePicks(raw) {
     }];
   });
 }
+
+export function normalizeImportPicks(raw) {
+  const picks = normalizePicks(raw);
+  const draftActive = raw.draftDetail?.inProgress === true || raw.draftDetail?.drafted === true;
+  return draftActive ? picks : picks.filter((pick) => pick.keeper);
+}

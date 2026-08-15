@@ -21,6 +21,24 @@ DraftForge uses five complementary signals. ESPN remains the source of league tr
 
 The model never treats the five ranks as five equal expert opinions. ESPN projections answer “how valuable is this player in this league?”, while FFC/MFL answer “when or for how much will the room draft him?” Tradyr and The GNG add independent player-quality priors.
 
+## Immutable simulation snapshots
+
+Player-specific Monte Carlo evidence uses a schema-versioned, content-addressed snapshot containing a sanitized ESPN league/player profile and the four public responses retrieved at the same capture time. Capture fails closed when any public source is failed, stale, or empty. Replay verifies the SHA-256 digest and evaluates source freshness relative to `capturedAt`, so the same saved input cannot change merely because wall-clock time advances.
+
+ESPN negative D/ST IDs are preserved; placeholder IDs `0` and `-1`, raw settings, member identifiers, authentication data, and real team names are excluded. Source truth remains fixed during a simulated decision. Seeded projection uncertainty and late-news removals affect hidden outcomes or availability only, never the five-source recommendation input.
+
+## Deterministic sleeper signal
+
+Sleepers are derived from these same five sources; no editorial list or sixth weighted feed can override the consensus. DraftForge separates the ESPN/FFC/MFL market percentile from the Tradyr/GNG model percentile, then labels a player only when:
+
+- both independent model feeds match the player and agree within 12 percentile points;
+- ESPN plus at least one external market feed match the player, with at least four of five total sources present;
+- the model percentile leads the market percentile by at least eight points;
+- the player has positive scoring-adjusted value over replacement and no ESPN injury flag; and
+- the combined edge, VORP, tier scarcity, coverage, and model agreement score reaches 50/100.
+
+An ADP in rounds 1–5 is an ordinary `VALUE`, rounds 6–9 are a `SLEEPER`, and round 10 or later is a `DEEP STASH`. Snake drafts do not receive a sleeper timing bonus more than one league round before market ADP. Salary-cap drafts keep sleepers out of early target/drain nominations, add priority only as the room loses budget leverage, and never raise the source-backed max bid, position portfolio limit, pacing cap, or one-dollar-per-open-slot reserve.
+
 ## Attribution and usage
 
 - [Fantasy Football Calculator ADP API](https://help.fantasyfootballcalculator.com/article/42-adp-rest-api) permits free personal and commercial use with requested attribution.

@@ -58,12 +58,16 @@ The code, production build, public data adapters, and local tests pass. The issu
 - one complete authenticated salary-cap mock covering nominations, strategic bids/walkaways, max-bid and one-dollar reserve enforcement; and
 - 20 complete deterministic full-draft simulations per format on the frozen candidate, plus fail-closed regression coverage for wrong league/tab, nominee, clock, player, pick, offer, budget, and changed controls.
 
+The robustness gate also supports immutable live five-source capture/replay and sequential independent-seed matrices. Generated snapshot JSON and Monte Carlo outputs are intentionally ignored by Git; reproduce them from a fresh authenticated ESPN import rather than copying browser credentials or profiles.
+
 Re-run the full 20+20 simulation gate after any engine-affecting change. Authenticated mocks and deterministic simulations are recorded separately; simulations are not represented as live ESPN drafts.
 
 ## 6. Useful commands
 
 ```bash
 npm test
+npm run snapshot:capture -- --validate snapshots/intelligence/source-v1-....json
+npm run simulate:matrix -- --drafts 1000 --snapshot snapshots/intelligence/source-v1-....json
 node --check extension/background.js
 node --check extension/espn-content.js
 node --check extension/app-bridge.js

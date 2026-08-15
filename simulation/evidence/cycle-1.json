@@ -1,0 +1,92 @@
+[
+  {
+    "kind": "simulation-harness",
+    "affectedDecisionClass": "Deep 14-team ESPN-compatible late-round inventory",
+    "files": [
+      "simulation/monte-carlo.mjs",
+      "tests/monte-carlo.test.mjs"
+    ],
+    "reproductionSeeds": [
+      { "format": "snake", "trialIndex": 49, "trialSeed": 755906513 },
+      { "format": "salary-cap", "trialIndex": 49, "trialSeed": 3157617984 }
+    ],
+    "baselineImpact": "The first harness run had 242 simulator-only inventory dead ends; DraftForge recorded no illegal decision in completed trials.",
+    "expectedImprovement": "Enough undrafted depth for noisy 14-team roster distributions without relaxing any roster rule.",
+    "observedEvidence": "All 242 original failure seeds replayed successfully; the corrected 20,000-draft baseline completed 20,000/20,000 with zero violations.",
+    "safetyRisks": [
+      "A larger synthetic board increases runtime.",
+      "This fixes simulation inventory only and is not evidence of a production draft-engine defect."
+    ]
+  },
+  {
+    "kind": "production-strategy",
+    "affectedDecisionClass": "ZERO_RB recommendation ordering for an unfilled mandatory RB starter after 55% roster completion",
+    "files": [
+      "app/lib/draft-engine.ts",
+      "tests/draft-engine.test.mjs"
+    ],
+    "reproductionSeeds": [
+      {
+        "format": "snake",
+        "trialIndex": 2268,
+        "trialSeed": 3887456104,
+        "split": "discovery",
+        "baselineRegret": 809.1823931802096,
+        "baselineObjective": 2978.331648080938,
+        "objectiveDelta": 152.14885753079398,
+        "lineupDelta": 113.65381533416212
+      },
+      {
+        "format": "snake",
+        "trialIndex": 7199,
+        "trialSeed": 676653744,
+        "split": "validation",
+        "baselineRegret": 272.295322937479,
+        "baselineObjective": 2941.529877706671,
+        "objectiveDelta": 140.72292480911665,
+        "lineupDelta": 113.81851472703556,
+        "winProbabilityDelta": 0.0625
+      }
+    ],
+    "baselineImpact": "ZERO_RB was the weakest preset in both formats and repeatedly delayed required RB value; the affected paired seeds included high regret and materially weaker starting lineups.",
+    "expectedImprovement": "Improve late mandatory-starter ordering while preserving the first 55% of Zero-RB behavior.",
+    "observedEvidence": {
+      "pairedDrafts": 16000,
+      "startingLineupMeanDelta": 2.7723448598124567,
+      "startingLineupMeanDeltaCi95": [2.600530691804299, 2.9441590278206142],
+      "seasonWinProbabilityMeanDelta": 0.005353515625,
+      "seasonWinProbabilityMeanDeltaCi95": [0.004598109417495549, 0.0061089218325044515],
+      "objectiveMeanDelta": 2.507518000637936,
+      "objectiveMeanDeltaCi95": [2.30853567972514, 2.706500321550732],
+      "decisionRegretMeanDelta": -0.2784430543401884,
+      "decisionRegretMeanDeltaCi95": [-0.4641952436759962, -0.09269086500438059],
+      "snakeDiscoveryObjectiveP25Delta": 7.588149957902715,
+      "snakeValidationObjectiveP25Delta": 8.224465916852296,
+      "salaryCapValidationObjectiveMeanDelta": 0.007536647965025622,
+      "sleeperProtection": "No material change in acquisition or timing; validation sleeper metrics were identical in salary-cap."
+    },
+    "safetyRisks": [
+      "The Zero-RB preset becomes less aggressive late, while its early identity is unchanged.",
+      "Mean roster-fragility score increased by about 0.03 in snake trials as mandatory starter strength displaced occasional backup depth.",
+      "Auction max-bid calculations deliberately retain the configured preset multiplier, so the change cannot raise a walk-away ceiling."
+    ]
+  },
+  {
+    "kind": "simulation-harness",
+    "affectedDecisionClass": "Salary-cap regret accounting for nominations DraftForge did not acquire",
+    "files": [
+      "simulation/monte-carlo.mjs",
+      "tests/monte-carlo.test.mjs"
+    ],
+    "reproductionSeeds": [
+      { "format": "salary-cap", "trialIndex": 2768, "trialSeed": 3320131702 }
+    ],
+    "baselineImpact": "The auction evaluator charged immediate player-choice regret for a nomination even when an opponent won that player. The nomination was not a DraftForge roster acquisition and therefore should not affect acquisition regret or the composite objective.",
+    "expectedImprovement": "Keep target-versus-drain nomination probes available for counterfactual analysis while excluding non-acquisitions from aggregate decision regret.",
+    "observedEvidence": "Across a paired 1,000-snake plus 1,000-salary-cap check, all 2,000 draft digests and roster metrics were identical. Snake regret was unchanged; salary-cap false regret fell in every trial, reducing the all-format mean by 109.6451 points. The corrected 20,000-draft baseline and final candidate both completed with zero failures and zero hard violations.",
+    "safetyRisks": [
+      "Historical regret and composite-objective reports must be regenerated before comparison.",
+      "Nomination proxy scores remain useful only for selecting bounded counterfactual cases and are labeled separately from acquisition regret."
+    ]
+  }
+]
