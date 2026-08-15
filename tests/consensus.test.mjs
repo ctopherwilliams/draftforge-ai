@@ -38,6 +38,15 @@ test("consensus combines sources deterministically and exposes provenance", () =
   assert.ok(bijan.sourceAuctions.gng > 0);
 });
 
+test("source payload metadata cannot alter the fixed five-source weights", () => {
+  const canonical = mergeConsensus(espn, sources);
+  const tampered = mergeConsensus(espn, sources.map((source, index) => ({
+    ...source,
+    weight: index === 0 ? 1000 : -1000,
+  })));
+  assert.deepEqual(tampered, canonical);
+});
+
 test("every healthy ranking source produces a deterministic league-normalized auction value", () => {
   const league = { size: 8, rosterSize: 16, auctionBudget: 200 };
   const merged = mergeConsensus(espn, sources, league);

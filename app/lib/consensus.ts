@@ -203,28 +203,29 @@ export function mergeConsensus(
     for (const source of healthySources) {
       const signal = findSignal(player, sourceIndexes.get(source.id)!);
       if (!signal) continue;
+      const sourceWeight = SOURCE_WEIGHTS[source.id];
       const rank = Number(signal.rank || signal.adp || 999);
       if (rank < 999) {
         sourceRanks[source.id] = rank;
         const maxRank = Math.max(source.players.length, 2);
         const rankPercentile = Math.max(0, 1 - (rank - 1) / (maxRank - 1));
-        weightedPercentile += source.weight * rankPercentile;
-        totalWeight += source.weight;
+        weightedPercentile += sourceWeight * rankPercentile;
+        totalWeight += sourceWeight;
         if (source.id === "ffc" || source.id === "mfl") {
-          marketPercentile += source.weight * rankPercentile;
-          marketWeight += source.weight;
+          marketPercentile += sourceWeight * rankPercentile;
+          marketWeight += sourceWeight;
           marketSourceCount += 1;
         } else {
-          modelPercentile += source.weight * rankPercentile;
-          modelWeight += source.weight;
+          modelPercentile += sourceWeight * rankPercentile;
+          modelWeight += sourceWeight;
           modelPercentiles.push(rankPercentile * 100);
         }
       }
-      if (signal.adp && signal.adp < 999) adps.push({ value: signal.adp, weight: source.weight });
+      if (signal.adp && signal.adp < 999) adps.push({ value: signal.adp, weight: sourceWeight });
       const sourceAuction = sourceCurves.get(source.id)?.(signal);
       if (sourceAuction && sourceAuction > 0) {
         sourceAuctions[source.id] = sourceAuction;
-        auctions.push({ value: sourceAuction, weight: source.weight });
+        auctions.push({ value: sourceAuction, weight: sourceWeight });
       }
     }
 

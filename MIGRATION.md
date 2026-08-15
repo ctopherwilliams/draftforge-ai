@@ -47,7 +47,7 @@ To deploy a new private copy under the destination Codex account:
 3. After deployment, add the exact new production hostname pattern to `extension/manifest.json` under the app content script's `matches` list.
 4. Increment the extension version, rebuild `public/draftforge-espn-companion.zip`, run `npm test`, commit, and redeploy.
 
-The current extension already supports localhost and `*.chatgpt.site`, so step 3 is necessary only if the new deployment uses a different hostname family.
+The current extension supports localhost and the exact production origin `https://draftforge-ai.workspace-231977.chatgpt.site`. Keep hosted origins exact: broad sibling-site wildcards would let an unrelated page reach the authenticated ESPN bridge. Step 3 is necessary whenever the deployment hostname changes.
 
 ## 5. Acceptance status
 

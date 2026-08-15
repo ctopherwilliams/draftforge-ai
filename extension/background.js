@@ -3,6 +3,7 @@ import { draftableRosterSizeFor, draftTypeFor, keeperCountFor } from "./league-n
 import { normalizePlayers } from "./player-normalizers.js";
 import { createPollCoordinator } from "./poll-coordinator.js";
 import { selectUniqueEspnContext } from "./context-selector.js";
+import { authorizeRuntimeMessage, isLocalDraftForgeSenderUrl } from "./origin-policy.js";
 
 const appTabs = new Set();
 let espnContext = null;
@@ -165,10 +166,10 @@ async function pollDraftIfDue(context) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
+    const authorization = authorizeRuntimeMessage(message?.type, sender.url || sender.tab?.url || "");
+    if (!authorization.ok) return authorization;
     if (message.type === "RELOAD_EXTENSION") {
-      let senderHost = "";
-      try { senderHost = new URL(sender.tab?.url || "").hostname; } catch { /* invalid sender URL */ }
-      if (!["localhost", "127.0.0.1"].includes(senderHost)) {
+      if (!isLocalDraftForgeSenderUrl(sender.url || sender.tab?.url || "")) {
         return { ok: false, code: "RELOAD_FORBIDDEN", message: "Companion self-reload is available only from the local DraftForge app." };
       }
       setTimeout(() => chrome.runtime.reload(), 100);

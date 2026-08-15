@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { authorizeRuntimeMessage } from "../extension/origin-policy.js";
 
 const root = new URL("../extension/", import.meta.url);
 
@@ -9,6 +10,29 @@ test("extension is a narrowly scoped Manifest V3 ESPN companion", async () => {
   assert.equal(manifest.manifest_version, 3);
   assert.ok(manifest.host_permissions.every((host) => /espn\.com/.test(host)));
   assert.ok(manifest.content_scripts.some((script) => script.matches.includes("https://fantasy.espn.com/*")));
+  const appMatches = manifest.content_scripts.find((script) => script.js.includes("app-bridge.js")).matches;
+  assert.deepEqual(appMatches, [
+    "http://localhost:3000/*",
+    "http://127.0.0.1:3000/*",
+    "https://draftforge-ai.workspace-231977.chatgpt.site/*",
+  ]);
+});
+
+test("privileged runtime messages require the exact DraftForge or ESPN sender origin", () => {
+  const production = "https://draftforge-ai.workspace-231977.chatgpt.site/draft";
+  const localhost = "http://localhost:3000/?reloadCompanion=1";
+  const espn = "https://fantasy.espn.com/football/draft?leagueId=44050";
+  assert.equal(authorizeRuntimeMessage("APP_HELLO", production).ok, true);
+  assert.equal(authorizeRuntimeMessage("RELOAD_EXTENSION", localhost).ok, true);
+  assert.equal(authorizeRuntimeMessage("SUBMIT_ACTION", espn).ok, false);
+  assert.equal(authorizeRuntimeMessage("ESPN_CONTEXT", espn).ok, true);
+  assert.equal(authorizeRuntimeMessage("ESPN_CONTEXT", production).ok, false);
+  assert.equal(authorizeRuntimeMessage("CONNECT_ESPN", "https://attacker.chatgpt.site/").ok, false);
+  assert.equal(authorizeRuntimeMessage("SUBMIT_ACTION", "https://attacker.openai.site/").ok, false);
+  assert.equal(authorizeRuntimeMessage("DISABLE_ESPN_AUTOPICK", "https://attacker.sites.openai.com/").ok, false);
+  assert.equal(authorizeRuntimeMessage("SUBMIT_ACTION", "http://localhost:3000.attacker.example/").ok, false);
+  assert.equal(authorizeRuntimeMessage("SUBMIT_ACTION", "not a URL").ok, false);
+  assert.equal(authorizeRuntimeMessage("FUTURE_UNCLASSIFIED_ACTION", production).code, "UNKNOWN_MESSAGE");
 });
 
 test("draft actions fail closed and private ESPN credentials are not persisted", async () => {
@@ -19,6 +43,7 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
   ]);
   assert.doesNotMatch(background, /chrome\.storage|espn_s2|SWID/);
+  assert.match(background, /authorizeRuntimeMessage\(message\?\.type, sender\.url \|\| sender\.tab\?\.url \|\| ""\)/);
   assert.doesNotMatch(content, /espn_s2|SWID/);
   assert.match(background, /findEspnContext\(expectedLeagueId, expectedTabId\)/);
   assert.match(background, /selectUniqueEspnContext\(contexts, expectedLeagueId\)/);
