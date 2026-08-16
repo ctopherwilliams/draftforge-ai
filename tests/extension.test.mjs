@@ -119,6 +119,11 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(page, /ESPN_ROSTER_CONFIRMATION_GRACE_MS = 6000/);
   assert.match(page, /preflightChecks/);
   assert.match(page, /liveChecks/);
+  assert.match(page, /onClick=\{confirmEnableAutoDraft\}/);
+  assert.match(page, /sendToExtension\("REFRESH_ESPN_CONTEXT"[\s\S]*autoArmRequestId: requestId/);
+  assert.match(page, /canArmAutoDraft/);
+  assert.doesNotMatch(page, /className="danger-button" onClick=\{\(\) => \{ setAutoDraft\(true\)/);
+  assert.match(background, /autoArmRequestId/);
   assert.match(page, /captureRequested.*capture.*sanitized/);
   assert.match(page, /draftforge-sanitized-capture/);
   assert.match(page, /\["localhost", "127\.0\.0\.1"\]/);

@@ -206,15 +206,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return { ok: true };
     }
     if (message.type === "REFRESH_ESPN_CONTEXT") {
+      const autoArmRequestId = Number(message.payload?.autoArmRequestId);
+      const verification = Number.isInteger(autoArmRequestId) ? { autoArmRequestId } : {};
       const expectedTabId = Number(message.payload?.expectedTabId);
-      if (!Number.isInteger(expectedTabId)) return { ok: false, code: "DRAFT_TAB_REQUIRED", message: "Reconnect the exact ESPN draft tab before refreshing." };
+      if (!Number.isInteger(expectedTabId)) return { ok: false, ...verification, code: "DRAFT_TAB_REQUIRED", message: "Reconnect the exact ESPN draft tab before refreshing." };
       let context = await findEspnContext(message.payload?.expectedLeagueId, expectedTabId);
       if (!context) {
         context = await findUniqueDraftRoomContext(message.payload?.expectedLeagueId, Number(message.payload?.expectedTeamId));
-        if (context) return { ok: true, context, rebound: true, previousTabId: expectedTabId };
-        return { ok: false, code: "DRAFT_TAB_CHANGED", message: "The imported ESPN draft tab changed or is ambiguous. Reconnect before submitting." };
+        if (context) return { ok: true, ...verification, context, rebound: true, previousTabId: expectedTabId };
+        return { ok: false, ...verification, code: "DRAFT_TAB_CHANGED", message: "The imported ESPN draft tab changed or is ambiguous. Reconnect before submitting." };
       }
-      return { ok: true, context };
+      return { ok: true, ...verification, context };
     }
     if (message.type === "CONNECT_ESPN") {
       if (sender.tab?.id) appTabs.add(sender.tab.id);

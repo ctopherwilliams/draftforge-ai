@@ -22,6 +22,7 @@ import {
 } from "./lib/consensus";
 import { contextCanRebindDraftTab, contextMatchesActiveDraftTab } from "./lib/espn-context";
 import { stabilizeEspnContext, type EspnContext } from "./lib/espn-context-state";
+import { canArmAutoDraft } from "./lib/auto-draft-safety";
 import { liveEspnRecommendations, reconcileEspnPicks, resolveAuctionSales, resolveOwnRoster } from "./lib/espn-reconciliation";
 import { draftUiReducer, INITIAL_DRAFT_UI_STATE } from "./lib/draft-ui-state";
 import { compactDraftProfiles, persistDraftProfiles, upsertDraftProfile, type DraftProfile } from "./lib/profiles";
@@ -130,6 +131,7 @@ export default function Home() {
   const [leagueId, setLeagueId] = useState("");
   const [strategy, setStrategy] = useState<StrategyId>("BALANCED");
   const [autoDraft, setAutoDraft] = useState(false);
+  const [autoArmVerification, setAutoArmVerification] = useState<{ requestId: number; context: EspnContext } | null>(null);
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>("ALL");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(1);
@@ -150,6 +152,8 @@ export default function Home() {
   const activeEspnTabRef = useRef<number | null>(null);
   const activeEspnTeamRef = useRef<number | null>(null);
   const actionRequestSequenceRef = useRef(0);
+  const autoArmRequestSequenceRef = useRef(0);
+  const pendingAutoArmRequestRef = useRef<number | null>(null);
   const latestActionRequestRef = useRef(0);
   const pendingSnakeActionRef = useRef<{
     playerId: number;
@@ -203,6 +207,9 @@ export default function Home() {
     setStrategy(profile.strategy);
     setLeagueId(profile.league.id);
     setAutoDraft(false);
+    pendingAutoArmRequestRef.current = null;
+    setAutoArmVerification(null);
+    dispatchUi({ type: "set", key: "autoWarning", value: false });
     // Never carry an on-clock state from a different ESPN tab into this league.
     setContext(roomContext && contextMatchesActiveDraftTab(roomContext, profile.league.id, activeEspnTabRef.current) ? roomContext : {});
     setExtension("connected");
@@ -227,6 +234,9 @@ export default function Home() {
     setLeagueId("");
     setSettingsConfirmed(false);
     setAutoDraft(false);
+    pendingAutoArmRequestRef.current = null;
+    setAutoArmVerification(null);
+    dispatchUi({ type: "set", key: "autoWarning", value: false });
     setContext({});
     setExtension("ready");
     dispatchUi({ type: "set", key: "settingsOpen", value: true });
@@ -279,6 +289,10 @@ export default function Home() {
           setContext((current) => stabilizeEspnContext(current, roomContext));
           setExtension("connected");
         }
+        const autoArmRequestId = Number(payload.autoArmRequestId);
+        if (Number.isInteger(autoArmRequestId) && autoArmRequestId === pendingAutoArmRequestRef.current) {
+          setAutoArmVerification({ requestId: autoArmRequestId, context: roomContext });
+        }
       }
       if (type === "DF_IMPORT_SUCCESS" || (type === "COMMAND_RESULT" && payload?.data?.league)) {
         const data = type === "DF_IMPORT_SUCCESS" ? payload : payload.data;
@@ -303,6 +317,9 @@ export default function Home() {
         pendingAuctionBidRef.current = null;
         setPendingAuctionNomination(null);
         setRejectedSnakePlayerIds([]);
+        pendingAutoArmRequestRef.current = null;
+        setAutoArmVerification(null);
+        dispatchUi({ type: "set", key: "autoWarning", value: false });
         setLeague(importedLeague);
         espnPlayersRef.current = importedPlayers;
         setEspnPlayers(importedPlayers);
@@ -411,6 +428,10 @@ export default function Home() {
         setActionState(payload.ok ? payload.message : `Action stopped: ${payload.message}`);
       }
       if (type === "DF_EXTENSION_ERROR" || type === "EXTENSION_ERROR") {
+        pendingAutoArmRequestRef.current = null;
+        setAutoArmVerification(null);
+        dispatchUi({ type: "set", key: "autoWarning", value: false });
+        setAutoDraft(false);
         setExtension("error");
         setActionState(payload.message || "The ESPN companion reported an error.");
       }
@@ -418,6 +439,17 @@ export default function Home() {
         // SUBMIT_ACTION is broadcast as DF_ACTION_RESULT first so its retry or
         // fail-closed policy is handled exactly once.
         if (payload.action) return;
+        const autoArmRequestId = Number(payload.autoArmRequestId);
+        if (Number.isInteger(autoArmRequestId) && autoArmRequestId === pendingAutoArmRequestRef.current) {
+          pendingAutoArmRequestRef.current = null;
+          setAutoArmVerification(null);
+          dispatchUi({ type: "set", key: "autoWarning", value: false });
+          dispatchUi({ type: "set", key: "settingsOpen", value: true });
+          setAutoDraft(false);
+          setExtension("error");
+          setActionState("Auto-Draft locked: the exact ESPN draft tab changed or could not be verified. Reconnect and rerun the live-room checklist.");
+          return;
+        }
         if (pendingSnakeActionRef.current) {
           pendingSnakeActionRef.current.failed = true;
           setAutoDraft(false);
@@ -664,6 +696,31 @@ export default function Home() {
   const liveChecklistReady = settingsConfirmed && preflightReady && liveChecks.every((check) => check.ok);
 
   useEffect(() => {
+    if (!autoArmVerification) return;
+    const requestIsCurrent = autoArmVerification.requestId === pendingAutoArmRequestRef.current;
+    const armReady = requestIsCurrent && canArmAutoDraft({
+      checklistReady: liveChecklistReady,
+      extensionConnected: extension === "connected",
+      context: autoArmVerification.context,
+      leagueId: league.id,
+      teamId: league.teamId,
+      tabId: activeEspnTabRef.current,
+    });
+    pendingAutoArmRequestRef.current = null;
+    // The exact-tab response is an external verification result; consume it once.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAutoArmVerification(null);
+    if (!armReady) {
+      setAutoDraft(false);
+      dispatchUi({ type: "set", key: "settingsOpen", value: true });
+      setActionState("Auto-Draft locked: ESPN room state changed during verification. Rerun the exact live-room checklist.");
+      return;
+    }
+    setAutoDraft(true);
+    setActionState("Auto-Draft armed after the exact ESPN tab and live-room checks were revalidated.");
+  }, [autoArmVerification, extension, league.id, league.teamId, liveChecklistReady]);
+
+  useEffect(() => {
     if (!autoDraft || sourceCoverageReady || myPickCount >= league.rosterSize) return;
     // Source coverage is an action-time invariant, not only a pre-draft
     // checklist. Disarm immediately if the last validated snapshot expires.
@@ -809,6 +866,28 @@ export default function Home() {
     dispatchUi({ type: "set", key: "autoWarning", value: true });
   }
 
+  function confirmEnableAutoDraft() {
+    const expectedTabId = activeEspnTabRef.current;
+    if (!liveChecklistReady || extension !== "connected" || !Number.isInteger(expectedTabId)) {
+      dispatchUi({ type: "set", key: "autoWarning", value: false });
+      dispatchUi({ type: "set", key: "settingsOpen", value: true });
+      setAutoDraft(false);
+      setActionState("Auto-Draft locked: ESPN room state changed. Rerun the exact live-room checklist.");
+      return;
+    }
+    const requestId = ++autoArmRequestSequenceRef.current;
+    pendingAutoArmRequestRef.current = requestId;
+    setAutoDraft(false);
+    dispatchUi({ type: "set", key: "autoWarning", value: false });
+    setActionState("Revalidating the exact ESPN draft tab before arming Auto-Draft…");
+    sendToExtension("REFRESH_ESPN_CONTEXT", {
+      expectedLeagueId: league.id,
+      expectedTeamId: activeEspnTeamRef.current,
+      expectedTabId,
+      autoArmRequestId: requestId,
+    });
+  }
+
   const slots = rosterSlots(league);
   const assigned = new Set<number>();
   const rosterRows = slots.map((slot) => {
@@ -911,7 +990,7 @@ export default function Home() {
       </aside>
     </section>
 
-    {autoWarning && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Enable Auto-Draft"><div className="warning-modal"><span className="warning-icon">!</span><h2>Live-room checklist passed</h2><p>The extension is bound to the exact imported ESPN draft tab and the local control room completed a no-click recommendation dry run.</p><ul>{liveChecks.map((check) => <li key={check.label}>✓ {check.label}</li>)}<li>{league.draftType === "AUCTION" ? "Offers rise by exactly $1 and stop at the lower of fair value, portfolio walk-away, pacing guardrail, and ESPN's legal maximum; DraftForge never rebids on its own DRAIN nomination." : "Each pick is re-ranked against the live remaining pool and positional tier cliffs."}</li><li>Turn Auto-Draft off at any time.</li></ul><div><button className="secondary-button" onClick={() => dispatchUi({ type: "set", key: "autoWarning", value: false })}>Cancel</button><button className="danger-button" onClick={() => { setAutoDraft(true); dispatchUi({ type: "set", key: "autoWarning", value: false }); setActionState("Auto-Draft armed after pre-draft and live-room checks passed."); }}>Enable Auto-Draft</button></div></div></div>}
+    {autoWarning && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Enable Auto-Draft"><div className="warning-modal"><span className="warning-icon">!</span><h2>Live-room checklist passed</h2><p>The extension is bound to the exact imported ESPN draft tab and the local control room completed a no-click recommendation dry run.</p><ul>{liveChecks.map((check) => <li key={check.label}>✓ {check.label}</li>)}<li>{league.draftType === "AUCTION" ? "Offers rise by exactly $1 and stop at the lower of fair value, portfolio walk-away, pacing guardrail, and ESPN's legal maximum; DraftForge never rebids on its own DRAIN nomination." : "Each pick is re-ranked against the live remaining pool and positional tier cliffs."}</li><li>Turn Auto-Draft off at any time.</li></ul><div><button className="secondary-button" onClick={() => dispatchUi({ type: "set", key: "autoWarning", value: false })}>Cancel</button><button className="danger-button" onClick={confirmEnableAutoDraft}>Enable Auto-Draft</button></div></div></div>}
     <footer><span>DraftForge AI · draft-only ESPN control room</span><span>{draftedIds.size} drafted · five-source deterministic consensus</span></footer>
   </main>;
 }
