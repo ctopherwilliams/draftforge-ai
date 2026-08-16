@@ -16,8 +16,11 @@ import {
 import {
   isCompleteFreshIntelligenceSnapshot,
   isIntelligenceSourceFresh,
+  intelligenceSnapshotCacheKey,
   mergeConsensus,
   preserveCompleteFreshIntelligenceSnapshot,
+  readCompleteFreshIntelligenceSnapshot,
+  rememberCompleteFreshIntelligenceSnapshot,
   type IntelligenceSource,
 } from "./lib/consensus";
 import { contextCanRebindDraftTab, contextMatchesActiveDraftTab } from "./lib/espn-context";
@@ -124,6 +127,7 @@ export default function Home() {
   const [league, setLeague] = useState<LeagueSettings>(DEMO_LEAGUE);
   const [espnPlayers, setEspnPlayers] = useState<DraftPlayer[]>(DEMO_PLAYERS);
   const [sources, setSources] = useState<IntelligenceSource[]>([]);
+  const intelligenceSnapshotsRef = useRef(new Map<string, IntelligenceSource[]>());
   const [ui, dispatchUi] = useReducer(draftUiReducer, INITIAL_DRAFT_UI_STATE);
   const { sourcesOpen, intelligenceLoading, settingsOpen, rawSettingsOpen, strategyOpen, autoWarning } = ui;
   const [picks, setPicks] = useState<DraftPick[]>([]);
@@ -592,6 +596,12 @@ export default function Home() {
   }, [autoDraft, context.autopickActive, league.id]);
 
   useEffect(() => {
+    if (league.id === "demo") return;
+    const key = intelligenceSnapshotCacheKey(league.scoringLabel, league.size, league.season);
+    rememberCompleteFreshIntelligenceSnapshot(intelligenceSnapshotsRef.current, key, sources);
+  }, [league.id, league.scoringLabel, league.size, league.season, sources]);
+
+  useEffect(() => {
     if (league.id === "demo") {
       const previewTimer = window.setTimeout(() => {
         setSources([]);
@@ -600,6 +610,9 @@ export default function Home() {
       return () => window.clearTimeout(previewTimer);
     }
     let cancelled = false;
+    const intelligenceKey = intelligenceSnapshotCacheKey(league.scoringLabel, league.size, league.season);
+    const cachedSources = readCompleteFreshIntelligenceSnapshot(intelligenceSnapshotsRef.current, intelligenceKey);
+    if (cachedSources) setSources(cachedSources);
     const intelligenceUrl = `/api/intelligence?scoring=${encodeURIComponent(league.scoringLabel)}&teams=${league.size}&season=${league.season}`;
     const refreshIntelligence = () => {
       fetch(intelligenceUrl, { cache: "no-store" })
@@ -609,7 +622,11 @@ export default function Home() {
         })
         .then((data) => {
           if (!cancelled) {
-            setSources((current) => preserveCompleteFreshIntelligenceSnapshot(current, data.sources || []));
+            setSources((current) => {
+              const next = preserveCompleteFreshIntelligenceSnapshot(current, data.sources || []);
+              rememberCompleteFreshIntelligenceSnapshot(intelligenceSnapshotsRef.current, intelligenceKey, next);
+              return next;
+            });
           }
         })
         // Preserve the newest validated snapshot if a background refresh fails.

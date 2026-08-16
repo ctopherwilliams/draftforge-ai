@@ -20,6 +20,8 @@ const sources = [
 
 test("player names normalize across punctuation and suffixes", () => {
   assert.equal(normalizePlayerName("Bijan Robinson Jr."), normalizePlayerName("Bijan Robinson"));
+  assert.equal(normalizePlayerName("Bijan Robinson Jr"), normalizePlayerName("Bijan Robinson"));
+  assert.equal(normalizePlayerName("Robert  Griffin III"), normalizePlayerName("Robert Griffin"));
   assert.equal(normalizePlayerName("Ja’Marr Chase"), normalizePlayerName("Ja'Marr Chase"));
 });
 

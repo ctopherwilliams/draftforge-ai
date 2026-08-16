@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createRateLimitedSourceFetcher, fetchSourcePayloadsSequentially } from "../app/lib/intelligence-sources.ts";
-import { isCompleteFreshIntelligenceSnapshot, preserveCompleteFreshIntelligenceSnapshot } from "../app/lib/consensus.ts";
+import {
+  intelligenceSnapshotCacheKey,
+  isCompleteFreshIntelligenceSnapshot,
+  preserveCompleteFreshIntelligenceSnapshot,
+  readCompleteFreshIntelligenceSnapshot,
+  rememberCompleteFreshIntelligenceSnapshot,
+} from "../app/lib/consensus.ts";
 
 function source(id, overrides = {}) {
   return {
@@ -37,6 +43,20 @@ test("a degraded HTTP 200 refresh cannot replace the last complete snapshot", ()
   assert.equal(preserveCompleteFreshIntelligenceSnapshot(completeSnapshot, degraded, evaluatedAt), completeSnapshot);
   const refreshed = completeSnapshot.map((item) => ({ ...item, retrievedAt: "2026-08-15T08:00:00.000Z" }));
   assert.equal(preserveCompleteFreshIntelligenceSnapshot(completeSnapshot, refreshed, evaluatedAt), refreshed);
+});
+
+test("complete source snapshots bridge only identical fresh league settings", () => {
+  const cache = new Map();
+  const ppr12 = intelligenceSnapshotCacheKey("PPR", 12, 2026);
+  const ppr10 = intelligenceSnapshotCacheKey("PPR", 10, 2026);
+  assert.equal(rememberCompleteFreshIntelligenceSnapshot(cache, ppr12, completeSnapshot, evaluatedAt), true);
+  assert.equal(readCompleteFreshIntelligenceSnapshot(cache, ppr12, evaluatedAt), completeSnapshot);
+  assert.equal(readCompleteFreshIntelligenceSnapshot(cache, ppr10, evaluatedAt), null);
+
+  const staleAt = "2026-09-15T08:00:00.000Z";
+  assert.equal(readCompleteFreshIntelligenceSnapshot(cache, ppr12, staleAt), null);
+  assert.equal(cache.has(ppr12), false);
+  assert.equal(rememberCompleteFreshIntelligenceSnapshot(cache, ppr12, completeSnapshot.slice(0, 3), evaluatedAt), false);
 });
 
 test("rate-limited source payloads never overlap and preserve request order", async () => {

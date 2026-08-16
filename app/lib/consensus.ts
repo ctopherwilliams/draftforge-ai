@@ -77,6 +77,32 @@ export function preserveCompleteFreshIntelligenceSnapshot(
   return isCompleteFreshIntelligenceSnapshot(incoming, evaluatedAt) ? incoming : current;
 }
 
+export function intelligenceSnapshotCacheKey(scoring: string, teams: number, season: number) {
+  return `${String(scoring || "").trim().toUpperCase()}|${Number(teams)}|${Number(season)}`;
+}
+
+export function readCompleteFreshIntelligenceSnapshot(
+  cache: Map<string, IntelligenceSource[]>,
+  key: string,
+  evaluatedAt: string | number | Date = Date.now(),
+) {
+  const snapshot = cache.get(key);
+  if (snapshot && isCompleteFreshIntelligenceSnapshot(snapshot, evaluatedAt)) return snapshot;
+  if (snapshot) cache.delete(key);
+  return null;
+}
+
+export function rememberCompleteFreshIntelligenceSnapshot(
+  cache: Map<string, IntelligenceSource[]>,
+  key: string,
+  sources: IntelligenceSource[],
+  evaluatedAt: string | number | Date = Date.now(),
+) {
+  if (!isCompleteFreshIntelligenceSnapshot(sources, evaluatedAt)) return false;
+  cache.set(key, sources);
+  return true;
+}
+
 function createAuctionCurve(players: IntelligencePlayer[], context: AuctionContext) {
   const rosterable = Math.max(1, Math.min(players.length, context.size * context.rosterSize));
   const totalDollars = Math.max(context.size * context.rosterSize, context.size * context.auctionBudget);
@@ -104,7 +130,11 @@ function createAuctionCurve(players: IntelligencePlayer[], context: AuctionConte
 }
 
 export function normalizePlayerName(value: string) {
-  return value.toLowerCase()
+  const lower = value.toLowerCase();
+  if (/^[a-z0-9 ]+$/.test(lower)) {
+    return lower.replace(/\b(jr|sr|ii|iii|iv)\b/g, "").replace(/ /g, "");
+  }
+  return lower
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
     .replace(/\b(jr|sr|ii|iii|iv)\b/g, "")
     .replace(/[^a-z0-9]/g, "");
@@ -161,8 +191,8 @@ function buildSourcePlayerIndex(source: IntelligenceSource): SourcePlayerIndex {
   return { exact, candidates };
 }
 
-function findSignal(player: DraftPlayer, index: SourcePlayerIndex) {
-  const key = normalizePlayerName(player.name);
+function findSignal(player: DraftPlayer, index: SourcePlayerIndex, normalizedName?: string) {
+  const key = normalizedName ?? normalizePlayerName(player.name);
   const exact = index.exact.get(sourceSignalKey(player.pos, key));
   if (exact) return exact;
   return index.candidates.find(({ player: candidate, key: candidateKey }) => {
@@ -186,6 +216,7 @@ export function mergeConsensus(
   const sourceCurves = new Map(healthySources.map((source) => [source.id, createAuctionCurve(source.players, context)]));
   const sourceIndexes = new Map(healthySources.map((source) => [source.id, buildSourcePlayerIndex(source)]));
   const enriched = espnPlayers.map((player) => {
+    const normalizedPlayerName = normalizePlayerName(player.name);
     const sourceRanks: Record<string, number> = { espn: Number(player.rank || player.adp || 999) };
     const sourceAuctions: Record<string, number> = { espn: espnCurve(player) };
     const adps = [{ value: player.adp, weight: SOURCE_WEIGHTS.espn }];
@@ -201,7 +232,7 @@ export function mergeConsensus(
     const modelPercentiles: number[] = [];
 
     for (const source of healthySources) {
-      const signal = findSignal(player, sourceIndexes.get(source.id)!);
+      const signal = findSignal(player, sourceIndexes.get(source.id)!, normalizedPlayerName);
       if (!signal) continue;
       const sourceWeight = SOURCE_WEIGHTS[source.id];
       const rank = Number(signal.rank || signal.adp || 999);
