@@ -10,7 +10,8 @@ export type EspnRoomContext = {
  * make the currently selected league look actionable.
  */
 export function contextMatchesActiveLeague(context: EspnRoomContext | undefined, activeLeagueId: string) {
-  return Boolean(context?.leagueId) && String(context.leagueId) === String(activeLeagueId);
+  if (!context?.leagueId) return false;
+  return String(context.leagueId) === String(activeLeagueId);
 }
 
 /**

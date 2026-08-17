@@ -17,7 +17,11 @@ test("renders the ESPN draft control room", async () => {
   const html = await response.text();
   assert.match(html, /<title>DraftForge AI — Fantasy Football Draft Coach<\/title>/i);
   assert.match(html, /Import your real draft/);
-  assert.match(html, /Weighted consensus/);
+  assert.match(html, /weighted consensus/i);
   assert.match(html, /Auto-Draft/);
+  assert.match(html, /DO THIS NOW/);
+  assert.match(html, /ROSTER CONTROL/);
+  assert.match(html, /Live player board/);
+  assert.match(html, /Why this is the move/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|NFL\.com/i);
 });

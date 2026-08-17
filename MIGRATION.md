@@ -47,7 +47,7 @@ To deploy a new private copy under the destination Codex account:
 3. After deployment, add the exact new production hostname pattern to `extension/manifest.json` under the app content script's `matches` list.
 4. Increment the extension version, rebuild `public/draftforge-espn-companion.zip`, run `npm test`, commit, and redeploy.
 
-The current extension already supports localhost and `*.chatgpt.site`, so step 3 is necessary only if the new deployment uses a different hostname family.
+The current extension supports localhost and the exact production origin `https://draftforge-ai.workspace-231977.chatgpt.site`. Keep hosted origins exact: broad sibling-site wildcards would let an unrelated page reach the authenticated ESPN bridge. Step 3 is necessary whenever the deployment hostname changes.
 
 ## 5. Acceptance status
 
@@ -58,12 +58,16 @@ The code, production build, public data adapters, and local tests pass. The issu
 - one complete authenticated salary-cap mock covering nominations, strategic bids/walkaways, max-bid and one-dollar reserve enforcement; and
 - 20 complete deterministic full-draft simulations per format on the frozen candidate, plus fail-closed regression coverage for wrong league/tab, nominee, clock, player, pick, offer, budget, and changed controls.
 
+The robustness gate also supports immutable live five-source capture/replay and sequential independent-seed matrices. Generated snapshot JSON and Monte Carlo outputs are intentionally ignored by Git; reproduce them from a fresh authenticated ESPN import rather than copying browser credentials or profiles.
+
 Re-run the full 20+20 simulation gate after any engine-affecting change. Authenticated mocks and deterministic simulations are recorded separately; simulations are not represented as live ESPN drafts.
 
 ## 6. Useful commands
 
 ```bash
 npm test
+npm run snapshot:capture -- --validate snapshots/intelligence/source-v1-....json
+npm run simulate:matrix -- --drafts 1000 --snapshot snapshots/intelligence/source-v1-....json
 node --check extension/background.js
 node --check extension/espn-content.js
 node --check extension/app-bridge.js

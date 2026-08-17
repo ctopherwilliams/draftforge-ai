@@ -14,6 +14,7 @@ Post-draft league management is intentionally out of scope.
 - Guided mode (recommend in conversation, execute after the user's approval) and explicitly armed Auto mode
 - A timing-first action gate: recommendations are staged before the turn, and DraftForge rechecks ESPN's imported browser tab, league, pick, visible player, and five-second safety window immediately before submission
 - Deterministic, inspectable consensus using ESPN, Fantasy Football Calculator, MyFantasyLeague, Tradyr, and The GNG
+- Corroborated value, sleeper, and deep-stash signals derived from model-versus-market disagreement within those same five sources
 - Source health, weights, timestamps, and player-level provenance in the UI
 - ESPN credentials remain in the browser and are never persisted by DraftForge
 
@@ -52,9 +53,27 @@ node --check extension/app-bridge.js
 
 The test suite builds the production app and checks consensus calculation, deterministic recommendations, salary-cap reserve and pacing rules, extension safeguards, multi-league isolation, server rendering, and 20 complete deterministic drafts in each format.
 
+For bounded, seeded strategy stress testing without opening ESPN, run:
+
+```bash
+npm run simulate:monte-carlo -- --drafts 10000 --seed 20260814
+```
+
+The command runs the requested number of trials per format, keeps the production decision engine as the single strategy implementation, streams per-trial summaries, and writes machine-readable and Markdown output under `outputs/monte-carlo/`. See [docs/monte-carlo-report.md](docs/monte-carlo-report.md) for the accepted baseline/final evidence, replay commands, and limitations.
+
+For current player-specific evidence, first capture an immutable five-source snapshot from a sanitized authenticated ESPN profile, then replay that exact digest across independent seed families:
+
+```bash
+npm run snapshot:capture -- --espn outputs/source-capture/espn-profile.json
+npm run simulate:monte-carlo -- --drafts 10000 --seed 20260814 --snapshot snapshots/intelligence/source-v1-....json
+npm run simulate:matrix -- --drafts 1000 --snapshot snapshots/intelligence/source-v1-....json
+```
+
+Snapshot capture fails closed unless ESPN, FFC, MFL, Tradyr, and GNG are healthy and fresh. Snapshots are content-addressed, replay freshness at their capture time, and are ignored by Git because they contain large third-party datasets. The matrix runs independent seed families sequentially to bound CPU and memory.
+
 ## Data and decision model
 
-The decision engine is deterministic: identical league state and source data produce the same recommendation. AI is not used to invent projections or silently override the model. The system normalizes player identities, rejects stale feeds, converts each source's rankings into comparable percentiles, applies documented weights, then adds league-aware value-over-replacement, roster need, tier scarcity, ADP value, and the selected draft strategy.
+The decision engine is deterministic: identical league state and source data produce the same recommendation. AI is not used to invent projections or silently override the model. The system normalizes player identities, rejects stale feeds, converts each source's rankings into comparable percentiles, applies documented weights, then adds league-aware value-over-replacement, roster need, tier scarcity, ADP value, corroborated sleeper timing, and the selected draft strategy. Sleeper labels require both model feeds to agree against the ESPN/FFC/MFL market; they never raise a salary-cap walk-away ceiling.
 
 See [docs/data-sources.md](docs/data-sources.md) for endpoints, weights, update cadence, attribution, and the combination method.
 

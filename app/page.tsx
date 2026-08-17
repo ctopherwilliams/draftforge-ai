@@ -1,19 +1,35 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
+  auctionBudgetUsage,
   describeRecommendation,
-  buildAuctionPlan,
+  buildDraftDecision,
+  buildPlayerPoolIndex,
   chooseAuctionNomination,
-  recommendPlayers,
   type DraftPick,
   type DraftPlayer,
   type LeagueSettings,
+  type Recommendation,
   type StrategyId,
 } from "./lib/draft-engine";
-import { isIntelligenceSourceFresh, mergeConsensus, type IntelligenceSource } from "./lib/consensus";
+import {
+  isCompleteFreshIntelligenceSnapshot,
+  isIntelligenceSourceFresh,
+  intelligenceSnapshotCacheKey,
+  mergeConsensus,
+  preserveCompleteFreshIntelligenceSnapshot,
+  readCompleteFreshIntelligenceSnapshot,
+  rememberCompleteFreshIntelligenceSnapshot,
+  type IntelligenceSource,
+} from "./lib/consensus";
 import { contextCanRebindDraftTab, contextMatchesActiveDraftTab } from "./lib/espn-context";
-import { upsertDraftProfile, type DraftProfile } from "./lib/profiles";
+import { stabilizeEspnContext, type EspnContext } from "./lib/espn-context-state";
+import { canArmAutoDraft } from "./lib/auto-draft-safety";
+import { liveEspnRecommendations, reconcileEspnPicks, resolveAuctionSales, resolveOwnRoster } from "./lib/espn-reconciliation";
+import { draftUiReducer, INITIAL_DRAFT_UI_STATE } from "./lib/draft-ui-state";
+import { buildDraftPresentation } from "./lib/draft-presentation";
+import { compactDraftProfiles, persistDraftProfiles, upsertDraftProfile, type DraftProfile } from "./lib/profiles";
 
 const DEMO_PLAYERS: DraftPlayer[] = [
   { id: 1, name: "Ja'Marr Chase", team: "CIN", pos: "WR", rank: 1, adp: 1.4, auction: 61, projected: 312 },
@@ -44,6 +60,12 @@ const DEMO_LEAGUE: LeagueSettings = {
   positionLimits: {}, scoringLabel: "PPR", scoringRules: 19, keeperCount: 0, pickOrder: [], teams: [],
 };
 
+const DEMO_SALARY_LEAGUE: LeagueSettings = {
+  ...DEMO_LEAGUE,
+  name: "ESPN Salary-Cap Preview",
+  draftType: "AUCTION",
+};
+
 const FILTERS = ["ALL", "QB", "RB", "WR", "TE", "DST", "K"] as const;
 const STRATEGIES: { id: StrategyId; label: string; description: string }[] = [
   { id: "BALANCED", label: "Balanced value", description: "Take the strongest value while filling starters naturally." },
@@ -53,9 +75,6 @@ const STRATEGIES: { id: StrategyId; label: string; description: string }[] = [
 ];
 
 type ExtensionStatus = "checking" | "missing" | "ready" | "connecting" | "connected" | "error";
-type EspnRosterEntry = { playerId?: number | null; name?: string | null; amount?: number };
-type EspnAuctionSale = { playerId?: number | null; playerName?: string | null; teamName?: string | null; amount?: number; sequence?: number };
-type EspnContext = { onClock?: boolean; inDraftRoom?: boolean; auctionActive?: boolean; leagueId?: string; tabId?: number; teamId?: number; nominatedPlayer?: string; nominatedPlayerId?: number | null; currentBid?: number; maxLegalBid?: number; leadingBid?: boolean; currentPick?: number | null; remainingSeconds?: number | null; availablePlayerIds?: number[]; availablePlayerNames?: string[]; ownRoster?: EspnRosterEntry[]; soundMuted?: boolean; actionSurfaceReady?: boolean; auctionBudgets?: { teamName: string; remaining: number; maxOffer: number }[]; auctionSales?: EspnAuctionSale[] };
 
 function sendToExtension(type: string, payload: Record<string, unknown> = {}) {
   window.postMessage({ source: "draftforge-web", type, payload }, window.location.origin);
@@ -86,86 +105,16 @@ function normalizeName(value: string | null | undefined) {
   return String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-function defenseNickname(value: string | null | undefined) {
-  return String(value || "")
-    .replace(/d\/?st|defense/gi, "")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .at(-1)
-    ?.toLowerCase().replace(/[^a-z0-9]/g, "") || "";
-}
-
-function espnNameMatchesPlayer(value: string | null | undefined, player: DraftPlayer) {
-  if (normalizeName(value) === normalizeName(player.name)) return true;
-  if (player.pos !== "DST") return false;
-  const nickname = defenseNickname(value);
-  return Boolean(nickname && (normalizeName(player.name).includes(nickname) || normalizeName(player.team) === nickname));
-}
-
-const OPPONENT_TEAM_ID = 2_000_000_000;
 const ESPN_ROSTER_CONFIRMATION_GRACE_MS = 6000;
 const INTELLIGENCE_REFRESH_MS = 5 * 60 * 1000;
-const RETRIABLE_SELECT_CODES = new Set(["PLAYER_NOT_FOUND"]);
-const RETRIABLE_TURN_CODES = new Set(["ACTION_NOT_FOUND", "PLAYER_CONTROL_DRIFT", "PICK_CHANGED", "NOT_ON_CLOCK", "CLOCK_TOO_SHORT", "BID_CHANGED", "BID_OUT_OF_SEQUENCE"]);
-
-function resolveOwnRoster(roomContext: EspnContext | undefined, players: DraftPlayer[]) {
-  return (roomContext?.ownRoster || []).flatMap((entry, index) => {
-    // ESPN defense rows can expose a team/logo id rather than the draft-pool
-    // player id. The exact visible name is authoritative when it resolves.
-    const playerId = players.find((player) => espnNameMatchesPlayer(entry.name, player))?.id
-      || Number(entry.playerId)
-      || 0;
-    return playerId !== 0 && playerId !== -1
-      ? [{ playerId, amount: Math.max(0, Number(entry.amount || 0)), index }]
-      : [];
-  });
-}
-
-function resolveAuctionSales(roomContext: EspnContext | undefined, league: LeagueSettings, players: DraftPlayer[]) {
-  return (roomContext?.auctionSales || []).flatMap((sale, index) => {
-    const player = players.find((candidate) => candidate.id === Number(sale.playerId))
-      || players.find((candidate) => normalizeName(candidate.name) === normalizeName(sale.playerName));
-    const team = league.teams.find((candidate) =>
-      normalizeName(candidate.name) === normalizeName(sale.teamName)
-      || normalizeName(candidate.abbrev) === normalizeName(sale.teamName));
-    const amount = Number(sale.amount || 0);
-    if (!player || !team || amount < 1) return [];
-    const overall = Math.max(1, Number(sale.sequence || index + 1));
-    return [{ playerId: player.id, teamId: team.id, overall, round: 0, amount }];
-  });
-}
-
-function reconcileEspnPicks(picks: DraftPick[], roomContext: EspnContext | undefined, teamId: number | null, players: DraftPlayer[]) {
-  if (!Array.isArray(roomContext?.ownRoster)) return picks;
-  const ownRoster = resolveOwnRoster(roomContext, players);
-  const ownIds = new Set(ownRoster.map((entry) => entry.playerId));
-  const availableIds = new Set(roomContext.availablePlayerIds || []);
-  const byPlayer = new Map(
-    picks
-      // A locally attempted player that ESPN still lists as available was not
-      // drafted. Never let it survive as an optimistic or opponent pick.
-      .filter((pick) => ownIds.has(pick.playerId) || !availableIds.has(pick.playerId))
-      .map((pick) => [pick.playerId, {
-        ...pick,
-        teamId: ownIds.has(pick.playerId) && Number(teamId) > 0
-          ? Number(teamId)
-          : Number(pick.teamId) === Number(teamId) ? OPPONENT_TEAM_ID : pick.teamId,
-      }]),
-  );
-  const maxOverall = Math.max(0, ...[...byPlayer.values()].map((pick) => Number(pick.overall || 0)));
-  for (const entry of ownRoster) {
-    const existing = byPlayer.get(entry.playerId);
-    byPlayer.set(entry.playerId, {
-      playerId: entry.playerId,
-      teamId: Number(teamId),
-      overall: existing?.overall || maxOverall + entry.index + 1,
-      round: existing?.round || 0,
-      amount: entry.amount || existing?.amount || 0,
-    });
-  }
-  return [...byPlayer.values()].sort((a, b) => a.overall - b.overall);
-}
+const EXACT_TAB_WATCHDOG_MS = 5000;
+const ACTION_CANDIDATE_LIMIT = 64;
+const MIN_SNAKE_SELECTION_WINDOW_SECONDS = 10;
+const MIN_OTHER_ACTION_WINDOW_SECONDS = 5;
+const RETRIABLE_SELECT_CODES = new Set(["PLAYER_NOT_FOUND", "ACTION_TIMEOUT", "ROSTER_NOT_CONFIRMED"]);
+const RETRIABLE_TURN_CODES = new Set(["ACTION_NOT_FOUND", "PLAYER_CONTROL_DRIFT", "PLAYER_POOL_STALE", "PICK_CHANGED", "NOT_ON_CLOCK", "CLOCK_TOO_SHORT", "BID_CHANGED", "BID_OUT_OF_SEQUENCE"]);
+const RETRIABLE_BID_CODES = new Set([...RETRIABLE_TURN_CODES, "ACTION_TIMEOUT", "NOMINEE_MISMATCH", "NOMINEE_UNKNOWN"]);
+const RETRIABLE_NOMINATION_CODES = new Set(["NOT_ON_CLOCK", "CLOCK_TOO_SHORT", "NOMINATION_ACTIVE"]);
 
 function normalizeImportedLeague(league: LeagueSettings) {
   const rawSettings = league.rawSettings as { draftSettings?: { type?: unknown; keeperCount?: unknown } } | undefined;
@@ -185,17 +134,15 @@ export default function Home() {
   const [league, setLeague] = useState<LeagueSettings>(DEMO_LEAGUE);
   const [espnPlayers, setEspnPlayers] = useState<DraftPlayer[]>(DEMO_PLAYERS);
   const [sources, setSources] = useState<IntelligenceSource[]>([]);
-  const [sourcesOpen, setSourcesOpen] = useState(false);
-  const [intelligenceLoading, setIntelligenceLoading] = useState(true);
+  const intelligenceSnapshotsRef = useRef(new Map<string, IntelligenceSource[]>());
+  const [ui, dispatchUi] = useReducer(draftUiReducer, INITIAL_DRAFT_UI_STATE);
+  const { sourcesOpen, intelligenceLoading, settingsOpen, rawSettingsOpen, strategyOpen, autoWarning } = ui;
   const [picks, setPicks] = useState<DraftPick[]>([]);
   const [settingsConfirmed, setSettingsConfirmed] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(true);
-  const [rawSettingsOpen, setRawSettingsOpen] = useState(false);
   const [leagueId, setLeagueId] = useState("");
   const [strategy, setStrategy] = useState<StrategyId>("BALANCED");
-  const [strategyOpen, setStrategyOpen] = useState(false);
   const [autoDraft, setAutoDraft] = useState(false);
-  const [autoWarning, setAutoWarning] = useState(false);
+  const [autoArmVerification, setAutoArmVerification] = useState<{ requestId: number; context: EspnContext } | null>(null);
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>("ALL");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(1);
@@ -216,6 +163,8 @@ export default function Home() {
   const activeEspnTabRef = useRef<number | null>(null);
   const activeEspnTeamRef = useRef<number | null>(null);
   const actionRequestSequenceRef = useRef(0);
+  const autoArmRequestSequenceRef = useRef(0);
+  const pendingAutoArmRequestRef = useRef<number | null>(null);
   const latestActionRequestRef = useRef(0);
   const pendingSnakeActionRef = useRef<{
     playerId: number;
@@ -236,6 +185,18 @@ export default function Home() {
     playerName: string;
     beforeRosterPlayerIds: number[];
   } | null>(null);
+  const authoritativeRosterContext = useMemo(() => ({
+    inDraftRoom: context.inDraftRoom,
+    ownRoster: context.ownRoster,
+    snakePicks: context.snakePicks,
+  }), [context.inDraftRoom, context.ownRoster, context.snakePicks]);
+  // ESPN's visible roster can advance several $1 auctions between API polls.
+  // Reconcile it synchronously for every decision instead of waiting for the
+  // state-sync effect below to commit on a later render.
+  const authoritativePicks = useMemo(
+    () => reconcileEspnPicks(picks, authoritativeRosterContext, league.teamId, espnPlayers, league),
+    [picks, authoritativeRosterContext, league, espnPlayers],
+  );
 
   function activateProfile(profile: DraftProfile, roomContext?: EspnContext) {
     activeLeagueRef.current = profile.league.id;
@@ -257,10 +218,13 @@ export default function Home() {
     setStrategy(profile.strategy);
     setLeagueId(profile.league.id);
     setAutoDraft(false);
+    pendingAutoArmRequestRef.current = null;
+    setAutoArmVerification(null);
+    dispatchUi({ type: "set", key: "autoWarning", value: false });
     // Never carry an on-clock state from a different ESPN tab into this league.
     setContext(roomContext && contextMatchesActiveDraftTab(roomContext, profile.league.id, activeEspnTabRef.current) ? roomContext : {});
     setExtension("connected");
-    setSettingsOpen(!profile.settingsConfirmed);
+    dispatchUi({ type: "set", key: "settingsOpen", value: !profile.settingsConfirmed });
     setActionState(`${profile.league.name} loaded. Auto-Draft is off.`);
   }
 
@@ -281,10 +245,39 @@ export default function Home() {
     setLeagueId("");
     setSettingsConfirmed(false);
     setAutoDraft(false);
+    pendingAutoArmRequestRef.current = null;
+    setAutoArmVerification(null);
+    dispatchUi({ type: "set", key: "autoWarning", value: false });
     setContext({});
     setExtension("ready");
-    setSettingsOpen(true);
+    dispatchUi({ type: "set", key: "settingsOpen", value: true });
     setActionState("Open the other ESPN league, then import it.");
+  }
+
+  function previewDraftFormat(draftType: "SNAKE" | "AUCTION") {
+    const previewLeague = draftType === "AUCTION" ? DEMO_SALARY_LEAGUE : DEMO_LEAGUE;
+    activeLeagueRef.current = previewLeague.id;
+    activeLeagueSettingsRef.current = previewLeague;
+    activeEspnTabRef.current = null;
+    activeEspnTeamRef.current = null;
+    latestActionRequestRef.current = ++actionRequestSequenceRef.current;
+    pendingSnakeActionRef.current = null;
+    pendingAuctionNominationRef.current = null;
+    pendingAuctionBidRef.current = null;
+    pendingAutoArmRequestRef.current = null;
+    setPendingAuctionNomination(null);
+    setRejectedSnakePlayerIds([]);
+    setAutoArmVerification(null);
+    dispatchUi({ type: "set", key: "autoWarning", value: false });
+    setLeague(previewLeague);
+    setEspnPlayers(DEMO_PLAYERS);
+    setPicks([]);
+    setSettingsConfirmed(false);
+    setAutoDraft(false);
+    setContext({});
+    setExtension("ready");
+    dispatchUi({ type: "set", key: "settingsOpen", value: false });
+    setActionState(`${draftType === "AUCTION" ? "Salary-cap" : "Snake"} preview only. Import ESPN before any draft action.`);
   }
 
   useEffect(() => {
@@ -296,7 +289,7 @@ export default function Home() {
       sendToExtension("RELOAD_EXTENSION");
     }
     try {
-      const saved = JSON.parse(window.localStorage.getItem("draftforge-leagues-v1") || "{}");
+      const saved = compactDraftProfiles(JSON.parse(window.localStorage.getItem("draftforge-leagues-v1") || "{}"));
       profilesRef.current = saved;
       // Local storage is an external system; hydrate the interactive league switcher once it is available.
       // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -312,26 +305,30 @@ export default function Home() {
         // A browser can have several active ESPN mocks. Never let an arbitrary
         // tab select a league or make this dashboard look actionable.
         if (contextMatchesActiveDraftTab(roomContext, activeLeagueRef.current, activeEspnTabRef.current)) {
-          setContext(roomContext || {});
+          setContext((current) => stabilizeEspnContext(current, roomContext || {}));
           setExtension("connected");
         }
       }
       if (type === "DF_ESPN_CONTEXT") {
         const roomContext = payload as EspnContext | undefined;
         if (contextMatchesActiveDraftTab(roomContext, activeLeagueRef.current, activeEspnTabRef.current)) {
-          setContext(roomContext || {});
+          setContext((current) => stabilizeEspnContext(current, roomContext || {}));
           setExtension("connected");
         }
       }
       if (type === "COMMAND_RESULT" && payload?.context) {
         const roomContext = payload.context as EspnContext;
         if (contextMatchesActiveDraftTab(roomContext, activeLeagueRef.current, activeEspnTabRef.current)) {
-          setContext(roomContext);
+          setContext((current) => stabilizeEspnContext(current, roomContext));
           setExtension("connected");
         } else if (payload.rebound === true && contextCanRebindDraftTab(roomContext, activeLeagueRef.current, activeEspnTeamRef.current)) {
           activeEspnTabRef.current = Number(roomContext.tabId);
-          setContext(roomContext);
+          setContext((current) => stabilizeEspnContext(current, roomContext));
           setExtension("connected");
+        }
+        const autoArmRequestId = Number(payload.autoArmRequestId);
+        if (Number.isInteger(autoArmRequestId) && autoArmRequestId === pendingAutoArmRequestRef.current) {
+          setAutoArmVerification({ requestId: autoArmRequestId, context: roomContext });
         }
       }
       if (type === "DF_IMPORT_SUCCESS" || (type === "COMMAND_RESULT" && payload?.data?.league)) {
@@ -344,6 +341,7 @@ export default function Home() {
           importedContext,
           importedLeague.teamId,
           importedPlayers,
+          importedLeague,
         );
         const importedTabId = Number(importedContext?.tabId);
         activeLeagueRef.current = importedLeague.id;
@@ -356,14 +354,17 @@ export default function Home() {
         pendingAuctionBidRef.current = null;
         setPendingAuctionNomination(null);
         setRejectedSnakePlayerIds([]);
+        pendingAutoArmRequestRef.current = null;
+        setAutoArmVerification(null);
+        dispatchUi({ type: "set", key: "autoWarning", value: false });
         setLeague(importedLeague);
         espnPlayersRef.current = importedPlayers;
         setEspnPlayers(importedPlayers);
         setPicks(importedPicks);
-        setContext(contextMatchesActiveDraftTab(importedContext, importedLeague.id, activeEspnTabRef.current) ? importedContext : {});
+        setContext(contextMatchesActiveDraftTab(importedContext, importedLeague.id, activeEspnTabRef.current) ? importedContext || {} : {});
         setLeagueId(String(importedLeague.id));
         setExtension("connected");
-        setSettingsOpen(true);
+        dispatchUi({ type: "set", key: "settingsOpen", value: true });
         setSettingsConfirmed(false);
         setActionState("ESPN settings imported. Confirm them before drafting.");
         const profile: DraftProfile = { league: importedLeague, espnPlayers: importedPlayers, picks: importedPicks, settingsConfirmed: false, strategy: "BALANCED", savedAt: new Date().toISOString() };
@@ -378,14 +379,28 @@ export default function Home() {
           payload.context,
           activeEspnTeamRef.current,
           espnPlayersRef.current,
+          liveLeague,
         );
         setPicks((current) => reconcileEspnPicks(
           mergeDraftPicks(current, reconciled),
           payload.context,
           activeEspnTeamRef.current,
           espnPlayersRef.current,
+          liveLeague,
         ));
-        setContext(payload.context || {});
+        setContext((current) => stabilizeEspnContext(current, payload.context || {}));
+      }
+      if (type === "DF_ACTION_RESOLVED") {
+        const actionRequestId = Number(payload.actionRequestId);
+        const pending = pendingSnakeActionRef.current;
+        if (pending
+          && Number.isInteger(actionRequestId)
+          && actionRequestId === latestActionRequestRef.current
+          && payload.operation === "SELECT"
+          && Number(payload.tabId) === activeEspnTabRef.current) {
+          pending.playerId = Number(payload.playerId);
+          pending.playerName = String(payload.playerName || pending.playerName);
+        }
       }
       if (type === "DF_ACTION_RESULT") {
         const actionRequestId = Number(payload.action?.actionRequestId);
@@ -393,6 +408,13 @@ export default function Home() {
         if (!payload.ok && payload.action?.operation === "NOMINATE") {
           pendingAuctionNominationRef.current = null;
           setPendingAuctionNomination(null);
+          if (RETRIABLE_NOMINATION_CODES.has(String(payload.code || ""))) {
+            lastAutoAction.current = "";
+            setExtension("connected");
+            setActionRetryNonce((nonce) => nonce + 1);
+            setActionState(`ESPN nomination turn changed (${payload.code}). Waiting for the next live turn.`);
+            return;
+          }
         }
         if (payload.ok && payload.action?.operation === "SELECT" && pendingSnakeActionRef.current) {
           const selectedPlayerId = Number(payload.action.playerId);
@@ -401,9 +423,17 @@ export default function Home() {
             pendingSnakeActionRef.current.playerId = selectedPlayerId;
             pendingSnakeActionRef.current.playerName = selectedPlayerName;
           }
+          if (payload.code === "ROSTER_CONFIRMED") {
+            pendingSnakeActionRef.current = null;
+            lastAutoAction.current = "";
+            setExtension("connected");
+          }
         }
-        if (!payload.ok && payload.action?.operation === "BID" && RETRIABLE_TURN_CODES.has(String(payload.code || ""))) {
+        if (!payload.ok && payload.action?.operation === "BID" && RETRIABLE_BID_CODES.has(String(payload.code || ""))) {
+          pendingAuctionBidRef.current = null;
+          lastAutoAction.current = "";
           setExtension("connected");
+          setActionRetryNonce((nonce) => nonce + 1);
           setActionState(`ESPN offer changed (${payload.code}). Re-evaluating the live bid immediately.`);
           return;
         }
@@ -431,9 +461,14 @@ export default function Home() {
           pending.failed = true;
           setAutoDraft(false);
         }
+        if (!payload.ok) setAutoDraft(false);
         setActionState(payload.ok ? payload.message : `Action stopped: ${payload.message}`);
       }
       if (type === "DF_EXTENSION_ERROR" || type === "EXTENSION_ERROR") {
+        pendingAutoArmRequestRef.current = null;
+        setAutoArmVerification(null);
+        dispatchUi({ type: "set", key: "autoWarning", value: false });
+        setAutoDraft(false);
         setExtension("error");
         setActionState(payload.message || "The ESPN companion reported an error.");
       }
@@ -441,6 +476,17 @@ export default function Home() {
         // SUBMIT_ACTION is broadcast as DF_ACTION_RESULT first so its retry or
         // fail-closed policy is handled exactly once.
         if (payload.action) return;
+        const autoArmRequestId = Number(payload.autoArmRequestId);
+        if (Number.isInteger(autoArmRequestId) && autoArmRequestId === pendingAutoArmRequestRef.current) {
+          pendingAutoArmRequestRef.current = null;
+          setAutoArmVerification(null);
+          dispatchUi({ type: "set", key: "autoWarning", value: false });
+          dispatchUi({ type: "set", key: "settingsOpen", value: true });
+          setAutoDraft(false);
+          setExtension("error");
+          setActionState("Auto-Draft locked: the exact ESPN draft tab changed or could not be verified. Reconnect and rerun the live-room checklist.");
+          return;
+        }
         if (pendingSnakeActionRef.current) {
           pendingSnakeActionRef.current.failed = true;
           setAutoDraft(false);
@@ -459,8 +505,29 @@ export default function Home() {
 
   useEffect(() => {
     profilesRef.current = profiles;
-    window.localStorage.setItem("draftforge-leagues-v1", JSON.stringify(profiles));
+    persistDraftProfiles(window.localStorage, "draftforge-leagues-v1", profiles);
   }, [profiles]);
+
+  useEffect(() => {
+    const captureRequested = new URL(window.location.href).searchParams.get("capture") === "sanitized";
+    if (!captureRequested || !["localhost", "127.0.0.1"].includes(window.location.hostname)) return;
+    const capture = document.createElement("script");
+    capture.id = "draftforge-sanitized-capture";
+    capture.type = "application/json";
+    const safeLeague = { ...league };
+    delete safeLeague.rawSettings;
+    capture.textContent = JSON.stringify({
+      league: {
+        ...safeLeague,
+        name: "Sanitized ESPN snapshot",
+        teams: Array.from({ length: league.size }, (_, index) => ({ id: index + 1, name: `Snapshot Team ${index + 1}`, abbrev: `S${index + 1}` })),
+      },
+      espnPlayers,
+      picks: authoritativePicks,
+    }).replaceAll("<", "\\u003c");
+    document.body.appendChild(capture);
+    return () => capture.remove();
+  }, [league, espnPlayers, authoritativePicks]);
 
   useEffect(() => {
     espnPlayersRef.current = espnPlayers;
@@ -472,8 +539,8 @@ export default function Home() {
     activeLeagueSettingsRef.current = league;
     // Persist a snapshot whenever ESPN sends new draft state so league switches stay isolated.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setProfiles((current) => upsertDraftProfile(current, { league, espnPlayers, picks, settingsConfirmed, strategy, savedAt: new Date().toISOString() }));
-  }, [league, espnPlayers, picks, settingsConfirmed, strategy, extension]);
+    setProfiles((current) => upsertDraftProfile(current, { league, espnPlayers, picks: authoritativePicks, settingsConfirmed, strategy, savedAt: new Date().toISOString() }));
+  }, [league, espnPlayers, authoritativePicks, settingsConfirmed, strategy, extension]);
 
   useEffect(() => {
     if (league.id === "demo" || extension !== "connected") return;
@@ -483,7 +550,7 @@ export default function Home() {
       sendToExtension("REFRESH_ESPN_CONTEXT", { expectedLeagueId: league.id, expectedTeamId: activeEspnTeamRef.current, expectedTabId });
     };
     refreshExactDraftTab();
-    const refreshTimer = window.setInterval(refreshExactDraftTab, 750);
+    const refreshTimer = window.setInterval(refreshExactDraftTab, EXACT_TAB_WATCHDOG_MS);
     return () => window.clearInterval(refreshTimer);
   }, [extension, league.id]);
 
@@ -492,7 +559,7 @@ export default function Home() {
     // ESPN's visible roster is an external source of truth for submitted picks.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setPicks((current) => {
-      const reconciled = reconcileEspnPicks(current, context, league.teamId, espnPlayers);
+      const reconciled = reconcileEspnPicks(current, context, league.teamId, espnPlayers, league);
       const unchanged = reconciled.length === current.length && reconciled.every((pick, index) => (
         pick.playerId === current[index]?.playerId && pick.teamId === current[index]?.teamId && pick.amount === current[index]?.amount
       ));
@@ -523,19 +590,18 @@ export default function Home() {
     const pickAdvanced = Number(context.currentPick || 0) > pending.expectedPick;
     const previousRoster = new Set(pending.beforeRosterPlayerIds);
     const newOwnRoster = ownRoster.filter((entry) => !previousRoster.has(entry.playerId));
-    if (!confirmed && newOwnRoster.length === 1) {
-      const resolved = espnPlayers.find((player) => player.id === newOwnRoster[0].playerId);
-      pendingSnakeActionRef.current = null;
-      setActionState(`ESPN confirmed ${resolved?.name || "the selected fallback"} on your roster.`);
-      return;
-    }
     if (!confirmed && pickAdvanced && Date.now() - pending.sentAt >= ESPN_ROSTER_CONFIRMATION_GRACE_MS) {
       pending.failed = true;
       setPicks((current) => current.filter((pick) => pick.playerId !== pending.playerId));
       setAutoDraft(false);
-      setActionState(`Action stopped: ESPN did not confirm ${pending.playerName} on your roster.`);
+      const unexpected = newOwnRoster.length === 1
+        ? espnPlayers.find((player) => player.id === newOwnRoster[0].playerId)?.name || "another player"
+        : null;
+      setActionState(unexpected
+        ? `Action stopped: ESPN added ${unexpected} instead of DraftForge's intended ${pending.playerName} selection (possible Autopick).`
+        : `Action stopped: ESPN did not confirm ${pending.playerName} on your roster.`);
     }
-  }, [context, espnPlayers, league.teamId]);
+  }, [context, espnPlayers, league]);
 
   useEffect(() => {
     const pending = pendingSnakeActionRef.current;
@@ -550,7 +616,36 @@ export default function Home() {
   }, [autoDraft]);
 
   useEffect(() => {
+    if (!autoDraft || context.autopickActive !== true) return;
+    // ESPN Autopick is authoritative external state. Mirror its emergency
+    // shutdown synchronously so no later action effect can remain armed.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAutoDraft(false);
+    setActionState("Action stopped: ESPN Autopick became active. This draft is excluded from verification.");
+    const expectedTabId = activeEspnTabRef.current;
+    if (Number.isInteger(expectedTabId)) {
+      sendToExtension("DISABLE_ESPN_AUTOPICK", { expectedLeagueId: league.id, expectedTabId });
+    }
+  }, [autoDraft, context.autopickActive, league.id]);
+
+  useEffect(() => {
+    if (league.id === "demo") return;
+    const key = intelligenceSnapshotCacheKey(league.scoringLabel, league.size, league.season);
+    rememberCompleteFreshIntelligenceSnapshot(intelligenceSnapshotsRef.current, key, sources);
+  }, [league.id, league.scoringLabel, league.size, league.season, sources]);
+
+  useEffect(() => {
+    if (league.id === "demo") {
+      const previewTimer = window.setTimeout(() => {
+        setSources([]);
+        dispatchUi({ type: "set", key: "intelligenceLoading", value: false });
+      }, 0);
+      return () => window.clearTimeout(previewTimer);
+    }
     let cancelled = false;
+    const intelligenceKey = intelligenceSnapshotCacheKey(league.scoringLabel, league.size, league.season);
+    const cachedSources = readCompleteFreshIntelligenceSnapshot(intelligenceSnapshotsRef.current, intelligenceKey);
+    if (cachedSources) setSources(cachedSources);
     const intelligenceUrl = `/api/intelligence?scoring=${encodeURIComponent(league.scoringLabel)}&teams=${league.size}&season=${league.season}`;
     const refreshIntelligence = () => {
       fetch(intelligenceUrl, { cache: "no-store" })
@@ -558,15 +653,22 @@ export default function Home() {
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           return response.json();
         })
-        .then((data) => { if (!cancelled) setSources(data.sources || []); })
+        .then((data) => {
+          if (!cancelled) {
+            setSources((current) => {
+              const next = preserveCompleteFreshIntelligenceSnapshot(current, data.sources || []);
+              rememberCompleteFreshIntelligenceSnapshot(intelligenceSnapshotsRef.current, intelligenceKey, next);
+              return next;
+            });
+          }
+        })
         // Preserve the newest validated snapshot if a background refresh fails.
         .catch(() => {})
-        .finally(() => { if (!cancelled) setIntelligenceLoading(false); });
+        .finally(() => { if (!cancelled) dispatchUi({ type: "set", key: "intelligenceLoading", value: false }); });
     };
     // Every imported draft gets a fresh, non-blocking source snapshot. Long
     // drafts refresh in the background without putting a network call on the clock.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setIntelligenceLoading(true);
+    dispatchUi({ type: "set", key: "intelligenceLoading", value: true });
     refreshIntelligence();
     const refreshTimer = window.setInterval(refreshIntelligence, INTELLIGENCE_REFRESH_MS);
     return () => {
@@ -576,24 +678,20 @@ export default function Home() {
   }, [league.id, league.scoringLabel, league.size, league.season]);
 
   const players = useMemo(() => mergeConsensus(espnPlayers, sources, league), [espnPlayers, sources, league]);
+  const playerPool = useMemo(() => buildPlayerPoolIndex(players, league), [players, league]);
 
-  const recommendationPick = league.draftType === "SNAKE" && Number(context.currentPick) > 0 ? Number(context.currentPick) : picks.length + 1;
-  const recommendations = useMemo(() => recommendPlayers(players, picks, league, strategy, recommendationPick, context.auctionBudgets), [players, picks, league, strategy, recommendationPick, context.auctionBudgets]);
+  const recommendationPick = league.draftType === "SNAKE" && Number(context.currentPick) > 0 ? Number(context.currentPick) : authoritativePicks.length + 1;
+  const decision = useMemo(
+    () => buildDraftDecision(players, authoritativePicks, league, strategy, recommendationPick, context.auctionBudgets, playerPool),
+    [players, authoritativePicks, league, strategy, recommendationPick, context.auctionBudgets, playerPool],
+  );
+  const recommendations = decision.recommendations;
+  const remainingRosterSlots = Math.max(0, league.rosterSize - authoritativePicks.filter((pick) => pick.teamId === league.teamId).length);
   const liveRecommendations = useMemo(() => {
-    if (!context.inDraftRoom) return recommendations;
-    // A live ESPN room without a populated available-player pool is not safe
-    // to act on. Wait for the next context refresh instead of falling back to
-    // a stale global recommendation.
-    if (!context.availablePlayerIds?.length) return [];
-    const available = new Set(context.availablePlayerIds);
-    const availableNames = context.availablePlayerNames || [];
-    const rejected = new Set(rejectedSnakePlayerIds);
-    return recommendations.filter((player) => (
-      (available.has(player.id) || availableNames.some((name) => espnNameMatchesPlayer(name, player)))
-      && !rejected.has(player.id)
-    ));
-  }, [context.availablePlayerIds, context.availablePlayerNames, context.inDraftRoom, recommendations, rejectedSnakePlayerIds]);
-  const auctionPlan = useMemo(() => buildAuctionPlan(players, picks, league, strategy, context.auctionBudgets), [players, picks, league, strategy, context.auctionBudgets]);
+    return liveEspnRecommendations(recommendations, context, rejectedSnakePlayerIds, remainingRosterSlots);
+  }, [context, recommendations, rejectedSnakePlayerIds, remainingRosterSlots]);
+  const auctionPlan = decision.auctionPlan;
+  const auctionUsage = auctionBudgetUsage(auctionPlan);
   const auctionNomination = useMemo(
     () => chooseAuctionNomination(liveRecommendations, league, auctionPlan),
     [liveRecommendations, league, auctionPlan],
@@ -611,20 +709,24 @@ export default function Home() {
       ? auctionNomination.player
       : selected;
   const nextBid = focusPlayer ? Math.max(1, Number(context.currentBid || 0) + 1) : 1;
-  const draftedIds = useMemo(() => new Set(picks.map((pick) => pick.playerId)), [picks]);
+  const draftedIds = useMemo(() => new Set(authoritativePicks.map((pick) => pick.playerId)), [authoritativePicks]);
+  const normalizedQuery = query.toLowerCase();
   const visible = liveRecommendations.filter((player) =>
-    (filter === "ALL" || player.pos === filter) && `${player.name} ${player.team}`.toLowerCase().includes(query.toLowerCase())
+    (filter === "ALL" || player.pos === filter) && `${player.name} ${player.team}`.toLowerCase().includes(normalizedQuery)
   );
-  const myPicks = picks.filter((pick) => pick.teamId === league.teamId);
-  const myRoster = myPicks.map((pick) => ({ pick, player: players.find((player) => player.id === pick.playerId) })).filter((item) => item.player) as { pick: DraftPick; player: DraftPlayer }[];
+  const myPicks = authoritativePicks.filter((pick) => pick.teamId === league.teamId);
+  const myPickCount = myPicks.length;
+  const myRoster = myPicks.map((pick) => ({ pick, player: playerPool.playerById.get(pick.playerId) })).filter((item) => item.player) as { pick: DraftPick; player: DraftPlayer }[];
   const currentPick = recommendationPick;
-  const currentRound = league.draftType === "SNAKE" ? Math.floor(picks.length / league.size) + 1 : null;
+  const currentRound = league.draftType === "SNAKE" ? Math.floor((Math.max(1, currentPick) - 1) / league.size) + 1 : null;
   const remainingSeconds = typeof context.remainingSeconds === "number" ? context.remainingSeconds : Number.NaN;
-  const actionWindowOpen = Boolean(context.onClock) && Number.isFinite(remainingSeconds) && remainingSeconds >= 5;
-  const bidWindowOpen = Number.isFinite(remainingSeconds) && remainingSeconds >= 5;
+  const minimumActionWindow = league.draftType === "SNAKE" ? MIN_SNAKE_SELECTION_WINDOW_SECONDS : MIN_OTHER_ACTION_WINDOW_SECONDS;
+  const healthySources = sources.filter(isIntelligenceSourceFresh);
+  const sourceCoverageReady = isCompleteFreshIntelligenceSnapshot(sources);
+  const actionWindowOpen = sourceCoverageReady && context.actionSurfaceReady === true && context.autopickActive !== true && Boolean(context.onClock) && Number.isFinite(remainingSeconds) && remainingSeconds >= minimumActionWindow;
+  const bidWindowOpen = sourceCoverageReady && context.autopickActive !== true && Number.isFinite(remainingSeconds) && remainingSeconds >= MIN_OTHER_ACTION_WINDOW_SECONDS;
   const spent = myPicks.reduce((sum, pick) => sum + pick.amount, 0);
   const strategyInfo = STRATEGIES.find((item) => item.id === strategy) || STRATEGIES[0];
-  const healthySources = sources.filter(isIntelligenceSourceFresh);
   const preflightChecks = [
     { label: `Exact ESPN league ${league.id} and team ${league.teamId || "—"}`, ok: league.id !== "demo" && Number(league.teamId) > 0 },
     { label: `${league.draftType === "AUCTION" ? `$${league.auctionBudget} salary cap` : "Snake order"}, ${league.size} teams, ${league.rosterSize} draftable slots`, ok: league.size > 1 && league.rosterSize > 0 && rosterSlots(league).length === league.rosterSize },
@@ -638,9 +740,44 @@ export default function Home() {
     { label: "Exact imported league and team are bound to one ESPN draft tab", ok: context.inDraftRoom === true && String(context.leagueId) === String(league.id) && Number(context.teamId) === Number(league.teamId) },
     { label: "Live player pool, roster, timer, and action controls resolved", ok: Boolean(context.actionSurfaceReady && context.availablePlayerIds?.length && Array.isArray(context.ownRoster) && Number.isFinite(context.remainingSeconds)) },
     { label: "ESPN draft sound is muted", ok: context.inDraftRoom === true && context.soundMuted === true },
+    { label: "ESPN Autopick is off", ok: context.inDraftRoom === true && context.autopickActive !== true },
     { label: "No-click dry run resolves the top legal recommendation", ok: context.inDraftRoom === true && Boolean(context.availablePlayerIds?.length) && Boolean(liveRecommendations[0]) },
   ];
   const liveChecklistReady = settingsConfirmed && preflightReady && liveChecks.every((check) => check.ok);
+
+  useEffect(() => {
+    if (!autoArmVerification) return;
+    const requestIsCurrent = autoArmVerification.requestId === pendingAutoArmRequestRef.current;
+    const armReady = requestIsCurrent && canArmAutoDraft({
+      checklistReady: liveChecklistReady,
+      extensionConnected: extension === "connected",
+      context: autoArmVerification.context,
+      leagueId: league.id,
+      teamId: league.teamId,
+      tabId: activeEspnTabRef.current,
+    });
+    pendingAutoArmRequestRef.current = null;
+    // The exact-tab response is an external verification result; consume it once.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAutoArmVerification(null);
+    if (!armReady) {
+      setAutoDraft(false);
+      dispatchUi({ type: "set", key: "settingsOpen", value: true });
+      setActionState("Auto-Draft locked: ESPN room state changed during verification. Rerun the exact live-room checklist.");
+      return;
+    }
+    setAutoDraft(true);
+    setActionState("Auto-Draft armed after the exact ESPN tab and live-room checks were revalidated.");
+  }, [autoArmVerification, extension, league.id, league.teamId, liveChecklistReady]);
+
+  useEffect(() => {
+    if (!autoDraft || sourceCoverageReady || myPickCount >= league.rosterSize) return;
+    // Source coverage is an action-time invariant, not only a pre-draft
+    // checklist. Disarm immediately if the last validated snapshot expires.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAutoDraft(false);
+    setActionState("Action stopped: five-source intelligence is no longer fresh and complete. Refresh sources, re-check the room, and re-enable Auto-Draft.");
+  }, [autoDraft, league.rosterSize, myPickCount, sourceCoverageReady]);
 
   function connect() {
     setExtension("connecting");
@@ -648,9 +785,19 @@ export default function Home() {
     sendToExtension("CONNECT_ESPN", { ...(leagueId.trim() ? { leagueId: leagueId.trim() } : {}), season: league.season || new Date().getFullYear() });
   }
 
-  const submit = useCallback((player = focusPlayer, automatic = false, operation?: "SELECT" | "NOMINATE" | "BID", amount?: number, nominationIntent: "TARGET" | "DRAIN" = "TARGET") => {
+  const submit = useCallback((player: Recommendation | undefined, automatic = false, operation?: "SELECT" | "NOMINATE" | "BID", amount?: number, nominationIntent: "TARGET" | "DRAIN" = "TARGET") => {
     if (!player || !settingsConfirmed || extension !== "connected") {
       setActionState("Connect ESPN and confirm the imported rules first.");
+      return;
+    }
+    if (!sourceCoverageReady) {
+      setAutoDraft(false);
+      setActionState("Action stopped: five-source intelligence is no longer fresh and complete. No ESPN action was sent.");
+      return;
+    }
+    if (myPickCount >= league.rosterSize) {
+      setAutoDraft(false);
+      setActionState("Draft complete: ESPN confirmed every roster spot. No further action was sent.");
       return;
     }
     const resolvedOperation = operation || (league.draftType === "AUCTION" ? "NOMINATE" : "SELECT");
@@ -660,7 +807,7 @@ export default function Home() {
       return;
     }
     if ((resolvedOperation === "BID" ? !bidWindowOpen : !actionWindowOpen)) {
-      setActionState(`Waiting for a safe ESPN action window (need at least 5 seconds; ESPN shows ${Number.isFinite(remainingSeconds) ? `${remainingSeconds}s` : "no timer"}).`);
+      setActionState(`Waiting for a safe ESPN action window (need at least ${resolvedOperation === "SELECT" ? MIN_SNAKE_SELECTION_WINDOW_SECONDS : MIN_OTHER_ACTION_WINDOW_SECONDS} seconds; ESPN shows ${Number.isFinite(remainingSeconds) ? `${remainingSeconds}s` : "no timer"}).`);
       return;
     }
     if (resolvedOperation === "SELECT" && pendingSnakeActionRef.current && !pendingSnakeActionRef.current.failed) {
@@ -698,7 +845,7 @@ export default function Home() {
     setActionState(`${automatic ? "Auto-Draft is submitting" : "Submitting"} ${player.name} in ESPN…`);
     const automaticRecommendations = player.fillsMandatoryStarter
       ? recommendations.filter((candidate) => candidate.fillsMandatoryStarter)
-      : recommendations;
+      : [...recommendations];
     const orderedCandidates = automatic
       ? [...automaticRecommendations.slice(0, 6), player, ...automaticRecommendations.slice(6)]
           .filter((candidate, index, all) => all.findIndex((item) => item.id === candidate.id) === index)
@@ -709,8 +856,8 @@ export default function Home() {
       playerId: player.id,
       playerName: player.name,
       candidates: resolvedOperation === "BID" ? undefined : orderedCandidates
-        .slice(0, 25)
-        .map((candidate) => ({ playerId: candidate.id, playerName: candidate.name })),
+        .slice(0, ACTION_CANDIDATE_LIMIT)
+        .map((candidate) => ({ playerId: candidate.id, playerName: candidate.name, position: candidate.pos, fillsMandatoryStarter: candidate.fillsMandatoryStarter })),
       amount: resolvedOperation === "BID" ? amount ?? player.maxBid : resolvedOperation === "NOMINATE" ? amount ?? 1 : undefined,
       maxApprovedBid: resolvedOperation === "BID" ? player.maxBid : undefined,
       nominationIntent: resolvedOperation === "NOMINATE" ? nominationIntent : undefined,
@@ -720,11 +867,12 @@ export default function Home() {
       expectedTabId,
       expectedPick: currentPick,
     });
-  }, [actionWindowOpen, bidWindowOpen, context, currentPick, espnPlayers, extension, focusPlayer, league.draftType, league.id, recommendations, remainingSeconds, settingsConfirmed]);
+  }, [actionWindowOpen, bidWindowOpen, context, currentPick, espnPlayers, extension, league.draftType, league.id, league.rosterSize, myPickCount, recommendations, remainingSeconds, settingsConfirmed, sourceCoverageReady]);
 
   useEffect(() => {
-    if (!autoDraft || !settingsConfirmed || extension !== "connected" || !actionWindowOpen || !liveRecommendations[0]) return;
+    if (!autoDraft || !settingsConfirmed || extension !== "connected" || !actionWindowOpen || !liveRecommendations[0] || myPickCount >= league.rosterSize) return;
     if (league.draftType === "SNAKE" && pendingSnakeActionRef.current) return;
+    if (league.draftType === "AUCTION" && (nominated || context.nominatedPlayer || Number(context.currentBid || 0) > 0)) return;
     const automaticPlayer = league.draftType === "AUCTION" ? auctionNomination?.player : liveRecommendations[0];
     if (!automaticPlayer) return;
     const key = `${league.id}:${currentPick}:${automaticPlayer.id}:${league.draftType}:${auctionNomination?.intent || "PICK"}:${actionRetryNonce}`;
@@ -737,26 +885,57 @@ export default function Home() {
       league.draftType === "AUCTION" ? auctionNomination?.openingBid : undefined,
       auctionNomination?.intent || "TARGET",
     );
-  }, [actionRetryNonce, autoDraft, settingsConfirmed, extension, actionWindowOpen, liveRecommendations, auctionNomination, league.id, league.draftType, currentPick, submit]);
+  }, [actionRetryNonce, autoDraft, settingsConfirmed, extension, actionWindowOpen, liveRecommendations, auctionNomination, league.id, league.draftType, league.rosterSize, myPickCount, currentPick, nominated, context.nominatedPlayer, context.currentBid, submit]);
 
   useEffect(() => {
-    if (!autoDraft || !settingsConfirmed || extension !== "connected" || league.draftType !== "AUCTION" || !bidWindowOpen || !nominated || context.leadingBid || ownNominationIntent === "DRAIN") return;
+    if (!autoDraft || !settingsConfirmed || extension !== "connected" || league.draftType !== "AUCTION" || !bidWindowOpen || !nominated || context.leadingBid || ownNominationIntent === "DRAIN" || myPickCount >= league.rosterSize) return;
     const bid = Math.max(1, Number(context.currentBid || 0) + 1);
     if (bid > nominated.maxBid) return;
     const key = `${league.id}:bid:${nominated.id}:${bid}`;
     if (lastAutoAction.current === key) return;
     lastAutoAction.current = key;
     submit(nominated, true, "BID", bid);
-  }, [autoDraft, settingsConfirmed, extension, league.draftType, league.id, nominated, ownNominationIntent, context.currentBid, context.leadingBid, bidWindowOpen, submit]);
+  }, [actionRetryNonce, autoDraft, settingsConfirmed, extension, league.draftType, league.id, league.rosterSize, myPickCount, nominated, ownNominationIntent, context.currentBid, context.leadingBid, bidWindowOpen, submit]);
+
+  useEffect(() => {
+    if (!autoDraft || myPickCount < league.rosterSize || context.autopickActive === true) return;
+    const completionTimer = window.setTimeout(() => {
+      setAutoDraft(false);
+      setActionState("Draft complete: ESPN confirmed every roster spot. No further action was sent.");
+    }, 0);
+    return () => window.clearTimeout(completionTimer);
+  }, [autoDraft, context.autopickActive, league.rosterSize, myPickCount]);
 
   function enableAutoDraft() {
     if (autoDraft) { setAutoDraft(false); return; }
     if (!liveChecklistReady) {
-      setSettingsOpen(true);
+      dispatchUi({ type: "set", key: "settingsOpen", value: true });
       setActionState("Auto-Draft locked: complete the pre-draft and live-room checklists first.");
       return;
     }
-    setAutoWarning(true);
+    dispatchUi({ type: "set", key: "autoWarning", value: true });
+  }
+
+  function confirmEnableAutoDraft() {
+    const expectedTabId = activeEspnTabRef.current;
+    if (!liveChecklistReady || extension !== "connected" || !Number.isInteger(expectedTabId)) {
+      dispatchUi({ type: "set", key: "autoWarning", value: false });
+      dispatchUi({ type: "set", key: "settingsOpen", value: true });
+      setAutoDraft(false);
+      setActionState("Auto-Draft locked: ESPN room state changed. Rerun the exact live-room checklist.");
+      return;
+    }
+    const requestId = ++autoArmRequestSequenceRef.current;
+    pendingAutoArmRequestRef.current = requestId;
+    setAutoDraft(false);
+    dispatchUi({ type: "set", key: "autoWarning", value: false });
+    setActionState("Revalidating the exact ESPN draft tab before arming Auto-Draft…");
+    sendToExtension("REFRESH_ESPN_CONTEXT", {
+      expectedLeagueId: league.id,
+      expectedTeamId: activeEspnTeamRef.current,
+      expectedTabId,
+      autoArmRequestId: requestId,
+    });
   }
 
   const slots = rosterSlots(league);
@@ -773,20 +952,60 @@ export default function Home() {
     return { slot, item };
   });
 
+  // Presentation-only state for the command center. These values describe the
+  // already-computed recommendation and never alter engine ordering or action
+  // authorization.
+  const openRosterRows = rosterRows.filter(({ item }) => !item);
+  const currentReserve = league.draftType === "AUCTION" ? openRosterRows.length : 0;
+  const postWinReserve = Math.max(0, currentReserve - 1);
+  const remainingBudget = league.auctionBudget - spent;
+  const spendableBudget = Math.max(0, remainingBudget - currentReserve);
+  const auctionCanBid = league.draftType === "AUCTION"
+    && Boolean(nominated)
+    && !context.leadingBid
+    && ownNominationIntent !== "DRAIN"
+    && nextBid <= (focusPlayer?.maxBid || 0)
+    && bidWindowOpen;
+  const presentation = buildDraftPresentation({
+    draftType: league.draftType,
+    focusPlayer: focusPlayer ? { name: focusPlayer.name, maxBid: focusPlayer.maxBid } : undefined,
+    auctionNominationPlayerName: auctionNomination?.player.name,
+    ownNominationIntent,
+    nominated: Boolean(nominated),
+    leadingBid: context.leadingBid === true,
+    nextBid,
+    auctionCanBid,
+    actionWindowOpen,
+    bidWindowOpen,
+    sourceCoverageReady,
+    settingsConfirmed,
+    extensionConnected: extension === "connected",
+    autopickActive: context.autopickActive === true,
+    inDraftRoom: context.inDraftRoom === true,
+  });
+  const { commandLabel, safetyLabel } = presentation;
+  const alternatives = liveRecommendations.filter((player) => player.id !== focusPlayer?.id).slice(0, 3);
+
   return <main className="app-shell">
     <header className="topbar">
       <div className="brand"><span className="brand-mark">DF</span><span>DraftForge <b>AI</b></span></div>
       <div className={`draft-status ${actionWindowOpen ? "on-clock" : ""}`}><span className="live-dot" />{actionWindowOpen ? "YOU'RE ON THE CLOCK" : context.onClock ? "CLOCK TOO SHORT" : extension === "connected" ? "ESPN LIVE" : "DRAFT CONTROL ROOM"}<strong>{league.draftType === "SNAKE" ? `Round ${currentRound} · Pick ${currentPick}${Number.isFinite(remainingSeconds) ? ` · ${remainingSeconds}s` : ""}` : `$${league.auctionBudget - spent} remaining`}</strong></div>
       <div className="header-actions">
-        <button className={`auto-toggle ${autoDraft ? "enabled" : ""}`} onClick={enableAutoDraft} disabled={autoDraft ? false : !liveChecklistReady}><i />Auto-Draft {autoDraft ? "ON" : "OFF"}</button>
-        <button className="settings-button" onClick={() => setSettingsOpen(true)}>League rules</button>
+        <button className={`auto-toggle ${autoDraft ? "enabled" : ""}`} onClick={enableAutoDraft} disabled={autoDraft ? false : !liveChecklistReady} aria-label={`Auto-Draft ${autoDraft ? "ON" : "OFF"}`}><i /><span className="desktop-label">Auto-Draft {autoDraft ? "ON" : "OFF"}</span><span className="mobile-label">Auto {autoDraft ? "ON" : "OFF"}</span></button>
+        <button className="settings-button" onClick={() => dispatchUi({ type: "set", key: "settingsOpen", value: true })}><span className="desktop-label">League rules</span><span className="mobile-label">Rules</span></button>
       </div>
     </header>
 
-    <section className="context-strip">
-      <div><span className="platform-chip">E</span><div><select className="league-switcher" value={league.id} onChange={(event) => { if (event.target.value === "__new") startAnotherLeague(); else { const profile = profiles[event.target.value]; if (profile) activateProfile(profile); } }}><option value="demo">{league.id === "demo" ? league.name : "Choose draft"}</option>{Object.values(profiles).sort((a, b) => a.league.name.localeCompare(b.league.name)).map((profile) => <option key={profile.league.id} value={profile.league.id}>{profile.league.name}</option>)}<option value="__new">＋ Import another ESPN league</option></select><small>ESPN · {league.size}-team · {league.scoringLabel} · {league.draftType === "AUCTION" ? `$${league.auctionBudget} salary cap` : "Snake"}</small></div></div>
-      <div className="progress-wrap"><span>Draft progress</span><div className="progress"><i style={{ width: `${Math.min(100, picks.length / Math.max(1, league.size * league.rosterSize) * 100)}%` }} /></div><b>{picks.length}/{league.size * league.rosterSize}</b></div>
-      <div className={`sync-note ${extension === "connected" ? "connected" : ""}`}><span>●</span>{extension === "connected" ? `Synced · League ${league.id}` : extension === "missing" ? "Companion not detected" : extension === "connecting" ? "Connecting to ESPN…" : "ESPN companion ready"}</div>
+    <section className="operations-bar" aria-label="Live draft operations">
+      <div className="ops-league"><span className="platform-chip">E</span><div><select className="league-switcher" aria-label="Active ESPN league" value={league.id} onChange={(event) => { if (event.target.value === "__new") startAnotherLeague(); else { const profile = profiles[event.target.value]; if (profile) activateProfile(profile); } }}><option value="demo">{league.id === "demo" ? league.name : "Choose draft"}</option>{Object.values(profiles).sort((a, b) => a.league.name.localeCompare(b.league.name)).map((profile) => <option key={profile.league.id} value={profile.league.id}>{profile.league.name}</option>)}<option value="__new">＋ Import another ESPN league</option></select><small>{league.size}-team · {league.scoringLabel} · {league.draftType === "AUCTION" ? `$${league.auctionBudget} salary cap` : "Snake"}</small></div></div>
+      <div className="ops-progress"><div><span>Draft progress</span><b>{authoritativePicks.length} / {league.size * league.rosterSize}</b></div><div className="progress" role="progressbar" aria-label="Draft progress" aria-valuemin={0} aria-valuemax={league.size * league.rosterSize} aria-valuenow={authoritativePicks.length}><i style={{ width: `${Math.min(100, authoritativePicks.length / Math.max(1, league.size * league.rosterSize) * 100)}%` }} /></div><small>{league.draftType === "SNAKE" ? `Round ${currentRound} · Pick ${currentPick}` : `$${remainingBudget} remaining · ${openRosterRows.length} spots open`}</small></div>
+      <div className="ops-controls">
+        <button className="ops-control" onClick={() => dispatchUi({ type: "toggle", key: "strategyOpen" })} aria-expanded={strategyOpen}><span>Strategy</span><b>{strategyInfo.label}</b><small>{strategyInfo.description}</small></button>
+        <button className={`ops-control intelligence-control ${sourceCoverageReady ? "healthy" : "blocked"}`} onClick={() => dispatchUi({ type: "toggle", key: "sourcesOpen" })} aria-expanded={sourcesOpen}><span>Decision data</span><b>{intelligenceLoading ? "Refreshing…" : `${1 + healthySources.length}/5 sources live`}</b><small>Deterministic weighted consensus</small></button>
+      </div>
+      <div className={`ops-status ${actionState.includes("stopped") || presentation.stateTone === "blocked" ? "blocked" : ""}`} role="status" aria-live="polite"><span>{extension === "connected" ? "LIVE STATUS" : "CONNECTION"}</span><b>{actionState}</b><small><i aria-hidden="true">●</i>{extension === "connected" ? `Exact ESPN league ${league.id}` : extension === "missing" ? "Companion not detected" : extension === "connecting" ? "Connecting to ESPN…" : "ESPN companion ready"}</small></div>
+      {strategyOpen && <div className="strategy-menu">{STRATEGIES.map((item) => <button key={item.id} className={strategy === item.id ? "active" : ""} onClick={() => { setStrategy(item.id); dispatchUi({ type: "set", key: "strategyOpen", value: false }); }}><b>{item.label}</b><small>{item.description}</small></button>)}</div>}
+      {sourcesOpen && <div className="sources-menu"><div><b>Decision intelligence</b><button onClick={() => dispatchUi({ type: "set", key: "sourcesOpen", value: false })} aria-label="Close source details">×</button></div><p>ESPN anchors league projections and salary values at 30%. Every healthy ranking feed is converted into a league-normalized theoretical dollar curve; MFL AAV and ESPN dollars remain live market anchors.</p><ul><li><span className="source-ok">●</span><b>ESPN Fantasy</b><small>30% · projection, ADP, salary value</small></li>{sources.map((source) => { const fresh = isIntelligenceSourceFresh(source); return <li key={source.id}><span className={fresh ? "source-ok" : "source-error"}>●</span><b>{source.name}</b><small>{Math.round(source.weight * 100)}% · {source.kind}{source.sampleSize ? ` · ${source.sampleSize.toLocaleString()} drafts` : ""}{source.updatedAt ? ` · ${new Date(source.updatedAt).toLocaleString()}` : ""} · <a href={source.url} target="_blank" rel="noreferrer">source</a></small></li>; })}</ul><small>Failed or stale sources are removed, weights renormalize, and no generated projection replaces missing data.</small></div>}
     </section>
 
     {(extension !== "connected" || settingsOpen) && <section className="setup-drawer">
@@ -796,9 +1015,13 @@ export default function Home() {
         <button className="primary-button" onClick={connect} disabled={extension === "missing" || extension === "connecting"}>{extension === "connecting" ? "Importing…" : "Import from ESPN"}</button>
         {extension === "missing" && <p className="connect-error">Download and unzip the Chrome companion, load that folder at chrome://extensions, then refresh this page.</p>}
         <a className="extension-download" href="/draftforge-espn-companion.zip" download>Download Chrome companion ↓</a>
-        <button className="preview-link" onClick={() => { setSettingsOpen(true); setExtension("ready"); }}>Explore with preview data</button>
+        <div className="preview-formats" aria-label="Preview a draft command center">
+          <span>Preview the command center</span>
+          <button className={league.id === "demo" && league.draftType === "SNAKE" ? "active" : ""} onClick={() => previewDraftFormat("SNAKE")}>Snake</button>
+          <button className={league.id === "demo" && league.draftType === "AUCTION" ? "active" : ""} onClick={() => previewDraftFormat("AUCTION")}>Salary cap</button>
+        </div>
       </div> : <div className="rules-card">
-        <div className="rules-heading"><div><p className="eyebrow">STEP 2 · VERIFY IMPORT</p><h2>Confirm ESPN league rules</h2><p>Draft actions stay locked until these imported settings match your ESPN league.</p></div><button onClick={() => setSettingsOpen(false)} aria-label="Close settings">×</button></div>
+        <div className="rules-heading"><div><p className="eyebrow">STEP 2 · VERIFY IMPORT</p><h2>Confirm ESPN league rules</h2><p>Draft actions stay locked until these imported settings match your ESPN league.</p></div><button onClick={() => dispatchUi({ type: "set", key: "settingsOpen", value: false })} aria-label="Close settings">×</button></div>
         <div className="rule-grid">
           <div><span>Draft</span><b>{league.draftType === "AUCTION" ? "Salary cap" : "Snake"}</b><small>{league.secondsPerPick}s timer{league.keeperCount ? ` · ${league.keeperCount} keepers` : " · no keepers"}</small></div>
           <div><span>League</span><b>{league.size} teams</b><small>{league.rosterSize} roster spots</small></div>
@@ -811,57 +1034,73 @@ export default function Home() {
           <div><b>Live-room dry run</b>{liveChecks.map((check) => <span className={check.ok ? "pass" : "fail"} key={check.label}>{check.ok ? "✓" : "○"} {check.label}</span>)}</div>
         </div>
         {league.draftType === "AUCTION" && <div className="auction-plan"><b>Predefined budget plan</b>{Object.entries(auctionPlan.positionBudgets).map(([position, amount]) => <span key={position}>{position} <strong>${amount}</strong></span>)}<small>${auctionPlan.endgameReserve} late leverage protected. Walk-away prices adapt to remaining-dollar inflation and tier supply without crossing these portfolio envelopes.</small></div>}
-        <button className="raw-toggle" onClick={() => setRawSettingsOpen((value) => !value)}>{rawSettingsOpen ? "Hide" : "Inspect"} all imported ESPN fields</button>
+        <button className="raw-toggle" onClick={() => dispatchUi({ type: "toggle", key: "rawSettingsOpen" })}>{rawSettingsOpen ? "Hide" : "Inspect"} all imported ESPN fields</button>
         {rawSettingsOpen && <pre className="raw-settings">{JSON.stringify(league.rawSettings || league, null, 2)}</pre>}
-        <div className="rule-actions"><button className="secondary-button" onClick={connect}>Re-import</button><button className="primary-button" disabled={!preflightReady} onClick={() => { setSettingsConfirmed(true); setSettingsOpen(false); setActionState("Pre-draft rules, sources, roster, and strategy confirmed. Live-room check still required before Auto-Draft."); }}>Confirm pre-draft checklist</button></div>
+        <div className="rule-actions"><button className="secondary-button" onClick={connect}>Re-import</button><button className="primary-button" disabled={!preflightReady} onClick={() => { setSettingsConfirmed(true); dispatchUi({ type: "set", key: "settingsOpen", value: false }); setActionState("Pre-draft rules, sources, roster, and strategy confirmed. Live-room check still required before Auto-Draft."); }}>Confirm pre-draft checklist</button></div>
       </div>}
     </section>}
 
-    <section className="strategy-bar">
-      <div><span>Draft strategy</span><button onClick={() => setStrategyOpen((open) => !open)}>{strategyInfo.label}⌄</button><small>{strategyInfo.description}</small></div>
-      <button className="engine-badge" onClick={() => setSourcesOpen((open) => !open)}><i>◆</i><span><b>{intelligenceLoading ? "Refreshing intelligence…" : `${1 + healthySources.length}/5 sources live`}</b><small>Weighted consensus · inspect sources</small></span></button>
-      <div className={`action-feed ${actionState.includes("stopped") ? "error" : ""}`}><span>STATUS</span>{actionState}</div>
-      {strategyOpen && <div className="strategy-menu">{STRATEGIES.map((item) => <button key={item.id} className={strategy === item.id ? "active" : ""} onClick={() => { setStrategy(item.id); setStrategyOpen(false); }}><b>{item.label}</b><small>{item.description}</small></button>)}</div>}
-      {sourcesOpen && <div className="sources-menu"><div><b>Decision intelligence</b><button onClick={() => setSourcesOpen(false)}>×</button></div><p>ESPN anchors league projections and salary values at 30%. Every healthy ranking feed is converted into a league-normalized theoretical dollar curve; MFL AAV and ESPN dollars remain live market anchors.</p><ul><li><span className="source-ok">●</span><b>ESPN Fantasy</b><small>30% · projection, ADP, salary value</small></li>{sources.map((source) => { const fresh = isIntelligenceSourceFresh(source); return <li key={source.id}><span className={fresh ? "source-ok" : "source-error"}>●</span><b>{source.name}</b><small>{Math.round(source.weight * 100)}% · {source.kind}{source.sampleSize ? ` · ${source.sampleSize.toLocaleString()} drafts` : ""}{source.updatedAt ? ` · ${new Date(source.updatedAt).toLocaleString()}` : ""} · <a href={source.url} target="_blank" rel="noreferrer">source</a></small></li>; })}</ul><small>Failed or stale sources are removed, weights renormalize, and no generated projection replaces missing data.</small></div>}
-    </section>
-
     <section className="workspace">
-      <section className="players-panel panel">
-        <div className="panel-head"><div><p className="eyebrow">LIVE ESPN PLAYER POOL</p><h1>{league.draftType === "AUCTION" ? "Find the next value." : "Make the next pick."}</h1></div><label className="search-box">⌕<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search player or team" /></label></div>
-        <div className="filters">{FILTERS.map((item) => <button key={item} className={filter === item ? "active" : ""} onClick={() => setFilter(item)}>{item}</button>)}</div>
-        <div className="table-head"><span>#</span><span>PLAYER</span><span>POS</span><span>{league.draftType === "AUCTION" ? "FAIR $" : "ADP"}</span><span>PROJ</span><span>MODEL</span></div>
-        <div className="player-list">{visible.slice(0, 150).map((player, index) => <button key={player.id} className={`player-row ${selected?.id === player.id ? "selected" : ""}`} onClick={() => setSelectedId(player.id)}>
-          <span className="rank">{index + 1}</span><span className="player-name"><span><b>{player.name}</b><small>{player.team}{player.injured ? " · Injury flag" : ""}</small></span></span><i className={`pos ${player.pos.toLowerCase()}`}>{player.pos}</i><span>{league.draftType === "AUCTION" ? `$${Math.round(player.auction)}` : player.adp < 900 ? player.adp.toFixed(1) : "—"}</span><span>{player.projected ? player.projected.toFixed(1) : "—"}</span><span className="model-score">{Math.round(player.score)}</span>
-          {index === 0 && <em className="best-badge">BEST FIT</em>}
-        </button>)}</div>
-      </section>
-
       <aside className="coach-column">
-        {focusPlayer && <section className="recommendation panel">
-          <div className="rec-label"><span>◆</span> RECOMMENDATION · {league.draftType}</div>
+        {focusPlayer && <section className="recommendation panel" aria-labelledby="decision-title">
+          <div className="decision-head">
+            <div><p className="eyebrow">DO THIS NOW · {league.draftType === "AUCTION" ? "SALARY CAP" : "SNAKE"}</p><h1 id="decision-title">{commandLabel}</h1></div>
+            <span className={`decision-state ${presentation.stateTone}`}>{presentation.stateLabel}</span>
+          </div>
           {nominated && <p className="auction-live">LIVE NOMINATION · {context.currentBid ? `$${context.currentBid}` : "Opening bid"}{ownNominationIntent ? ` · ${ownNominationIntent}` : ""}</p>}
-          {!nominated && league.draftType === "AUCTION" && auctionNomination && <p className="auction-live">{auctionNomination.intent} NOMINATION · OPEN ${auctionNomination.openingBid} · {auctionNomination.reason}</p>}
-          <div className="rec-player"><div className={`avatar ${focusPlayer.pos.toLowerCase()}`}>{focusPlayer.name.split(" ").map((part) => part[0]).join("").slice(0, 2)}</div><div><h2>{focusPlayer.name}</h2><p>{focusPlayer.pos} · {focusPlayer.team} <span>Consensus #{focusPlayer.consensusRank || "—"}</span></p></div></div>
-          <div className="confidence"><div><span>Decision confidence · {focusPlayer.sourceCount || 1}/5 sources</span><b>{focusPlayer.confidence}%</b></div><div className="confidence-track"><i style={{ width: `${focusPlayer.confidence}%` }} /></div></div>
-          <p className="reason">{describeRecommendation(focusPlayer, league, strategy)}</p>
-          {league.draftType === "AUCTION" && focusPlayer.sourceAuctions && <div className="source-values">{Object.entries(focusPlayer.sourceAuctions).map(([source, amount]) => <span key={source}>{source.toUpperCase()} <b>${Math.round(amount)}</b></span>)}</div>}
-          <div className="rec-stats"><div><span>VORP</span><b>+{focusPlayer.vorp.toFixed(1)}</b></div><div><span>TIER DROP</span><b>{focusPlayer.scarcity.toFixed(1)}</b></div>{league.draftType === "AUCTION" ? <><div><span>FAIR</span><b>${Math.round(focusPlayer.fairValue)}</b></div><div><span>TARGET / WALK</span><b>${focusPlayer.targetBid} / ${focusPlayer.maxBid}</b></div></> : <div><span>ADP EDGE</span><b>{`${focusPlayer.adpValue >= 0 ? "+" : ""}${focusPlayer.adpValue.toFixed(1)}`}</b></div>}</div>
-          <ul className="reason-list">{focusPlayer.reasons.slice(0, 4).map((reason) => <li key={reason}>{reason}</li>)}</ul>
-          {league.draftType === "SNAKE" ? <button className="draft-button full" onClick={() => submit(focusPlayer, false, "SELECT")} disabled={!settingsConfirmed || extension !== "connected" || !actionWindowOpen}>Select & submit pick in ESPN</button> : <div className="pick-actions"><button className="draft-button" onClick={() => auctionNomination && submit(auctionNomination.player, false, "NOMINATE", auctionNomination.openingBid, auctionNomination.intent)} disabled={!settingsConfirmed || extension !== "connected" || !actionWindowOpen || Boolean(nominated) || !auctionNomination}>Nominate {auctionNomination?.intent === "DRAIN" ? "budget drain" : "target"}<small>open ${auctionNomination?.openingBid || 1}</small></button><button className="bid-button" onClick={() => submit(focusPlayer, false, "BID", nextBid)} disabled={!settingsConfirmed || extension !== "connected" || !nominated || context.leadingBid || ownNominationIntent === "DRAIN" || nextBid > focusPlayer.maxBid || !bidWindowOpen}>{ownNominationIntent === "DRAIN" ? "Pass — no price enforcing" : `Bid $${nextBid}`}<small>{ownNominationIntent === "DRAIN" ? "decoy nomination" : `walk at $${focusPlayer.maxBid}`}</small></button></div>}
+          {!nominated && league.draftType === "AUCTION" && auctionNomination && <p className="auction-live">{auctionNomination.intent} NOMINATION · OPEN ${auctionNomination.openingBid}</p>}
+          <div className="decision-hero">
+            <div className="rec-player"><div className={`avatar ${focusPlayer.pos.toLowerCase()}`}>{focusPlayer.name.split(" ").map((part) => part[0]).join("").slice(0, 2)}</div><div><h2>{focusPlayer.name}</h2><p>{focusPlayer.pos} · {focusPlayer.team} <span>Consensus #{focusPlayer.consensusRank || "—"}</span>{focusPlayer.sleeperLabel !== "NONE" && <span className="sleeper-chip">{focusPlayer.sleeperLabel.replace("_", " ")} {focusPlayer.sleeperScore}/100</span>}</p></div></div>
+            <div className="command-number"><span>{league.draftType === "AUCTION" ? nominated ? "NEXT LEGAL BID" : "OPENING BID" : "ESPN CLOCK"}</span><strong>{league.draftType === "AUCTION" ? `$${nominated ? nextBid : auctionNomination?.openingBid || 1}` : Number.isFinite(remainingSeconds) ? `${remainingSeconds}s` : "—"}</strong><small>{league.draftType === "AUCTION" ? `Walk at $${focusPlayer.maxBid}` : `Round ${currentRound} · Pick ${currentPick}`}</small></div>
+          </div>
+          <div className={`decision-safety ${presentation.stateTone === "blocked" ? "blocked" : ""}`} role="status" aria-live="polite"><span aria-hidden="true">{presentation.stateTone === "blocked" ? "!" : "✓"}</span><b>{safetyLabel}</b></div>
+          <div className="decision-metrics">
+            {league.draftType === "AUCTION" ? <>
+              <div><span>Current offer</span><b>{context.currentBid ? `$${context.currentBid}` : "—"}</b></div>
+              <div><span>Fair value</span><b>${Math.round(focusPlayer.fairValue)}</b></div>
+              <div className="metric-emphasis"><span>Hard ceiling</span><b>${focusPlayer.maxBid}</b></div>
+              <div><span>{nominated ? "After next bid" : "Reserve floor"}</span><b>{nominated ? `$${Math.max(0, remainingBudget - nextBid)} left` : `$${currentReserve}`}</b><small>{nominated ? `$${postWinReserve} reserve required` : "$1 per open slot"}</small></div>
+            </> : <>
+              <div><span>ADP edge</span><b>{`${focusPlayer.adpValue >= 0 ? "+" : ""}${focusPlayer.adpValue.toFixed(1)}`}</b></div>
+              <div><span>VORP</span><b>+{focusPlayer.vorp.toFixed(1)}</b></div>
+              <div><span>Tier drop</span><b>{focusPlayer.scarcity.toFixed(1)}</b></div>
+              <div><span>Source confidence</span><b>{focusPlayer.confidence}%</b></div>
+            </>}
+          </div>
+          {league.draftType === "SNAKE" ? <button className="draft-button full" onClick={() => submit(focusPlayer, false, "SELECT")} disabled={!settingsConfirmed || extension !== "connected" || !actionWindowOpen}>Draft {focusPlayer.name} in ESPN<small>{Number.isFinite(remainingSeconds) ? `${remainingSeconds}s remaining` : "Waiting for verified clock"}</small></button> : <div className="pick-actions"><button className="draft-button" onClick={() => auctionNomination && submit(auctionNomination.player, false, "NOMINATE", auctionNomination.openingBid, auctionNomination.intent)} disabled={!settingsConfirmed || extension !== "connected" || !actionWindowOpen || Boolean(nominated || context.nominatedPlayer || Number(context.currentBid || 0) > 0) || !auctionNomination}>Nominate {auctionNomination?.intent === "DRAIN" ? "budget drain" : "target"}<small>Open ${auctionNomination?.openingBid || 1}</small></button><button className="bid-button" onClick={() => submit(focusPlayer, false, "BID", nextBid)} disabled={!settingsConfirmed || extension !== "connected" || !nominated || context.leadingBid || ownNominationIntent === "DRAIN" || nextBid > focusPlayer.maxBid || !bidWindowOpen}>{ownNominationIntent === "DRAIN" ? "Pass — no price enforcing" : context.leadingBid ? "Hold — already leading" : nextBid > focusPlayer.maxBid ? "Pass — ceiling reached" : `Bid $${nextBid}`}<small>{ownNominationIntent === "DRAIN" ? "Decoy nomination" : `Hard stop $${focusPlayer.maxBid}`}</small></button></div>}
           {!settingsConfirmed && <small className="locked-note">Confirm imported league rules to unlock ESPN actions.</small>}
+          <div className="confidence"><div><span>Decision confidence · {focusPlayer.sourceCount || 1}/5 sources</span><b>{focusPlayer.confidence}%</b></div><div className="confidence-track"><i style={{ width: `${focusPlayer.confidence}%` }} /></div></div>
+          <details className="decision-details"><summary>Why this is the move</summary><p className="reason">{describeRecommendation(focusPlayer, league, strategy)}</p>{league.draftType === "AUCTION" && focusPlayer.sourceAuctions && <div className="source-values">{Object.entries(focusPlayer.sourceAuctions).map(([source, amount]) => <span key={source}>{source.toUpperCase()} <b>${Math.round(amount)}</b></span>)}</div>}<ul className="reason-list">{focusPlayer.reasons.slice(0, 4).map((reason) => <li key={reason}>{reason}</li>)}</ul></details>
         </section>}
-        <section className="on-clock-card panel"><span className={actionWindowOpen ? "pulse" : ""}>●</span><div><b>{actionWindowOpen ? `Your ESPN action is ready · ${remainingSeconds}s left` : context.onClock ? "ESPN clock is too short — no action sent" : context.inDraftRoom ? "Draft room connected" : "Open the ESPN draft room"}</b><small>{autoDraft ? "Auto-Draft will submit the top legal recommendation only inside the safe window." : "You approve every pick, nomination, and bid here."}</small></div></section>
+        <section className="on-clock-card panel"><span className={actionWindowOpen ? "pulse" : ""} aria-hidden="true">●</span><div><b>{actionWindowOpen ? `Verified ESPN action window · ${remainingSeconds}s` : context.onClock ? "ESPN clock too short — nothing will be sent" : context.inDraftRoom ? "Exact ESPN draft room connected" : "Open the exact ESPN draft room"}</b><small>{autoDraft ? "Auto-Draft is armed only for this verified league and tab." : "Guided mode: you approve every pick, nomination, and bid."}</small></div></section>
       </aside>
 
       <aside className="roster-panel panel">
-        <div className="roster-head"><div><p className="eyebrow">MY ESPN TEAM</p><h2>Roster & budget</h2></div><span>{myRoster.length}/{league.rosterSize}</span></div>
-        {league.draftType === "AUCTION" && <><div className="budget-card"><div><span>Remaining</span><b>${league.auctionBudget - spent}</b></div><div><span>Remaining-value market</span><b>{auctionPlan.roomInflation.toFixed(2)}×</b><small>{Math.round(auctionPlan.knownSaleCoverage * 100)}% exact sales</small></div><div><span>Opponent spend</span><b>${auctionPlan.opponentSpend}</b></div></div><div className="budget-plan-mini">{Object.entries(auctionPlan.positionBudgets).map(([position, budget]) => <span key={position}>{position} <b>${auctionPlan.spentByPosition[position] || 0}/${budget}</b></span>)}</div><div className="opponent-budgets"><b>Opponent leverage</b>{auctionPlan.opponents.sort((left, right) => right.maxOffer - left.maxOffer).map((opponent) => <span key={opponent.teamId}><em>{opponent.name}</em><small>{opponent.players} players · ${opponent.spent} spent · max ${opponent.maxOffer} · needs {Object.entries(opponent.openStarters).filter(([, count]) => count > 0).map(([position, count]) => `${position}${count > 1 ? count : ""}`).join("/") || "depth"}</small></span>)}</div></>}
+        <div className="roster-head"><div><p className="eyebrow">ROSTER CONTROL</p><h2>Team build</h2></div><span>{myRoster.length} / {league.rosterSize}</span></div>
+        <div className="needs-block"><div><span>Open roster spots</span><b>{openRosterRows.length}</b></div><div className="needs-chips">{openRosterRows.slice(0, 8).map(({ slot }, index) => <span key={`${slot}-${index}`}>{slot}</span>)}{openRosterRows.length > 8 && <span>+{openRosterRows.length - 8}</span>}</div></div>
+        {league.draftType === "AUCTION" && <>
+          <div className="budget-card"><div><span>Remaining</span><b>${remainingBudget}</b></div><div><span>Protected reserve</span><b>${currentReserve}</b><small>$1 per open slot</small></div><div><span>Room market</span><b>{auctionPlan.roomInflation.toFixed(2)}×</b><small>{Math.round(auctionPlan.knownSaleCoverage * 100)}% exact sales</small></div></div>
+          <div className="budget-runway"><div><span>Spendable runway</span><b>${spendableBudget}</b><small>${currentReserve} untouchable reserve</small></div><div className="budget-runway-track" role="progressbar" aria-label="Spendable salary-cap runway" aria-valuemin={0} aria-valuemax={Math.max(1, remainingBudget)} aria-valuenow={spendableBudget}><i style={{ width: `${Math.min(100, spendableBudget / Math.max(1, remainingBudget) * 100)}%` }} /></div><p>Every offer must leave $1 for each open roster spot. The hard ceiling can only move down as the room changes.</p></div>
+          <div className="budget-plan-mini">{Object.entries(auctionPlan.positionBudgets).map(([position, budget]) => <span key={position}>{position} <b>${auctionUsage.usage[position] || 0} / ${budget}</b></span>)}{auctionUsage.reallocated > 0 && <span>VALUE <b>${auctionUsage.reallocated} reallocated</b></span>}</div>
+          <details className="secondary-details"><summary>Opponent leverage <span>${auctionPlan.opponentSpend} spent</span></summary><div className="opponent-budgets">{[...auctionPlan.opponents].sort((left, right) => right.maxOffer - left.maxOffer).map((opponent) => <span key={opponent.teamId}><em>{opponent.name}</em><small>{opponent.players} players · ${opponent.spent} spent · max ${opponent.maxOffer} · needs {Object.entries(opponent.openStarters).filter(([, count]) => count > 0).map(([position, count]) => `${position}${count > 1 ? count : ""}`).join("/") || "depth"}</small></span>)}</div></details>
+        </>}
         <div className="roster-list">{rosterRows.map(({ slot, item }, index) => <div className={`roster-row ${item ? "filled" : ""}`} key={`${slot}-${index}`}><span>{slot}</span>{item ? <><div><b>{item.player.name}</b><small>{item.player.team}{item.pick.amount ? ` · $${item.pick.amount}` : ""}</small></div><i className={`pos ${item.player.pos.toLowerCase()}`}>{item.player.pos}</i></> : <em>Open</em>}</div>)}</div>
-        <div className="draft-log"><p>RECENT ESPN ACTIVITY</p>{picks.slice(-5).reverse().map((pick) => { const player = players.find((item) => item.id === pick.playerId); return <div key={`${pick.overall}-${pick.playerId}`}><span>{pick.overall}</span><b>{player?.name || `Player ${pick.playerId}`}</b><small>{pick.amount ? `$${pick.amount}` : `Team ${pick.teamId}`}</small></div>; })}{!picks.length && <small>No picks imported yet.</small>}</div>
+        <details className="secondary-details activity-details"><summary>Recent ESPN activity <span>{authoritativePicks.length} picks</span></summary><div className="draft-log">{authoritativePicks.slice(-5).reverse().map((pick) => { const player = players.find((item) => item.id === pick.playerId); return <div key={`${pick.overall}-${pick.playerId}`}><span>{pick.overall}</span><b>{player?.name || `Player ${pick.playerId}`}</b><small>{pick.amount ? `$${pick.amount}` : `Team ${pick.teamId}`}</small></div>; })}{!authoritativePicks.length && <small>No picks imported yet.</small>}</div></details>
       </aside>
+
+      <section className="players-panel panel">
+        <div className="panel-head"><div><p className="eyebrow">NEXT BEST OPTIONS</p><h2>Live player board</h2></div><label className="search-box"><span aria-hidden="true">⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search player or team" aria-label="Search player or team" /></label></div>
+        {alternatives.length > 0 && <div className="alternatives" aria-label="Top alternatives">{alternatives.map((player, index) => <button key={player.id} onClick={() => setSelectedId(player.id)}><span>#{index + 2} alternative</span><b>{player.name}</b><small>{player.pos} · {league.draftType === "AUCTION" ? `$${Math.round(player.fairValue)} fair` : `ADP ${player.adp < 900 ? player.adp.toFixed(1) : "—"}`}</small></button>)}</div>}
+        <div className="filters" aria-label="Filter player board">{FILTERS.map((item) => <button key={item} className={filter === item ? "active" : ""} onClick={() => setFilter(item)} aria-pressed={filter === item}>{item}</button>)}</div>
+        <div className="table-head" aria-hidden="true"><span>#</span><span>PLAYER</span><span>POS</span><span>{league.draftType === "AUCTION" ? "FAIR $" : "ADP"}</span><span>PROJ</span><span>MODEL</span></div>
+        <div className="player-list">{visible.slice(0, 150).map((player, index) => <button key={player.id} className={`player-row ${selected?.id === player.id ? "selected" : ""}`} onClick={() => setSelectedId(player.id)} aria-pressed={selected?.id === player.id}>
+          <span className="rank">{index + 1}</span><span className="player-name"><span><b>{player.name}</b><small>{player.team}{player.injured ? " · Injury flag" : ""}{player.sleeperLabel !== "NONE" ? ` · ${player.sleeperLabel.replace("_", " ")} ${player.sleeperScore}` : ""}</small></span></span><i className={`pos ${player.pos.toLowerCase()}`}>{player.pos}</i><span>{league.draftType === "AUCTION" ? `$${Math.round(player.auction)}` : player.adp < 900 ? player.adp.toFixed(1) : "—"}</span><span>{player.projected ? player.projected.toFixed(1) : "—"}</span><span className="model-score">{Math.round(player.score)}</span>
+          {index === 0 && <em className="best-badge">BEST FIT</em>}
+        </button>)}</div>
+      </section>
     </section>
 
-    {autoWarning && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Enable Auto-Draft"><div className="warning-modal"><span className="warning-icon">!</span><h2>Live-room checklist passed</h2><p>The extension is bound to the exact imported ESPN draft tab and the local control room completed a no-click recommendation dry run.</p><ul>{liveChecks.map((check) => <li key={check.label}>✓ {check.label}</li>)}<li>{league.draftType === "AUCTION" ? "Offers rise by exactly $1 and stop at the lower of fair value, portfolio walk-away, pacing guardrail, and ESPN's legal maximum; DraftForge never rebids on its own DRAIN nomination." : "Each pick is re-ranked against the live remaining pool and positional tier cliffs."}</li><li>Turn Auto-Draft off at any time.</li></ul><div><button className="secondary-button" onClick={() => setAutoWarning(false)}>Cancel</button><button className="danger-button" onClick={() => { setAutoDraft(true); setAutoWarning(false); setActionState("Auto-Draft armed after pre-draft and live-room checks passed."); }}>Enable Auto-Draft</button></div></div></div>}
+    {autoWarning && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Enable Auto-Draft"><div className="warning-modal"><span className="warning-icon">!</span><h2>Live-room checklist passed</h2><p>The extension is bound to the exact imported ESPN draft tab and the local control room completed a no-click recommendation dry run.</p><ul>{liveChecks.map((check) => <li key={check.label}>✓ {check.label}</li>)}<li>{league.draftType === "AUCTION" ? "Offers rise by exactly $1 and stop at the lower of fair value, portfolio walk-away, pacing guardrail, and ESPN's legal maximum; DraftForge never rebids on its own DRAIN nomination." : "Each pick is re-ranked against the live remaining pool and positional tier cliffs."}</li><li>Turn Auto-Draft off at any time.</li></ul><div><button className="secondary-button" onClick={() => dispatchUi({ type: "set", key: "autoWarning", value: false })}>Cancel</button><button className="danger-button" onClick={confirmEnableAutoDraft}>Enable Auto-Draft</button></div></div></div>}
     <footer><span>DraftForge AI · draft-only ESPN control room</span><span>{draftedIds.size} drafted · five-source deterministic consensus</span></footer>
   </main>;
 }

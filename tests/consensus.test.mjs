@@ -20,6 +20,8 @@ const sources = [
 
 test("player names normalize across punctuation and suffixes", () => {
   assert.equal(normalizePlayerName("Bijan Robinson Jr."), normalizePlayerName("Bijan Robinson"));
+  assert.equal(normalizePlayerName("Bijan Robinson Jr"), normalizePlayerName("Bijan Robinson"));
+  assert.equal(normalizePlayerName("Robert  Griffin III"), normalizePlayerName("Robert Griffin"));
   assert.equal(normalizePlayerName("Ja’Marr Chase"), normalizePlayerName("Ja'Marr Chase"));
 });
 
@@ -38,6 +40,15 @@ test("consensus combines sources deterministically and exposes provenance", () =
   assert.ok(bijan.sourceAuctions.gng > 0);
 });
 
+test("source payload metadata cannot alter the fixed five-source weights", () => {
+  const canonical = mergeConsensus(espn, sources);
+  const tampered = mergeConsensus(espn, sources.map((source, index) => ({
+    ...source,
+    weight: index === 0 ? 1000 : -1000,
+  })));
+  assert.deepEqual(tampered, canonical);
+});
+
 test("every healthy ranking source produces a deterministic league-normalized auction value", () => {
   const league = { size: 8, rosterSize: 16, auctionBudget: 200 };
   const merged = mergeConsensus(espn, sources, league);
@@ -48,4 +59,44 @@ test("every healthy ranking source produces a deterministic league-normalized au
     assert.equal(Object.keys(player.sourceAuctions).length, player.sourceCount);
   }
   assert.deepEqual(merged, mergeConsensus(espn, sources, league));
+});
+
+test("consensus separates corroborated model value from market price without adding a sixth source", () => {
+  const market = [
+    { id: 11, name: "Market Favorite", team: "AAA", pos: "WR", rank: 1, adp: 1, auction: 20, projected: 250 },
+    { id: 12, name: "Hidden Value", team: "BBB", pos: "WR", rank: 2, adp: 2, auction: 10, projected: 260 },
+  ];
+  const ranked = (id, hiddenRank, favoriteRank) => ({
+    id,
+    name: id.toUpperCase(),
+    kind: id === "ffc" || id === "mfl" ? "market" : "model",
+    weight: id === "ffc" || id === "mfl" ? .15 : .20,
+    status: "ok",
+    updatedAt: null,
+    attribution: id,
+    players: [
+      { name: "Market Favorite", team: "AAA", pos: "WR", rank: favoriteRank, adp: id === "ffc" || id === "mfl" ? favoriteRank : undefined },
+      { name: "Hidden Value", team: "BBB", pos: "WR", rank: hiddenRank, adp: id === "ffc" || id === "mfl" ? hiddenRank : undefined },
+    ],
+  });
+  const merged = mergeConsensus(market, [
+    ranked("ffc", 2, 1),
+    ranked("mfl", 2, 1),
+    ranked("tradyr", 1, 2),
+    ranked("gng", 1, 2),
+  ]);
+  const hidden = merged.find((player) => player.id === 12);
+
+  assert.equal(hidden.sourceCount, 5);
+  assert.equal(hidden.marketSourceCount, 3);
+  assert.equal(hidden.modelSourceCount, 2);
+  assert.equal(hidden.modelSpread, 0);
+  assert.ok(hidden.modelScore > hidden.marketScore);
+  assert.ok(hidden.modelMarketEdge > 90);
+  assert.deepEqual(merged, mergeConsensus(market, [
+    ranked("ffc", 2, 1),
+    ranked("mfl", 2, 1),
+    ranked("tradyr", 1, 2),
+    ranked("gng", 1, 2),
+  ]));
 });

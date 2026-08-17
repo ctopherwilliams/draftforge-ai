@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildAuctionPlan, chooseAuctionNomination, recommendPlayers } from "../app/lib/draft-engine.ts";
+import { buildDraftDecision, buildPlayerPoolIndex, chooseAuctionNomination, recommendPlayers } from "../app/lib/draft-engine.ts";
 
 const STRATEGIES = ["BALANCED", "HERO_RB", "ZERO_RB", "ELITE_QB"];
 const TEAM_COUNT = 8;
@@ -48,6 +48,7 @@ function makePlayers(seed) {
         name: `${pos} Player ${index + 1}`,
         team: `NFL${(index % 32) + 1}`,
         pos,
+        depthIndex: index,
         rank: 0,
         adp: 0,
         auction: 1,
@@ -58,13 +59,23 @@ function makePlayers(seed) {
     }
   }
   players.sort((left, right) => right.projected - left.projected || left.id - right.id);
-  return players.map((player, index) => ({
-    ...player,
-    rank: index + 1,
-    adp: index + 1 + ((seed * 7 + player.id) % 9 - 4) * .35,
-    auction: Math.max(1, Math.round(62 * Math.exp(-index / 42))),
-    consensusScore: Math.max(0, 100 - index * .32),
-  }));
+  return players.map((player, index) => {
+    const sleeperCandidate = ["RB", "WR"].includes(player.pos) && player.depthIndex === 8 + seed % 4;
+    const marketAdp = index + 1 + ((seed * 7 + player.id) % 9 - 4) * .35;
+    const marketAuction = Math.max(1, Math.round(62 * Math.exp(-index / 42)));
+    return {
+      ...player,
+      rank: index + 1,
+      adp: sleeperCandidate ? TEAM_COUNT * 10 + seed % TEAM_COUNT : marketAdp,
+      auction: sleeperCandidate ? Math.max(1, Math.round(marketAuction * .45)) : marketAuction,
+      consensusScore: Math.max(0, 100 - index * .32),
+      sourceCount: 5,
+      marketSourceCount: 3,
+      modelSourceCount: 2,
+      modelMarketEdge: sleeperCandidate ? 22 : 0,
+      modelSpread: sleeperCandidate ? 3 : 8,
+    };
+  });
 }
 
 function snakeTeamForPick(overall, seed) {
@@ -99,15 +110,20 @@ function assertCompleteRosters(players, picks, league) {
 function runSnake(seed) {
   const players = makePlayers(seed);
   const league = makeLeague("SNAKE", seed);
+  const playerPool = buildPlayerPoolIndex(players, league);
   const picks = [];
+  let sleeperBoardObserved = false;
   for (let overall = 1; overall <= TEAM_COUNT * ROSTER_SIZE; overall += 1) {
     const teamId = snakeTeamForPick(overall, seed);
     const teamLeague = { ...league, teamId };
     const strategy = STRATEGIES[(teamId + seed) % STRATEGIES.length];
-    const recommendation = recommendPlayers(players, picks, teamLeague, strategy, overall)[0];
+    const recommendations = recommendPlayers(players, picks, teamLeague, strategy, overall, [], playerPool);
+    sleeperBoardObserved ||= recommendations.some((player) => player.sleeperLabel !== "NONE");
+    const recommendation = recommendations[0];
     assert.ok(recommendation, `no snake recommendation at pick ${overall}`);
     picks.push({ playerId: recommendation.id, teamId, overall, round: Math.ceil(overall / TEAM_COUNT), amount: 0 });
   }
+  assert.equal(sleeperBoardObserved, true, "snake simulation never exercised the sleeper board");
   assertCompleteRosters(players, picks, league);
   return picks.map((pick) => `${pick.teamId}:${pick.playerId}`).join("|");
 }
@@ -129,7 +145,9 @@ function liveBudgetsFor(league, picks) {
 function runAuction(seed) {
   const players = makePlayers(seed);
   const league = makeLeague("AUCTION", seed);
+  const playerPool = buildPlayerPoolIndex(players, league);
   const picks = [];
+  let sleeperBoardObserved = false;
   let nominationCursor = seed % TEAM_COUNT;
   while (picks.length < TEAM_COUNT * ROSTER_SIZE) {
     const budgets = liveBudgetsFor(league, picks);
@@ -147,15 +165,30 @@ function runAuction(seed) {
     assert.ok(nominator, "no legal auction nominator");
     const nominatorLeague = { ...league, teamId: nominator.id };
     const nominatorStrategy = STRATEGIES[(nominator.id + seed) % STRATEGIES.length];
-    const nominatorRecommendations = recommendPlayers(players, picks, nominatorLeague, nominatorStrategy, picks.length + 1, budgets);
-    const plan = buildAuctionPlan(players, picks, nominatorLeague, nominatorStrategy, budgets);
-    const nomination = chooseAuctionNomination(nominatorRecommendations, nominatorLeague, plan);
-    assert.ok(nomination?.player, `no auction nomination at sale ${picks.length + 1}`);
+    const decision = buildDraftDecision(players, picks, nominatorLeague, nominatorStrategy, picks.length + 1, budgets, playerPool);
+    sleeperBoardObserved ||= decision.recommendations.some((player) => player.sleeperLabel !== "NONE");
+    const nomination = chooseAuctionNomination(decision.recommendations, nominatorLeague, decision.auctionPlan);
+    const nominationDiagnostics = nomination?.player ? "" : JSON.stringify({
+      roster: picks.filter((pick) => pick.teamId === nominator.id).map((pick) => ({
+        amount: pick.amount,
+        player: players.find((player) => player.id === pick.playerId)?.name,
+        position: players.find((player) => player.id === pick.playerId)?.pos,
+      })),
+      plan: decision.auctionPlan.positionBudgets,
+      recommendations: decision.recommendations.slice(0, 12).map((player) => ({
+        fills: player.fillsMandatoryStarter,
+        maxBid: player.maxBid,
+        name: player.name,
+        position: player.pos,
+        score: Math.round(player.score),
+      })),
+    });
+    assert.ok(nomination?.player, `no auction nomination at sale ${picks.length + 1} for seed ${seed}, team ${nominator.id}: ${nominationDiagnostics}`);
 
     const bidders = openTeams.flatMap((team) => {
       const teamLeague = { ...league, teamId: team.id };
       const strategy = STRATEGIES[(team.id + seed) % STRATEGIES.length];
-      const candidate = recommendPlayers(players, picks, teamLeague, strategy, picks.length + 1, budgets)
+      const candidate = recommendPlayers(players, picks, teamLeague, strategy, picks.length + 1, budgets, playerPool)
         .find((player) => player.id === nomination.player.id);
       if (!candidate || candidate.maxBid < 1) return [];
       const ceiling = nomination.intent === "DRAIN" && team.id === nominator.id ? 1 : candidate.maxBid;
@@ -171,6 +204,7 @@ function runAuction(seed) {
     picks.push({ playerId: nomination.player.id, teamId: winner.teamId, overall: picks.length + 1, round: 0, amount: price });
   }
 
+  assert.equal(sleeperBoardObserved, true, "salary-cap simulation never exercised the sleeper board");
   assertCompleteRosters(players, picks, league);
   for (const team of league.teams) {
     const spend = picks.filter((pick) => pick.teamId === team.id).reduce((sum, pick) => sum + pick.amount, 0);

@@ -15,6 +15,7 @@ For another league, open its ESPN page and choose **Import another ESPN league**
 ## Safety model
 
 - Read access is limited to ESPN Fantasy endpoints.
+- App commands are accepted only from localhost or the exact deployed DraftForge origin; sibling hosted sites are rejected.
 - Draft actions are sent only when the ESPN draft room is open.
 - Auto-Draft must be explicitly enabled in DraftForge.
 - Auto-Draft resets to off whenever the app reloads or switches leagues.

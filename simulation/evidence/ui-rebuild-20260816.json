@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "seed": 20260816,
+  "sourceSnapshotDigest": "1a6c36e176bf602d584661a7936f3ac4683fe84ebb78eef8e22540e6a7fef896",
+  "baseline": {
+    "draftsPerFormat": 10000,
+    "completedDrafts": 20000,
+    "publicDrafts": 16000,
+    "sealedHoldoutDrafts": 4000,
+    "failureCount": 0,
+    "hardViolationCount": 0,
+    "determinismDigest": "e5c05bbc5881b52739720f08a4d0d602669aa0372e78184ccda427985c0c9ee1"
+  },
+  "finalHoldout": {
+    "completedDrafts": 4000,
+    "failureCount": 0,
+    "hardViolationCount": 0,
+    "allPairedMetricDeltas": 0,
+    "determinismDigest": "074acfc39a1d9d93153c3f4ebf4bcfa28ea55562226ad50ffc1d3a0062056008"
+  },
+  "rejectedCandidate": {
+    "affectedDecisionClass": "Early snake QB ordering when ESPN has both QB and OP starters",
+    "reproductionSeeds": [
+      "snake:6465",
+      "snake:2337"
+    ],
+    "pairedDiscoveryValidationDrafts": 8000,
+    "meanDeltas": {
+      "startingLineupProjection": 8.342799223862311,
+      "totalProjection": -10.305264901561035,
+      "vorp": -9.46440202793725,
+      "seasonWinProbability": -0.000005859375,
+      "decisionRegret": -32.83506560801089,
+      "rosterFragility": 0.36663879890880974,
+      "objective": 7.456055201320459
+    },
+    "p25ObjectiveDelta": -9.422915886502324,
+    "decision": "Rejected and removed because total projection, VORP, fragility, and paired P25 objective regressed."
+  },
+  "acceptedChanges": [
+    {
+      "affectedDecisionClass": "UI presentation only",
+      "change": "A single responsive live-operations rail and dominant snake/salary-cap decision command with explicit safety state, reserve, spendable runway, and hard ceiling.",
+      "strategyRisk": "None; action callbacks, engine ordering, ceilings, and authorization are unchanged."
+    },
+    {
+      "affectedDecisionClass": "Monte Carlo evidence collection",
+      "change": "JSONL writers now respect stream backpressure and exact high-regret cases can run bounded counterfactual replay directly.",
+      "strategyRisk": "None; simulation inputs and production strategy logic are unchanged."
+    }
+  ]
+}
