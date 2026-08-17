@@ -22,6 +22,6 @@ test("renders the ESPN draft control room", async () => {
   assert.match(html, /DO THIS NOW/);
   assert.match(html, /ROSTER CONTROL/);
   assert.match(html, /Live player board/);
-  assert.match(html, /Why this is the move/);
+  assert.match(html, /Decision intelligence/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|NFL\.com/i);
 });
