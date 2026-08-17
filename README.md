@@ -2,7 +2,7 @@
 
 Moving the project to another computer or Codex account? Start with [MIGRATION.md](MIGRATION.md) and [AGENT_HANDOFF.md](AGENT_HANDOFF.md).
 
-DraftForge is an ESPN-only fantasy football draft copilot. The primary cockpit is the Codex conversation: it imports the league's real settings through a narrowly scoped Chrome extension, follows a live snake or salary-cap draft, combines five public player-intelligence feeds, explains the next move, and can drive the ESPN draft room within explicit safety guardrails. The local app is the supporting dashboard for imported state, consensus provenance, recommendations, and auditability.
+DraftForge is an ESPN-only fantasy football draft copilot. The primary cockpit is the Codex conversation working through the authenticated Chrome companion: it imports the league's real settings, follows a live snake or salary-cap draft, combines five public player-intelligence feeds, explains the next move, and can drive the ESPN draft room within explicit safety guardrails. The local app is the live supporting dashboard for imported state, consensus provenance, recommendations, and auditability. A single-tab in-app-browser runtime is retained as a recovery and test path, not as the production Chrome workflow.
 
 Post-draft league management is intentionally out of scope.
 
@@ -20,14 +20,16 @@ Post-draft league management is intentionally out of scope.
 
 ## Run locally
 
-Requirements: Node.js 22.13 or newer and Chrome.
+Requirements: Node.js 22.13 or newer and Google Chrome with the DraftForge companion loaded from this repository.
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`, install the extension from `extension/` using Chrome's **Load unpacked** flow, sign in to ESPN, and keep the ESPN league or draft room open in another tab.
+Open `http://localhost:3000`, install the extension from `extension/` using Chrome's **Load unpacked** flow, sign in to ESPN, and keep exactly one ESPN league or draft-room tab beside the dashboard. Codex uses those two Chrome tabs as the observable draft-day workspace.
+
+The optional single-tab recovery path can reuse an authenticated in-app-browser ESPN tab, but it must pass the same league, source, sound, Autopick, clock, roster, ceiling, and reserve checks.
 
 For local development after the companion has been loaded once from this repository's `extension/` directory, opening `http://localhost:3000/?reloadCompanion=1` reloads the unpacked companion from disk. The command is rejected from non-localhost pages. Reload the ESPN and dashboard tabs after it runs; never invoke it during an active action window.
 
@@ -40,7 +42,34 @@ Use the Codex conversation as the active draft cockpit.
 - **Guided mode (default):** Codex reads the live ESPN context, applies the deterministic model, explains its recommended move, and waits for a clear instruction such as `draft it`, `bid`, `pass`, or `hold` before driving ESPN.
 - **Armed auto mode:** Codex may act without per-move approval only after the user explicitly arms it for the named ESPN league and live draft. It remains bounded by the imported roster, current draft state, strategy, computed max bid, one-dollar reserve, and a verified five-second-or-greater ESPN clock window. It shuts off on reload, league switch, missing or short clock, selector drift, or a `hold`/`stop` instruction.
 
-The local app must never become an unbounded autonomous actor. It is an inspectable, secondary surface; the companion extension remains the narrow enforcement layer.
+The local app must never become an unbounded autonomous actor. It is an inspectable live surface. The Chrome companion is the narrow enforcement layer. The optional single-tab browser runtime temporarily installs the same selector, clock, bid, reserve, and roster-verification implementation, then removes it when that draft tab closes.
+
+## Draft-day kickoff
+
+Draft day is a cold-start workflow, not a continuation of whatever tabs or server process happen to exist:
+
+1. Verify the repository and current production build, start exactly one DraftForge server on port 3000, and confirm `/api/draft-day` exists.
+2. Open the local dashboard plus exactly one authenticated ESPN lobby tab in Chrome and import the named league's scoring, roster, keeper, timer, order, and draft-type rules.
+3. Warm all five sources before ESPN creates the room, using the scoring and team count returned by the authenticated league-rules probe rather than a remembered default. For the saved 10-team Standard snake league, the executable gate is:
+
+   ```bash
+   npm run draft-day:warm -- --scoring Standard --teams 10 --season 2026
+   ```
+
+   Change scoring and team count to the imported league values. The command exits nonzero unless ESPN plus FFC, MFL, Tradyr, and GNG are all ready.
+4. Create the league-specific practice or live room in the same ESPN tab, let the companion bind that exact tab, mute sound, disable ESPN Autopick, and verify the exact league/team/action surface.
+5. Only then start the guarded loop. It polls cheap DOM state off-clock, calls the production engine only for an own snake turn or active salary-cap decision, submits through the shared action implementation, and requires ESPN roster confirmation.
+6. At completion, verify the exact roster, prices/budget, mandatory slots, position caps, one-dollar reserve, Autopick-off state, muted sound, and close the completed ESPN tab while keeping the dashboard available for the next rehearsal.
+
+   The dashboard also keeps a sanitized, in-memory final-certification snapshot for up to 24 hours. It is reachable only through loopback and contains no cookies, member IDs, or opponent identities. Require independent final proof with:
+
+   ```bash
+   npm run draft-day:audit -- --league <leagueId> --team <teamId> --require-complete
+   ```
+
+   The command exits nonzero unless the exact ESPN/app roster (including auction prices) is complete and legal, the live checklists and five-source gate passed, sound remained muted, ESPN Autopick remained off, and DraftForge shut itself down.
+
+Any failed check stops DraftForge from clicking. A cold source refresh may take roughly 20 seconds because MFL is intentionally queried sequentially under its public rate limit; that work must finish before room launch.
 
 ## Verify
 

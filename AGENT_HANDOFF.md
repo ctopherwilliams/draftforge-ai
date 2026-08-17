@@ -2,7 +2,7 @@
 
 ## Active objective
 
-Build and verify an ESPN-only fantasy football draft copilot with a Chrome extension that:
+Build and verify an ESPN-only fantasy football draft copilot whose primary control plane is the Codex conversation orchestrating the authenticated Chrome companion and local dashboard, that:
 
 - imports and confirms all ESPN league and draft settings;
 - supports snake and salary-cap drafts;
@@ -10,9 +10,9 @@ Build and verify an ESPN-only fantasy football draft copilot with a Chrome exten
 - combines ESPN, Fantasy Football Calculator, MyFantasyLeague, Tradyr, and The GNG through a transparent deterministic consensus;
 - recommends selections, nominations, and bids according to configurable strategy;
 - precomputes a legal ESPN-visible recommendation and can submit it while the draft clock is still safely open;
-- uses the Codex conversation as the primary guided-draft cockpit, presenting a recommendation and driving ESPN after a clear user approval;
+- uses the Codex conversation as the primary draft cockpit while the user watches the local dashboard and authenticated ESPN room in Chrome;
 - can submit legal actions without per-move approval only when the user explicitly arms auto mode for the named ESPN league and draft;
-- keeps the local app as an inspectable secondary dashboard rather than an unbounded autonomous actor; and
+- keeps the local app as an inspectable live dashboard and local decision service rather than an unbounded autonomous actor; and
 - excludes all post-draft league-management features.
 
 The user has two ESPN leagues on different draft days. Their settings, picks, player pools, strategy, and confirmation state must remain isolated by ESPN league ID. Guided mode is the default. Armed auto mode must reset off across reloads and league switches, and immediately stop on a `hold` or `stop` instruction.
@@ -20,12 +20,14 @@ The user has two ESPN leagues on different draft days. Their settings, picks, pl
 ## Current checkpoint
 
 - Branch: `agent/espn-draft-engine-hardening`
-- Handoff base commit: `88f4f71`
+- Handoff base commit: `0871b26`
 - Production app: `https://draftforge-ai.workspace-231977.chatgpt.site`
 - Chrome extension package: `public/draftforge-espn-companion.zip`
-- Extension version: `0.2.10`
+- Extension version: `0.2.11`
 - Test command: `npm run check`
-- Last verified result: lint, typecheck, the production build, all 124 tests, 20 deterministic complete snake drafts, 20 deterministic complete salary-cap drafts, Monte Carlo replay/invariant checks, and latency gates pass locally. A paired launch-console replay added 20 snake plus 20 salary-cap drafts before and after the UI-only change with identical digest `6fcd6f6273e3306538f0f6c27ec60767ce63febfffb4916e14d4370f15b830b0`, zero failures, zero hard violations, and zero paired metric deltas. The historical pre-sleeper authenticated checkpoint remains 18 countable snake and 14 countable salary-cap rooms. The separate post-sleeper final-engine series remains 19 countable authenticated snake rooms and 15 countable authenticated salary-cap rooms. Companion v0.2.10 retains exact pre-click revalidation, own-turn authorization, Autopick detection, duplicate-specialist exclusion, and exact app-origin authorization while adding a fresh exact-tab round trip before Auto-Draft can arm. Its package SHA-256 is `6bcdfedb957c5bbc15b8a889ff07af235a0b820610c88855ec93e7576d538dbc`.
+- Last verified result: `npm run check` passes 142/142 tests, lint, typecheck, production build, 20 deterministic complete snake drafts, 20 deterministic complete salary-cap drafts, Monte Carlo replay/invariant checks, UI and extension safety, and latency gates (0.95 ms indexed-decision p95; 2.02 ms five-source-consensus p95). The historical pre-sleeper authenticated checkpoint remains 18 countable snake and 14 countable salary-cap rooms. The separate post-sleeper final-engine series remains 19 countable authenticated snake rooms and 15 countable authenticated salary-cap rooms. Companion v0.2.11 retains exact pre-click revalidation, own-turn authorization, Autopick detection, duplicate-specialist exclusion, and exact app-origin authorization; it also refuses every action while ESPN sound is on and briefly rechecks the exact ordered shortlist after ESPN's virtualized grid rehydrates. Its package SHA-256 is `f03933bd0afad5f573bd9782fca78a7d5817de3a1fd2ca5a0ff80dd480cd418f`.
+
+Superseding local verification on 2026-08-17: the command center now has one authoritative 445-line graphite/white/blue/violet stylesheet; the two legacy green themes were removed, preflight renders before the operations strip without sliding beneath the header, and the layout has explicit three-rail, two-rail, tablet, and mobile states. Desktop, two-rail, and mobile visual QA completed without material overlap or horizontal overflow. Typecheck, lint, production build, UI/rendered-HTML checks, `git diff --check`, 20 deterministic snake drafts, 20 deterministic salary-cap drafts, Monte Carlo/replay invariants, dependency audit, and latency gates pass. The remaining authenticated 5 salary-cap plus 1 snake certification rooms are still pending: Chrome, the enabled integration, and the native-host manifest all pass diagnostics, but after reinstall and an approved clean-window relaunch the external controller can list tabs yet stalls when claiming either an old or fresh tab. The attempted salary-cap room `2118185093` is invalid and must never be counted.
 
 Superseding local verification on 2026-08-15: all 116 tests, typecheck, production build, lint, `npm audit --audit-level=high`, and `git diff --check` pass. The corrected seeded Monte Carlo baseline and accepted candidate each completed 10,000 snake plus 10,000 salary-cap drafts with zero failures and zero hard violations. The accepted late mandatory-starter correction improved paired lineup projection, VORP, static-roster win probability, acquisition regret, and the composite objective; non-acquired auction nominations are excluded from aggregate regret and retained only as labeled target-versus-drain counterfactual proxies. See `docs/monte-carlo-report.md` and `simulation/evidence/cycle-1.json`. GitHub Actions run `31886932026` passed the complete `npm run check` gate on commit `b39542a`.
 
@@ -34,6 +36,8 @@ The deployed Sites project is owner-only and tied to the previous Codex workspac
 ## Architecture
 
 - `app/page.tsx`: secondary dashboard for settings confirmation, source health, league switching, recommendation staging, and Auto-Draft arming.
+- `app/api/draft-day/route.ts`: loopback-only/ESPN-origin chat bridge. It prepares one in-memory consensus session before kickoff, accepts only fresh ESPN room state on the clock, and never submits a browser action itself.
+- `app/lib/draft-day-bridge.ts`: fail-closed command envelope around the production engine for exact snake picks, salary-cap nominations, incremental bids, walkaways, source coverage, sound, Autopick, clock, league/team, duplicate, ceiling, and reserve checks.
 - `app/lib/draft-engine.ts`: deterministic league-aware scoring, roster need, value over replacement, tier scarcity, ADP value, and salary-cap reserve rules.
 - `app/lib/consensus.ts`: player identity normalization, stale-source rejection, weighted percentiles, confidence, and provenance.
 - `app/lib/profiles.ts`: isolated saved profiles keyed by ESPN league ID.
@@ -41,13 +45,16 @@ The deployed Sites project is owner-only and tied to the previous Codex workspac
 - `extension/background.js`: authenticated ESPN fetches, settings/player/pick normalization, polling, exact league-and-imported-tab routing, and app messaging; the dashboard heartbeats that exact tab every five seconds and may follow ESPN's waiting-room-to-live-tab handoff only when exactly one live tab matches both the imported league and team.
 - Local development can reload the unpacked companion through `http://localhost:3000/?reloadCompanion=1`; the background accepts that command only from `localhost` or `127.0.0.1`, and ESPN/dashboard tabs must be reloaded afterward.
 - `extension/espn-content.js`: live draft-room context detection and fail-closed selection/nomination/bid UI actions.
+- `scripts/draft-day-browser-runtime.mjs`: optional single-tab recovery/test runtime that reuses `extension/espn-content.js` verbatim; it is not the primary Chrome draft-day path.
+- `scripts/draft-day-warm.mjs`: executable pre-room 5/5 source gate against the running production server.
+- `extension/league-import.js`: one ESPN league-settings normalizer shared by the Chrome companion and chat bridge.
 - `app/lib/espn-reconciliation.ts`: exact ESPN roster/sale reconciliation; confirmed sale history remains monotonic even if ESPN repopulates player controls after a roster completes.
 - `extension/app-bridge.js`: narrow web-app-to-extension message bridge.
 - `docs/data-sources.md`: source endpoints, weights, attribution, cadence, and combination logic.
 
 Consensus weights are ESPN 30%, The GNG 20%, Tradyr 20%, Fantasy Football Calculator 15%, and MyFantasyLeague 15%. Sources older than 14 days are ignored. The recommendation engine is deterministic; generative AI is not allowed to invent projections or silently override the model.
 
-The Codex conversation is the orchestration surface. It may use the authenticated ESPN browser only for the active draft under the selected mode; it must never infer authorization to submit to a real league outside the user's stated guided or armed-auto choice.
+The Codex conversation is the orchestration surface. The Chrome path keeps exactly the local DraftForge dashboard and one authenticated ESPN tab, finishes source warmup before creating the room, prepares the indexed consensus during the countdown, keeps sound muted and ESPN Autopick off, and closes stale draft tabs after verification. The optional in-app-browser runtime must preserve the same checks. Codex may use an authenticated ESPN browser only for the active draft under the selected mode; it must never infer authorization to submit to a real league outside the user's stated guided or armed-auto choice.
 
 ## Verification checkpoint
 
@@ -152,14 +159,23 @@ Proven locally:
 ## 2026-08-16 launch-console and paired replay checkpoint
 
 - The dashboard now uses a full-width three-rail desktop command console: the exact live decision and safety state, a bounded player board, and roster/budget control remain simultaneously visible. Critical clock, action, ceiling, reserve, and roster numerals are larger; secondary confidence, source, opponent, and activity details use progressive disclosure. The responsive fallbacks retain the same controls and fail-closed behavior.
-- No action callback, authorization path, deterministic ranking, bid ceiling, reserve, sleeper protection, or roster rule changed. `npm run check` passes 124/124 tests, including the production build, exact-tab fail-closed suites, and 20 complete deterministic drafts per format.
+- No action callback, authorization path, deterministic ranking, bid ceiling, reserve, sleeper protection, or roster rule changed. The current candidate passes 140/140 tests, including the production build, exact-tab fail-closed suites, and 20 complete deterministic drafts per format. The latest measured decision p95 is 0.87 ms and five-source-consensus p95 is 1.86 ms.
 - Seed `20260818` completed 20 snake and 20 salary-cap Monte Carlo drafts before the final UI pass and replayed the same 40 drafts afterward. Both runs completed every roster with zero failures and zero hard violations. The digest remained `6fcd6f6273e3306538f0f6c27ec60767ce63febfffb4916e14d4370f15b830b0`; lineup, total projection, VORP, win probability, regret, fragility, and objective all had exact zero paired deltas.
 - No production strategy change was accepted. The larger 10,000-per-format counterfactual audit split its leading salary-cap cases evenly between opposite actions, and the fresh 20-per-format run remained directionally mixed. Further tuning would overfit synthetic opponents. The next safe improvement requires broader/fresher player coverage from the same five sources, sanitized authenticated ESPN bid/pass/closing-price outcomes, and a snapshot with fully corroborated sleeper candidates; the current snapshot has 39.29% full five-source coverage and zero sleeper-acquisition observations.
 
+## 2026-08-17 final-certification resume checkpoint
+
+- Salary-cap practice league `544104555` was excluded after reaching an authoritative 11/14 roster with $22 remaining and exactly one bench, K, and D/ST slot open. DraftForge handled live `BID_CHANGED`, `BID_OUT_OF_SEQUENCE`, and `NOMINEE_UNKNOWN` transitions without an unsafe click, but browser control disconnected before final 14/14 parity and ESPN later deleted the practice league. The authenticated counts therefore remain salary cap 15/20 and snake 19/20.
+- Salary-cap practice league `1957835193` was also excluded. A fresh two-tab Chrome launch imported authenticated league `44050`, warmed all five sources, opened the exact mock, explicitly imported its room ID, and passed the complete live-room dry run: exact league/team/tab, 12-team PPR salary cap, 14 slots, $200 budget, 30-second timer, 500 ESPN players, 5/5 sources, muted sound, ESPN Autopick off, and a legal no-click recommendation. Chrome control repeatedly disconnected at the final Auto-Draft confirmation. The loopback audit authoritatively recorded `autoDraft: false`, an empty roster, and no action violations, so DraftForge sent no bids and the room does not advance the count.
+- A sanitized, loopback-only certification ledger now records every authoritative app/ESPN roster transition in server memory for up to 24 hours. It stores no cookies, member IDs, or opponent identities. `npm run draft-day:audit -- --league <leagueId> --team <teamId> --require-complete` independently requires exact roster-and-price parity, complete legal roster, one K and one D/ST, five fresh sources, muted sound, ESPN Autopick off, exact tab binding, checklist completion, reserve/cap compliance, and automatic DraftForge shutdown. This closes the proof gap if browser monitoring reconnects after ESPN completion; it does not relax any action gate.
+- A fresh immutable five-source snapshot was captured from sanitized authenticated ESPN league `44050` state at `2026-08-17T23:11:22.400Z` with digest `25c2f8bf053c6491bca73cbacca7fa7502493c380f52937f9b2bc713501f7abd`. Its five inputs are ESPN, FFC, MFL, Tradyr, and GNG. Player-level coverage is 37.5% at four or more sources and 23.21% at all five; this is an explicit data limitation, not evidence of complete player-level corroboration.
+- Seed `20260814` replayed that exact snapshot through 10,000 snake and 10,000 salary-cap trials (80% saved authenticated settings, 20% adversarial ESPN-compatible variants). All 20,000 drafts completed with zero duplicate-player, incomplete-roster, duplicate-specialist, position-cap, salary-cap, reserve, max-bid, or missing-mandatory-starter violations and zero simulation errors. Replay digest: `8e4975b80e5606c7cdfe0be5651f6b105cd20995b231527f4f6882e6e95737d1`. The snapshot produced no measurable sleeper acquisitions, and the ten largest remaining salary-cap tail cases are labeled non-acquired nomination proxies; neither result justifies a broad strategy retune.
+- Full local verification passes 142/142 tests, lint, typecheck, production build, 20 complete deterministic snake drafts, 20 complete deterministic salary-cap drafts, Monte Carlo invariant/replay gates, UI gates, extension safety suites, and latency gates. The production server must remain bound to loopback on port 3000 for the remaining authenticated series.
+
 ## Next recommended work
 
-1. Resume with the production server and the exact authenticated pre-draft/live-room checklist. First run one fresh snake room to authenticate the stale-turn follow-up; if it passes, it becomes 20/20. Then continue salary cap from 15/20. Treat every fresh room as excluded until full ESPN/app parity, roster legality, muted sound, ESPN Auto off, and automatic DraftForge shutdown are proven.
-2. Use the bounded exact-room import/checklist/arming path for every new room and keep only the dashboard, lobby, and one active draft room open.
+1. Resume with the production server and the exact authenticated pre-draft/live-room checklist. Complete five fresh salary-cap rooms to advance 15/20 to 20/20, then one fresh snake room to advance 19/20 to 20/20. Treat every room as excluded until full ESPN/app parity, roster legality, muted sound, ESPN Auto off, automatic DraftForge shutdown, and a final-ready loopback audit are proven.
+2. Use the bounded exact-room import/checklist/arming path for every new room and keep only the dashboard and one active ESPN page open.
 3. Run `npm test` after any further engine or extension change.
 4. Before a real draft, import the named league, confirm every rule/source check, enter the room, mute ESPN, and pass the second live-room dry run.
 5. Keep Guided mode as the default; arm auto only for the exact named league and draft when explicitly requested.

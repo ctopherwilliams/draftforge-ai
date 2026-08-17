@@ -1,5 +1,5 @@
 import { normalizeImportPicks, normalizePicks } from "./draft-normalizers.js";
-import { draftableRosterSizeFor, draftTypeFor, keeperCountFor } from "./league-normalizers.js";
+import { normalizeSettings } from "./league-import.js";
 import { normalizePlayers } from "./player-normalizers.js";
 import { createPollCoordinator } from "./poll-coordinator.js";
 import { selectUniqueEspnContext } from "./context-selector.js";
@@ -81,47 +81,6 @@ async function espnFetch(url, options = {}) {
   if (response.status === 401 || response.status === 403) throw new Error("ESPN_LOGIN_REQUIRED");
   if (!response.ok) throw new Error(`ESPN_${response.status}`);
   return response.json();
-}
-
-function normalizeSettings(raw, context) {
-  const settings = raw.settings || {};
-  const draft = settings.draftSettings || {};
-  const roster = settings.rosterSettings || {};
-  const scoring = settings.scoringSettings || {};
-  const picks = raw.draftDetail?.picks || [];
-  const draftType = draftTypeFor(draft.type);
-  const scoringItems = scoring.scoringItems || [];
-  const receptionRule = scoringItems.find((item) => Number(item.statId) === 53);
-  const receptionPoints = Number(receptionRule?.points || 0);
-  const scoringLabel = receptionPoints === 1 ? "PPR" : receptionPoints === 0.5 ? "Half PPR" : receptionPoints === 0 ? "Standard" : "Custom";
-  const keeperCount = keeperCountFor(draft, raw.teams || []);
-
-  return {
-    id: String(raw.id || context.leagueId),
-    name: settings.name || raw.name || "ESPN League",
-    season: Number(raw.seasonId || 2026),
-    size: Number(settings.size || raw.teams?.length || 12),
-    isPublic: Boolean(raw.isPublic),
-    teamId: Number(context.teamId || 0) || null,
-    draftType,
-    draftDate: draft.date || null,
-    secondsPerPick: Number(draft.timePerSelection || 90),
-    rosterSize: draftableRosterSizeFor(draft, roster),
-    auctionBudget: Number(draft.auctionBudget || draft.budget || 200),
-    pickOrder: draft.pickOrder || [],
-    lineupSlotCounts: roster.lineupSlotCounts || {},
-    positionLimits: roster.positionLimits || {},
-    scoringLabel,
-    scoringRules: scoringItems.length,
-    keeperCount,
-    draftStatus: {
-      inProgress: Boolean(raw.draftDetail?.inProgress),
-      complete: Boolean(raw.draftDetail?.drafted),
-      picks: picks.length,
-    },
-    teams: (raw.teams || []).map((team) => ({ id: Number(team.id), name: team.name || `${team.location || ""} ${team.nickname || ""}`.trim(), abbrev: team.abbrev || "" })),
-    rawSettings: settings,
-  };
 }
 
 async function fetchPlayers(leagueId, season, scoringLabel) {

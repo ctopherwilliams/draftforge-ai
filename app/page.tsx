@@ -29,6 +29,7 @@ import { canArmAutoDraft } from "./lib/auto-draft-safety";
 import { liveEspnRecommendations, reconcileEspnPicks, resolveAuctionSales, resolveOwnRoster } from "./lib/espn-reconciliation";
 import { draftUiReducer, INITIAL_DRAFT_UI_STATE } from "./lib/draft-ui-state";
 import { buildDraftPresentation } from "./lib/draft-presentation";
+import type { DraftAuditRosterEntry, DraftAuditSnapshot } from "./lib/draft-audit";
 import { compactDraftProfiles, persistDraftProfiles, upsertDraftProfile, type DraftProfile } from "./lib/profiles";
 
 const DEMO_PLAYERS: DraftPlayer[] = [
@@ -53,6 +54,16 @@ const DEMO_PLAYERS: DraftPlayer[] = [
   { id: 19, name: "Bucky Irving", team: "TB", pos: "RB", rank: 19, adp: 24.7, auction: 27, projected: 238 },
   { id: 20, name: "Jayden Daniels", team: "WAS", pos: "QB", rank: 20, adp: 27.3, auction: 25, projected: 356 },
 ];
+
+const DEMO_AUCTION_VALUES = new Map(DEMO_PLAYERS.map((player) => [player.id, Number(player.auction || 1)]));
+
+function displayAuctionValue(playerId: number, leagueId: string, calculated: number) {
+  // The preview intentionally ships a short 20-player board, not a complete
+  // 12-team auction pool. Show its explicit ESPN-style dollar examples rather
+  // than the production curve that allocates a full room budget across the
+  // complete imported player universe.
+  return Math.round(leagueId === "demo" ? DEMO_AUCTION_VALUES.get(playerId) || calculated : calculated);
+}
 
 const DEMO_LEAGUE: LeagueSettings = {
   id: "demo", name: "ESPN League Preview", season: 2026, size: 12, teamId: 4, draftType: "SNAKE",
@@ -185,6 +196,8 @@ export default function Home() {
     playerName: string;
     beforeRosterPlayerIds: number[];
   } | null>(null);
+  const draftAuditDigestRef = useRef("");
+  const draftAuditPendingRef = useRef("");
   const authoritativeRosterContext = useMemo(() => ({
     inDraftRoom: context.inDraftRoom,
     ownRoster: context.ownRoster,
@@ -714,7 +727,10 @@ export default function Home() {
   const visible = liveRecommendations.filter((player) =>
     (filter === "ALL" || player.pos === filter) && `${player.name} ${player.team}`.toLowerCase().includes(normalizedQuery)
   );
-  const myPicks = authoritativePicks.filter((pick) => pick.teamId === league.teamId);
+  const myPicks = useMemo(
+    () => authoritativePicks.filter((pick) => pick.teamId === league.teamId),
+    [authoritativePicks, league.teamId],
+  );
   const myPickCount = myPicks.length;
   const myRoster = myPicks.map((pick) => ({ pick, player: playerPool.playerById.get(pick.playerId) })).filter((item) => item.player) as { pick: DraftPick; player: DraftPlayer }[];
   const currentPick = recommendationPick;
@@ -983,6 +999,100 @@ export default function Home() {
     autopickActive: context.autopickActive === true,
     inDraftRoom: context.inDraftRoom === true,
   });
+
+  useEffect(() => {
+    const exactTabId = activeEspnTabRef.current;
+    if (league.id === "demo" || !Number.isInteger(exactTabId) || Number(exactTabId) <= 0) return;
+    const toAuditEntry = (playerId: number, amount: number): DraftAuditRosterEntry | null => {
+      const player = playerPool.playerById.get(playerId);
+      return player ? {
+        playerId,
+        playerName: player.name,
+        position: player.pos,
+        amount: Math.max(0, Math.trunc(Number(amount || 0))),
+      } : null;
+    };
+    const appRoster = myPicks
+      .map((pick) => toAuditEntry(pick.playerId, pick.amount))
+      .filter((entry): entry is DraftAuditRosterEntry => Boolean(entry));
+    const espnRoster = resolveOwnRoster(context, espnPlayers)
+      .map((entry) => toAuditEntry(entry.playerId, entry.amount))
+      .filter((entry): entry is DraftAuditRosterEntry => Boolean(entry));
+    const stable = {
+      league: league.id,
+      team: league.teamId,
+      tab: exactTabId,
+      settingsConfirmed,
+      liveChecklistReady,
+      extension,
+      inDraftRoom: context.inDraftRoom === true,
+      soundMuted: context.soundMuted === true,
+      autopickActive: context.autopickActive === true,
+      autoDraft,
+      sourceCoverage: 1 + healthySources.length,
+      actionState,
+      totalPicks: authoritativePicks.length,
+      appRoster,
+      espnRoster,
+    };
+    const digest = JSON.stringify(stable);
+    if (draftAuditDigestRef.current === digest || draftAuditPendingRef.current === digest) return;
+    const snapshot: DraftAuditSnapshot = {
+      schemaVersion: 1,
+      capturedAt: new Date().toISOString(),
+      league: {
+        id: league.id,
+        teamId: Number(league.teamId),
+        draftType: league.draftType,
+        size: league.size,
+        rosterSize: league.rosterSize,
+        auctionBudget: league.auctionBudget,
+        lineupSlotCounts: league.lineupSlotCounts,
+        positionLimits: league.positionLimits,
+      },
+      binding: { tabId: Number(exactTabId) },
+      safety: {
+        settingsConfirmed,
+        liveChecklistReady,
+        extensionConnected: extension === "connected",
+        inDraftRoom: context.inDraftRoom === true,
+        soundMuted: context.soundMuted === true,
+        autopickActive: context.autopickActive === true,
+        autoDraft,
+        sourceCoverage: 1 + healthySources.length,
+        actionState,
+      },
+      draft: {
+        totalPicks: authoritativePicks.length,
+        appRoster,
+        espnRoster,
+      },
+    };
+    draftAuditPendingRef.current = digest;
+    void (async () => {
+      for (let attempt = 0; attempt < 3 && draftAuditPendingRef.current === digest; attempt += 1) {
+        try {
+          const response = await fetch("/api/draft-day", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ operation: "AUDIT", audit: snapshot }),
+            cache: "no-store",
+          });
+          const result = await response.json().catch(() => null) as { code?: string } | null;
+          if (!response.ok || result?.code !== "DRAFT_AUDIT_RECORDED") throw new Error(result?.code || `HTTP_${response.status}`);
+          if (draftAuditPendingRef.current === digest) {
+            draftAuditDigestRef.current = digest;
+            draftAuditPendingRef.current = "";
+          }
+          return;
+        } catch {
+          if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+        }
+      }
+      if (draftAuditPendingRef.current === digest) draftAuditPendingRef.current = "";
+    })();
+  }, [actionState, autoDraft, authoritativePicks.length, context, espnPlayers, extension, healthySources.length, league, liveChecklistReady, myPicks, playerPool.playerById, settingsConfirmed]);
+
   const { commandLabel, safetyLabel } = presentation;
   const displayCommandLabel = presentation.stateTone === "blocked" && context.autopickActive !== true && focusPlayer
     ? `${league.draftType === "SNAKE" ? "PREPARE" : "TRACK"} ${focusPlayer.name}`
@@ -1060,7 +1170,7 @@ export default function Home() {
           <div className="decision-metrics">
             {league.draftType === "AUCTION" ? <>
               <div><span>Current offer</span><b>{context.currentBid ? `$${context.currentBid}` : "—"}</b></div>
-              <div><span>Fair value</span><b>${Math.round(focusPlayer.fairValue)}</b></div>
+              <div><span>Fair value</span><b>${displayAuctionValue(focusPlayer.id, league.id, focusPlayer.fairValue)}</b></div>
               <div className="metric-emphasis"><span>Hard ceiling</span><b>${focusPlayer.maxBid}</b></div>
               <div><span>{nominated ? "After next bid" : "Reserve floor"}</span><b>{nominated ? `$${Math.max(0, remainingBudget - nextBid)} left` : `$${currentReserve}`}</b><small>{nominated ? `$${postWinReserve} reserve required` : "$1 per open slot"}</small></div>
             </> : <>
@@ -1092,11 +1202,11 @@ export default function Home() {
 
       <section className="players-panel panel">
         <div className="panel-head"><div><p className="eyebrow">NEXT BEST OPTIONS</p><h2>Live player board</h2></div><label className="search-box"><span aria-hidden="true">⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search player or team" aria-label="Search player or team" /></label></div>
-        {alternatives.length > 0 && <div className="alternatives" aria-label="Top alternatives">{alternatives.map((player, index) => <button key={player.id} onClick={() => setSelectedId(player.id)}><span>#{index + 2} alternative</span><b>{player.name}</b><small>{player.pos} · {league.draftType === "AUCTION" ? `$${Math.round(player.fairValue)} fair` : `ADP ${player.adp < 900 ? player.adp.toFixed(1) : "—"}`}</small></button>)}</div>}
+        {alternatives.length > 0 && <div className="alternatives" aria-label="Top alternatives">{alternatives.map((player, index) => <button key={player.id} onClick={() => setSelectedId(player.id)}><span>#{index + 2} alternative</span><b>{player.name}</b><small>{player.pos} · {league.draftType === "AUCTION" ? `$${displayAuctionValue(player.id, league.id, player.fairValue)} fair` : `ADP ${player.adp < 900 ? player.adp.toFixed(1) : "—"}`}</small></button>)}</div>}
         <div className="filters" aria-label="Filter player board">{FILTERS.map((item) => <button key={item} className={filter === item ? "active" : ""} onClick={() => setFilter(item)} aria-pressed={filter === item}>{item}</button>)}</div>
         <div className="table-head" aria-hidden="true"><span>#</span><span>PLAYER</span><span>POS</span><span>{league.draftType === "AUCTION" ? "FAIR $" : "ADP"}</span><span>PROJ</span><span>MODEL</span></div>
         <div className="player-list">{visible.slice(0, 150).map((player, index) => <button key={player.id} className={`player-row ${selected?.id === player.id ? "selected" : ""}`} onClick={() => setSelectedId(player.id)} aria-pressed={selected?.id === player.id}>
-          <span className="rank">{index + 1}</span><span className="player-name"><span><b>{player.name}</b><small>{player.team}{player.injured ? " · Injury flag" : ""}{player.sleeperLabel !== "NONE" ? ` · ${player.sleeperLabel.replace("_", " ")} ${player.sleeperScore}` : ""}</small></span></span><i className={`pos ${player.pos.toLowerCase()}`}>{player.pos}</i><span>{league.draftType === "AUCTION" ? `$${Math.round(player.auction)}` : player.adp < 900 ? player.adp.toFixed(1) : "—"}</span><span>{player.projected ? player.projected.toFixed(1) : "—"}</span><span className="model-score">{Math.round(player.score)}</span>
+          <span className="rank">{index + 1}</span><span className="player-name"><span><b>{player.name}</b><small>{player.team}{player.injured ? " · Injury flag" : ""}{player.sleeperLabel !== "NONE" ? ` · ${player.sleeperLabel.replace("_", " ")} ${player.sleeperScore}` : ""}</small></span></span><i className={`pos ${player.pos.toLowerCase()}`}>{player.pos}</i><span>{league.draftType === "AUCTION" ? `$${displayAuctionValue(player.id, league.id, player.auction)}` : player.adp < 900 ? player.adp.toFixed(1) : "—"}</span><span>{player.projected ? player.projected.toFixed(1) : "—"}</span><span className="model-score">{Math.round(player.score)}</span>
           {index === 0 && <em className="best-badge">BEST FIT</em>}
         </button>)}</div>
       </section>

@@ -63,6 +63,7 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(background, /DF_DISABLE_AUTOPICK/);
   assert.match(content, /MIN_ACTION_WINDOW_SECONDS = 5/);
   assert.match(content, /AUTOPICK_ACTIVE/);
+  assert.match(content, /SOUND_NOT_MUTED/);
   assert.match(content, /autopickActive/);
   assert.match(content, /snakeClockOwnMarker/);
   assert.match(content, /snakeClockSource/);
@@ -76,6 +77,8 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(content, /function buildMandatoryPositionPlan\(candidates\)/);
   assert.match(content, /setNativeSelectValue\(positionFilter, mandatoryPositionPlan\.slotId\)/);
   assert.match(content, /!visibleCandidate && !usedPositionFilter && playerSearch instanceof HTMLInputElement/);
+  assert.match(content, /const rehydrateDeadline = Math\.min/);
+  assert.match(content, /candidates\s*\.find\(\(candidate\) => visiblePlayerControl/);
   assert.match(content, /setNativeSelectValue\(usedPositionFilter, "-1"\)/);
   assert.match(content, /sendToCompanion\(\{ type: "ESPN_ACTION_RESOLVED", payload: resolvedAction \}\)/);
   assert.match(content, /WRONG_LEAGUE/);

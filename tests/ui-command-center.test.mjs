@@ -25,6 +25,11 @@ test("live decision precedes secondary player-board detail", () => {
   assert.match(page, /untouchable reserve/);
   assert.match(page, /PREFLIGHT 1 OF 2/);
   assert.match(page, /displayCommandLabel/);
+  assert.match(page, /function displayAuctionValue/);
+  assert.match(page, /draftAuditPendingRef/);
+  assert.match(page, /DRAFT_AUDIT_RECORDED/);
+  assert.match(page, /attempt < 3/);
+  assert.equal((page.match(/className="on-clock-card panel"/g) || []).length, 1, "connection status must render once");
 });
 
 test("command-center styles preserve readable and responsive controls", () => {
@@ -37,5 +42,8 @@ test("command-center styles preserve readable and responsive controls", () => {
   assert.match(css, /\.workspace \{[^}]*max-width:\s*none/s);
   assert.match(css, /prefers-reduced-motion: reduce/);
   assert.match(css, /\.settings-button::after, \.auto-toggle::after \{ content: none/);
+  assert.match(css, /\.app-shell:has\(\.setup-drawer\) \.topbar \{ position: relative; \}/);
+  assert.match(css, /--blue:\s*#49b6ff/);
+  assert.doesNotMatch(css, /--green|#4ee0a1|#6af2b6|#c5ff45|#9ed01b|#24a66e|#23b77b/i);
   assert.doesNotMatch(css, /font-size:\s*(?:[0-9]|1[0-3])px/);
 });

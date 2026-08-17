@@ -152,11 +152,27 @@ const STARTER_SLOT_ELIGIBILITY: Record<string, Position[]> = {
 };
 
 const SKILL_POSITIONS = new Set<Position>(["QB", "RB", "WR", "TE"]);
+const POSITION_LIMIT_KEYS: Record<Position, string[]> = {
+  QB: ["QB", "1"],
+  RB: ["RB", "2"],
+  WR: ["WR", "3"],
+  TE: ["TE", "4"],
+  K: ["K", "5", "17"],
+  DST: ["DST", "D/ST", "16"],
+  FLEX: ["FLEX", "23"],
+};
 
 type StarterSlot = {
   eligible: Position[];
   slot: string;
 };
+
+export function positionLimitFor(league: LeagueSettings, position: Position) {
+  const configured = POSITION_LIMIT_KEYS[position]
+    .map((key) => Number(league.positionLimits?.[key]))
+    .find((value) => Number.isInteger(value) && value >= 0);
+  return configured === undefined ? Number.POSITIVE_INFINITY : configured;
+}
 
 function starterSlotsForLeague(league: LeagueSettings): StarterSlot[] {
   return Object.entries(league.lineupSlotCounts || {})
@@ -622,9 +638,14 @@ export function recommendPlayers(
   // Kicker and defense are single-roster strategy positions. A large score
   // penalty is not a sufficient safety boundary in a depleted final-round
   // player pool, so snake drafts remove duplicate specialists entirely.
+  // Salary-cap keeps them visible at a zero-dollar ceiling so the nomination
+  // model can use them as drains without ever acquiring a second specialist.
+  const withinEspnPositionCaps = available.filter((player) => (
+    Number(rosterCounts[player.pos] || 0) < positionLimitFor(league, player.pos)
+  ));
   const strategicallyAvailable = league.draftType === "SNAKE"
-    ? available.filter((player) => !(["K", "DST"].includes(player.pos) && Number(rosterCounts[player.pos] || 0) >= 1))
-    : available;
+    ? withinEspnPositionCaps.filter((player) => !(["K", "DST"].includes(player.pos) && Number(rosterCounts[player.pos] || 0) >= 1))
+    : withinEspnPositionCaps;
   const rosterPositions = myRoster.map((player) => player.pos);
   const starterPositions = ["QB", "RB", "WR", "TE", "K", "DST"] as Position[];
   const starterNeedsByPosition = Object.fromEntries(starterPositions.map((position) => [
