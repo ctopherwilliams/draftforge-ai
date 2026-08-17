@@ -1046,7 +1046,7 @@ function counterfactualActions(regretCase) {
   }));
 }
 
-function runCounterfactuals(cases, config) {
+export function runCounterfactuals(cases, config) {
   const results = [];
   for (const regretCase of cases) {
     const baseline = simulateDraft({

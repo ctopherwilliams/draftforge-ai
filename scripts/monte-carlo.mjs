@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { once } from "node:events";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { renderMarkdownReport, runMonteCarlo, simulateDraft } from "../simulation/monte-carlo.mjs";
+import { renderMarkdownReport, runCounterfactuals, runMonteCarlo, simulateDraft } from "../simulation/monte-carlo.mjs";
 import { replayConsensusSnapshot, sourceSnapshotDigest, validateSourceSnapshot } from "../simulation/source-snapshot.mjs";
 
 function parseArguments(argv) {
@@ -46,6 +47,9 @@ function parseArguments(argv) {
       index += 1;
     } else if (argument === "--replay") {
       config.replay = value;
+      index += 1;
+    } else if (argument === "--counterfactual-replay") {
+      config.counterfactualReplay = value;
       index += 1;
     } else if (argument === "--snapshot") {
       config.snapshot = value;
@@ -100,6 +104,10 @@ async function readJsonLines(path, onRecord) {
   for await (const line of reader) {
     if (line.trim()) onRecord(JSON.parse(line));
   }
+}
+
+async function writeJsonLine(stream, value) {
+  if (!stream.write(`${JSON.stringify(value)}\n`)) await once(stream, "drain");
 }
 
 async function loadBaseline(directory) {
@@ -163,6 +171,17 @@ async function main() {
     process.stdout.write(`${JSON.stringify(replay, null, 2)}\n`);
     return;
   }
+  if (config.counterfactualReplay) {
+    const [format, trialValue] = config.counterfactualReplay.split(":");
+    const trialIndex = Number(trialValue);
+    if (!["snake", "salary-cap"].includes(format) || !Number.isInteger(trialIndex) || trialIndex < 0 || trialIndex >= config.drafts) {
+      throw new Error("--counterfactual-replay must be snake:<trial-index> or salary-cap:<trial-index> within --drafts");
+    }
+    const replay = simulateDraft({ format, baseSeed: config.seed, trialIndex, drafts: config.drafts, sourceSnapshot: config.sourceSnapshot });
+    const result = replay.regretCase ? runCounterfactuals([replay.regretCase], config) : [];
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
 
   const output = resolve(config.output || join("outputs", "monte-carlo", `${config.label}-seed-${config.seed}-${config.drafts}`));
   mkdirSync(output, { recursive: true });
@@ -188,18 +207,17 @@ async function main() {
   ].map((key) => [key, []]));
 
   const summary = await runMonteCarlo(config, {
-    onTrial(record) {
+    async onTrial(record) {
       const compact = compactTrialRecord(record);
-      const line = `${JSON.stringify(compact)}\n`;
-      if (record.split === "holdout" && !config.exposeHoldout) sealedStream.write(line);
-      else publicStream.write(line);
+      if (record.split === "holdout" && !config.exposeHoldout) await writeJsonLine(sealedStream, compact);
+      else await writeJsonLine(publicStream, compact);
       const baselineRecord = baseline?.get(`${record.format}:${record.trialIndex}`);
       if (baselineRecord) {
         for (const key of Object.keys(pairedValues)) pairedValues[key].push(Number(record.metrics[key]) - Number(baselineRecord.metrics[key]));
       }
     },
-    onFailure(failure) {
-      failureStream.write(`${JSON.stringify(failure)}\n`);
+    async onFailure(failure) {
+      await writeJsonLine(failureStream, failure);
     },
     onProgress({ completed, total }) {
       process.stdout.write(`Monte Carlo progress: ${completed.toLocaleString()}/${total.toLocaleString()} drafts\n`);

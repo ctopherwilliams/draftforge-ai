@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "seed": 20260817,
+  "sourceSnapshotDigest": "1a6c36e176bf602d584661a7936f3ac4683fe84ebb78eef8e22540e6a7fef896",
+  "fullDraftGate": {
+    "snakeDrafts": 20,
+    "salaryCapDrafts": 20,
+    "snakeSelections": 2560,
+    "salaryCapSales": 2560,
+    "failures": 0
+  },
+  "monteCarlo": {
+    "draftsPerFormat": 10000,
+    "completedDrafts": 20000,
+    "publicDrafts": 16000,
+    "sealedHoldoutDrafts": 4000,
+    "failureCount": 0,
+    "hardViolationCount": 0,
+    "determinismDigest": "a32f3dba653f1ac0022180e93c71399c4e09ec17d9fe4504aab42ad563e6a76a",
+    "publicMetrics": {
+      "startingLineupProjectionMean": 2282.7419314843123,
+      "startingLineupProjectionP25": 2013.7760631668777,
+      "totalProjectionMean": 3396.203745362079,
+      "vorpMean": 1370.668803182595,
+      "objectiveMean": 2547.691653785065,
+      "objectiveP25": 2162.5659535149634,
+      "remainingBudgetEfficiencyMean": 0.915054672768168
+    }
+  },
+  "counterfactualAudit": {
+    "cases": 10,
+    "salaryCapCases": 10,
+    "bidOrTargetPreferred": 5,
+    "passOrDrainPreferred": 5,
+    "safetyViolations": 0,
+    "decision": "No production strategy change accepted because the top regret cases split evenly between opposite actions across discovery and validation."
+  },
+  "dataBoundary": {
+    "fullFiveSourceCoveragePercent": 39.2857,
+    "sleeperAcquisitionObservations": 0,
+    "requiredNextEvidence": [
+      "Fresher player-level five-source coverage beyond the current 39.29 percent",
+      "Observed authenticated ESPN room bid and pass outcomes for early salary-cap decisions",
+      "A snapshot containing corroborated sleeper candidates so sleeper timing has non-zero support"
+    ]
+  },
+  "acceptedProductionStrategyChanges": []
+}

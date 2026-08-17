@@ -1,4 +1,112 @@
-# DraftForge Monte Carlo stress test — 2026-08-14
+# DraftForge Monte Carlo stress tests
+
+## Independent mission-control verification seed
+
+After the mission-control visual rebuild, the frozen production engine completed the explicit 20-draft gate for each format: 20 snake drafts (2,560 selections) and 20 salary-cap drafts (2,560 sales), with no incomplete rosters or invariant failures.
+
+An independent `20260817` campaign then completed 10,000 snake and 10,000 salary-cap simulations against the same immutable authenticated five-source snapshot. The public discovery and validation set contained 16,000 drafts and the 4,000 holdout drafts remained sealed. All hard-invariant and simulation-error counts were zero. The deterministic digest was `a32f3dba653f1ac0022180e93c71399c4e09ec17d9fe4504aab42ad563e6a76a`.
+
+| Public metric | Mean | P25 |
+| --- | ---: | ---: |
+| Starting-lineup projection | 2282.74 | 2013.78 |
+| Total projection | 3396.20 | 2930.24 |
+| VORP | 1370.67 | 1134.03 |
+| Composite objective | 2547.69 | 2162.57 |
+| Remaining-budget efficiency | 0.9151 | 0.8548 |
+
+The ten largest regret cases were all salary-cap contexts. Exact five-way counterfactual continuations produced an even split: bid/target was best in five cases and pass/drain was best in five. Every branch remained legal, but the opposing outcomes occurred across both discovery and validation. A global bid, pass, ceiling, or nomination-policy change would therefore be test-fitting, so no production strategy change was accepted.
+
+The remaining improvement boundary is now data rather than an uncovered deterministic rule. Only 39.29% of rosterable players have full five-source player-level coverage, this snapshot produced zero qualifying corroborated sleeper observations, and the synthetic rooms cannot supply observed human bid/pass response curves. The next justified tuning cycle requires fresher, denser five-source player coverage plus authenticated ESPN auction outcome telemetry. Draft actions continue to fail closed when required live source coverage is incomplete.
+
+```bash
+node --test --test-concurrency=1 tests/full-draft-simulation.test.mjs
+
+npm run simulate:monte-carlo -- --drafts 10000 --seed 20260817 --snapshot snapshots/intelligence/source-v1-2026-08-15T03-23-31.378Z-ppr-12t-1a6c36e176bf.json --skip-counterfactuals --output outputs/monte-carlo/mission-control-final-seed-20260817-10000
+
+npm run simulate:monte-carlo -- --drafts 10000 --seed 20260817 --snapshot snapshots/intelligence/source-v1-2026-08-15T03-23-31.378Z-ppr-12t-1a6c36e176bf.json --counterfactual-replay salary-cap:1409
+```
+
+Machine-readable evidence is tracked in `simulation/evidence/mission-control-verification-20260817.json`.
+
+## 2026-08-16 live-snapshot UI and engine validation
+
+### Result
+
+The rebuilt snake and salary-cap command center was validated first, then the unchanged production engine completed a new seeded campaign using the sanitized authenticated ESPN five-source snapshot. The baseline completed 10,000 snake and 10,000 salary-cap drafts with seed `20260816`; 6,000 discovery, 2,000 validation, and 2,000 untouched holdout trials were assigned per format. Eighty percent used the saved ESPN league settings and twenty percent used seeded ESPN-compatible adversarial variants.
+
+All 20,000 baseline drafts and the separate 4,000-draft holdout exposure completed. There were zero duplicate players, incomplete rosters, unnecessary second K/DST selections, position-cap violations, salary violations, reserve violations, max-bid violations, missing mandatory starters, or simulation errors. The exposed holdout reproduced every baseline metric exactly with zero paired deltas.
+
+This is strong evidence for legality, determinism, and robustness under the modeled rooms. It is not proof of perfect or globally optimal draft decisions.
+
+### UI outcome
+
+- One persistent operations rail now consolidates league, progress, strategy, five-source health, and exact ESPN connection state.
+- The primary card begins with one large `DO THIS NOW` command and a distinct `ACTION READY`, `PREPARED`, or `LOCKED` state.
+- Salary-cap mode makes the current offer, fair value, hard ceiling, reserve floor, spendable runway, and `$1 × open slots` reserve visible before secondary explanation.
+- Roster needs remain prominent and sticky on desktop; opponent leverage, reasoning, source detail, and recent activity use progressive disclosure.
+- Safe disconnected Snake and Salary cap previews support visual inspection without authorizing an ESPN action.
+- Desktop, tablet, and 390-pixel mobile checks showed no horizontal overflow. All existing action callbacks and fail-closed guards remain unchanged.
+
+### Live source evidence
+
+The immutable snapshot digest is `1a6c36e176bf602d584661a7936f3ac4683fe84ebb78eef8e22540e6a7fef896`, captured `2026-08-15T03:23:31.378Z`. It contains 500 ESPN players plus fresh FFC, MFL, Tradyr, and GNG inputs. At least four sources covered 43.45% of the rosterable board and all five covered 39.29%; the production decision path still fails closed unless its required current five-source decision snapshot is healthy.
+
+Public discovery and validation aggregates cover 16,000 drafts. The untouched holdout results were:
+
+| Format | Drafts | Lineup mean | Lineup P25 | VORP mean | Objective mean | Objective P25 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Snake | 2,000 | 2529.49 | 2497.12 | 1609.43 | 2928.20 | 2878.99 |
+| Salary cap | 2,000 | 2044.37 | 1937.73 | 1140.99 | 2179.80 | 2057.69 |
+
+Salary-cap holdout remaining-budget efficiency averaged 0.8363 with a 0.7404 P25. Every holdout hard-invariant count was zero.
+
+### Evidence decision
+
+Two high-regret snake outliers suggested that an early QB/OP starter floor could help Zero-RB rooms. A narrow snake-only candidate was reproduced on trials `6465` and `2337`, then tested across all 8,000 paired discovery and validation snake drafts. It improved mean starting-lineup projection by 8.34, reduced regret by 32.84, and raised mean objective by 7.46. It also reduced total projection by 10.31 and VORP by 9.46, increased fragility by 0.37, and lowered paired P25 objective by 9.42. The candidate therefore failed the lower-tail acceptance rule and was removed.
+
+The largest salary-cap outliers were non-acquired nomination proxies. Bounded bid/pass/alternate-ceiling/target/drain continuations were legal but mixed across validation; they did not justify changing the production target-versus-drain policy. No production strategy change was accepted in this cycle.
+
+### Largest remaining regret cases
+
+| Format | Trial | Split | Decision | Evaluation | Regret |
+| --- | ---: | --- | ---: | --- | ---: |
+| Salary cap | 545 | Discovery | 6 | Nomination proxy | 291.68 |
+| Snake | 6465 | Validation | 3 | Acquisition | 279.31 |
+| Salary cap | 264 | Discovery | 3 | Nomination proxy | 258.90 |
+| Snake | 2337 | Discovery | 3 | Acquisition | 256.03 |
+| Salary cap | 2110 | Discovery | 3 | Nomination proxy | 255.22 |
+| Salary cap | 7379 | Validation | 7 | Nomination proxy | 253.48 |
+| Salary cap | 5789 | Discovery | 4 | Nomination proxy | 253.30 |
+| Salary cap | 1373 | Discovery | 6 | Nomination proxy | 252.00 |
+| Salary cap | 7114 | Validation | 3 | Nomination proxy | 251.28 |
+| Salary cap | 6259 | Validation | 8 | Nomination proxy | 249.05 |
+
+Non-acquired nomination proxies remain excluded from aggregate acquisition regret. They are retained to prioritize future target-versus-drain experiments.
+
+### Reproduction
+
+```bash
+npm run snapshot:capture -- --validate snapshots/intelligence/source-v1-2026-08-15T03-23-31.378Z-ppr-12t-1a6c36e176bf.json
+
+npm run simulate:monte-carlo -- --drafts 10000 --seed 20260816 --snapshot snapshots/intelligence/source-v1-2026-08-15T03-23-31.378Z-ppr-12t-1a6c36e176bf.json --skip-counterfactuals --output outputs/monte-carlo/ui-rebuild-baseline-seed-20260816-10000
+
+npm run simulate:monte-carlo -- --drafts 10000 --seed 20260816 --phases holdout --expose-holdout --snapshot snapshots/intelligence/source-v1-2026-08-15T03-23-31.378Z-ppr-12t-1a6c36e176bf.json --compare outputs/monte-carlo/ui-rebuild-baseline-seed-20260816-10000 --skip-counterfactuals --output outputs/monte-carlo/ui-rebuild-final-holdout-seed-20260816-10000
+
+npm run simulate:monte-carlo -- --drafts 10000 --seed 20260816 --snapshot snapshots/intelligence/source-v1-2026-08-15T03-23-31.378Z-ppr-12t-1a6c36e176bf.json --counterfactual-replay snake:6465
+
+npm run lint
+npm test
+```
+
+Machine-readable evidence is tracked in `simulation/evidence/ui-rebuild-20260816.json`. Generated full summaries and reports are under `outputs/monte-carlo/` and remain ignored because the trial ledgers and third-party snapshot are large.
+
+### Remaining weaknesses
+
+- The opponent field is varied but synthetic and cannot model every human room.
+- Snake static-roster win probability saturated near one in this snapshot, so projection, VORP, regret, fragility, and objective are more discriminating for that format.
+- Sleeper acquisition/timing metrics were zero because this captured board did not produce qualifying corroborated sleepers; deterministic sleeper safety tests still pass, but this campaign is not fresh evidence of sleeper upside.
+- Only 39.29% of rosterable players had full five-source player-level coverage. Draft actions still fail closed when the required live decision snapshot is incomplete.
+- Static-roster evaluation intentionally excludes post-draft waivers, trades, lineup management, and injuries.
 
 ## Result
 

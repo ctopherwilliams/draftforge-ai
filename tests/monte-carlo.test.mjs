@@ -6,6 +6,7 @@ import {
   makeConsensusPlayerSnapshot,
   makeLeagueScenario,
   renderMarkdownReport,
+  runCounterfactuals,
   runMonteCarlo,
   simulateDraft,
   splitForTrial,
@@ -84,6 +85,16 @@ test("salary-cap regret excludes nominations DraftForge did not acquire", { time
   assert.equal(result.regretCase.acquired, false);
   assert.ok(result.regretCase.regret > 250);
   assert.ok(result.metrics.decisionRegret < 1_500);
+});
+
+test("one exact regret case can replay its bounded counterfactual branches", { timeout: 30_000 }, () => {
+  const config = { drafts: 100, seed: 20260814 };
+  const baseline = simulateDraft({ format: "snake", baseSeed: config.seed, trialIndex: 3, drafts: config.drafts });
+  const [replay] = runCounterfactuals([baseline.regretCase], config);
+  assert.equal(replay.trialIndex, 3);
+  assert.equal(replay.branches.length, 5);
+  assert.ok(replay.branches.every((branch) => !branch.error));
+  assert.ok(replay.branches.every((branch) => Object.values(branch.violations).every((value) => value === 0)));
 });
 
 test("deep 14-team adversarial rooms retain enough legal late-round inventory", { timeout: 30_000 }, () => {
