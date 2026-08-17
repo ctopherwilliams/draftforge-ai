@@ -919,6 +919,54 @@ export default function Home() {
     return { slot, item };
   });
 
+  // Presentation-only state for the command center. These values describe the
+  // already-computed recommendation and never alter engine ordering or action
+  // authorization.
+  const openRosterRows = rosterRows.filter(({ item }) => !item);
+  const currentReserve = league.draftType === "AUCTION" ? openRosterRows.length : 0;
+  const postWinReserve = Math.max(0, currentReserve - 1);
+  const remainingBudget = league.auctionBudget - spent;
+  const auctionCanBid = league.draftType === "AUCTION"
+    && Boolean(nominated)
+    && !context.leadingBid
+    && ownNominationIntent !== "DRAIN"
+    && nextBid <= (focusPlayer?.maxBid || 0)
+    && bidWindowOpen;
+  const recommendationLocked = !settingsConfirmed || extension !== "connected";
+  const commandLabel = context.autopickActive === true
+    ? "STOPPED — ESPN AUTOPICK ACTIVE"
+    : !sourceCoverageReady
+      ? "LOCKED — REFRESH FIVE SOURCES"
+      : recommendationLocked
+        ? "LOCKED — COMPLETE CHECKLIST"
+    : league.draftType === "SNAKE"
+      ? actionWindowOpen && focusPlayer ? `DRAFT ${focusPlayer.name}` : focusPlayer ? `QUEUE ${focusPlayer.name}` : "WAIT FOR PLAYER POOL"
+      : ownNominationIntent === "DRAIN"
+        ? "PASS — DO NOT PRICE ENFORCE"
+        : context.leadingBid
+          ? "HOLD — YOU ARE LEADING"
+          : nominated && focusPlayer && nextBid > focusPlayer.maxBid
+            ? `PASS — CEILING $${focusPlayer.maxBid}`
+            : auctionCanBid
+              ? `BID $${nextBid}`
+              : nominated
+                ? "WAIT — VERIFY NEXT BID WINDOW"
+              : auctionNomination
+                ? `NOMINATE ${auctionNomination.player.name}`
+                : focusPlayer
+                  ? `TRACK ${focusPlayer.name}`
+                  : "WAIT FOR NOMINATION";
+  const safetyLabel = context.autopickActive === true
+    ? "ESPN Autopick detected — actions stopped"
+    : !sourceCoverageReady
+      ? "Five-source coverage incomplete — actions locked"
+      : actionWindowOpen || auctionCanBid
+        ? "Safe action window verified"
+        : context.inDraftRoom
+          ? "Connected — waiting for a safe action window"
+          : "Open the exact ESPN draft room";
+  const alternatives = liveRecommendations.filter((player) => player.id !== focusPlayer?.id).slice(0, 3);
+
   return <main className="app-shell">
     <header className="topbar">
       <div className="brand"><span className="brand-mark">DF</span><span>DraftForge <b>AI</b></span></div>
@@ -972,39 +1020,62 @@ export default function Home() {
     </section>
 
     <section className="workspace">
+      <aside className="coach-column">
+        {focusPlayer && <section className="recommendation panel" aria-labelledby="decision-title">
+          <div className="decision-head">
+            <div><p className="eyebrow">DO THIS NOW · {league.draftType === "AUCTION" ? "SALARY CAP" : "SNAKE"}</p><h1 id="decision-title">{commandLabel}</h1></div>
+            <span className={`decision-state ${actionWindowOpen || auctionCanBid ? "ready" : "waiting"}`}>{actionWindowOpen || auctionCanBid ? "ACTION READY" : "PREPARED"}</span>
+          </div>
+          {nominated && <p className="auction-live">LIVE NOMINATION · {context.currentBid ? `$${context.currentBid}` : "Opening bid"}{ownNominationIntent ? ` · ${ownNominationIntent}` : ""}</p>}
+          {!nominated && league.draftType === "AUCTION" && auctionNomination && <p className="auction-live">{auctionNomination.intent} NOMINATION · OPEN ${auctionNomination.openingBid}</p>}
+          <div className="decision-hero">
+            <div className="rec-player"><div className={`avatar ${focusPlayer.pos.toLowerCase()}`}>{focusPlayer.name.split(" ").map((part) => part[0]).join("").slice(0, 2)}</div><div><h2>{focusPlayer.name}</h2><p>{focusPlayer.pos} · {focusPlayer.team} <span>Consensus #{focusPlayer.consensusRank || "—"}</span>{focusPlayer.sleeperLabel !== "NONE" && <span className="sleeper-chip">{focusPlayer.sleeperLabel.replace("_", " ")} {focusPlayer.sleeperScore}/100</span>}</p></div></div>
+            <div className="command-number"><span>{league.draftType === "AUCTION" ? nominated ? "NEXT LEGAL BID" : "OPENING BID" : "ESPN CLOCK"}</span><strong>{league.draftType === "AUCTION" ? `$${nominated ? nextBid : auctionNomination?.openingBid || 1}` : Number.isFinite(remainingSeconds) ? `${remainingSeconds}s` : "—"}</strong><small>{league.draftType === "AUCTION" ? `Walk at $${focusPlayer.maxBid}` : `Round ${currentRound} · Pick ${currentPick}`}</small></div>
+          </div>
+          <div className={`decision-safety ${context.autopickActive === true || !sourceCoverageReady ? "blocked" : ""}`} role="status"><span aria-hidden="true">{context.autopickActive === true || !sourceCoverageReady ? "!" : "✓"}</span><b>{safetyLabel}</b></div>
+          <div className="decision-metrics">
+            {league.draftType === "AUCTION" ? <>
+              <div><span>Current offer</span><b>{context.currentBid ? `$${context.currentBid}` : "—"}</b></div>
+              <div><span>Fair value</span><b>${Math.round(focusPlayer.fairValue)}</b></div>
+              <div className="metric-emphasis"><span>Hard ceiling</span><b>${focusPlayer.maxBid}</b></div>
+              <div><span>{nominated ? "After next bid" : "Reserve floor"}</span><b>{nominated ? `$${Math.max(0, remainingBudget - nextBid)} left` : `$${currentReserve}`}</b><small>{nominated ? `$${postWinReserve} reserve required` : "$1 per open slot"}</small></div>
+            </> : <>
+              <div><span>ADP edge</span><b>{`${focusPlayer.adpValue >= 0 ? "+" : ""}${focusPlayer.adpValue.toFixed(1)}`}</b></div>
+              <div><span>VORP</span><b>+{focusPlayer.vorp.toFixed(1)}</b></div>
+              <div><span>Tier drop</span><b>{focusPlayer.scarcity.toFixed(1)}</b></div>
+              <div><span>Source confidence</span><b>{focusPlayer.confidence}%</b></div>
+            </>}
+          </div>
+          {league.draftType === "SNAKE" ? <button className="draft-button full" onClick={() => submit(focusPlayer, false, "SELECT")} disabled={!settingsConfirmed || extension !== "connected" || !actionWindowOpen}>Draft {focusPlayer.name} in ESPN<small>{Number.isFinite(remainingSeconds) ? `${remainingSeconds}s remaining` : "Waiting for verified clock"}</small></button> : <div className="pick-actions"><button className="draft-button" onClick={() => auctionNomination && submit(auctionNomination.player, false, "NOMINATE", auctionNomination.openingBid, auctionNomination.intent)} disabled={!settingsConfirmed || extension !== "connected" || !actionWindowOpen || Boolean(nominated || context.nominatedPlayer || Number(context.currentBid || 0) > 0) || !auctionNomination}>Nominate {auctionNomination?.intent === "DRAIN" ? "budget drain" : "target"}<small>Open ${auctionNomination?.openingBid || 1}</small></button><button className="bid-button" onClick={() => submit(focusPlayer, false, "BID", nextBid)} disabled={!settingsConfirmed || extension !== "connected" || !nominated || context.leadingBid || ownNominationIntent === "DRAIN" || nextBid > focusPlayer.maxBid || !bidWindowOpen}>{ownNominationIntent === "DRAIN" ? "Pass — no price enforcing" : context.leadingBid ? "Hold — already leading" : nextBid > focusPlayer.maxBid ? "Pass — ceiling reached" : `Bid $${nextBid}`}<small>{ownNominationIntent === "DRAIN" ? "Decoy nomination" : `Hard stop $${focusPlayer.maxBid}`}</small></button></div>}
+          {!settingsConfirmed && <small className="locked-note">Confirm imported league rules to unlock ESPN actions.</small>}
+          <div className="confidence"><div><span>Decision confidence · {focusPlayer.sourceCount || 1}/5 sources</span><b>{focusPlayer.confidence}%</b></div><div className="confidence-track"><i style={{ width: `${focusPlayer.confidence}%` }} /></div></div>
+          <details className="decision-details"><summary>Why this is the move</summary><p className="reason">{describeRecommendation(focusPlayer, league, strategy)}</p>{league.draftType === "AUCTION" && focusPlayer.sourceAuctions && <div className="source-values">{Object.entries(focusPlayer.sourceAuctions).map(([source, amount]) => <span key={source}>{source.toUpperCase()} <b>${Math.round(amount)}</b></span>)}</div>}<ul className="reason-list">{focusPlayer.reasons.slice(0, 4).map((reason) => <li key={reason}>{reason}</li>)}</ul></details>
+        </section>}
+        <section className="on-clock-card panel"><span className={actionWindowOpen ? "pulse" : ""} aria-hidden="true">●</span><div><b>{actionWindowOpen ? `Verified ESPN action window · ${remainingSeconds}s` : context.onClock ? "ESPN clock too short — nothing will be sent" : context.inDraftRoom ? "Exact ESPN draft room connected" : "Open the exact ESPN draft room"}</b><small>{autoDraft ? "Auto-Draft is armed only for this verified league and tab." : "Guided mode: you approve every pick, nomination, and bid."}</small></div></section>
+      </aside>
+
+      <aside className="roster-panel panel">
+        <div className="roster-head"><div><p className="eyebrow">ROSTER CONTROL</p><h2>Team build</h2></div><span>{myRoster.length} / {league.rosterSize}</span></div>
+        <div className="needs-block"><div><span>Open roster spots</span><b>{openRosterRows.length}</b></div><div className="needs-chips">{openRosterRows.slice(0, 8).map(({ slot }, index) => <span key={`${slot}-${index}`}>{slot}</span>)}{openRosterRows.length > 8 && <span>+{openRosterRows.length - 8}</span>}</div></div>
+        {league.draftType === "AUCTION" && <>
+          <div className="budget-card"><div><span>Remaining</span><b>${remainingBudget}</b></div><div><span>Protected reserve</span><b>${currentReserve}</b><small>$1 per open slot</small></div><div><span>Room market</span><b>{auctionPlan.roomInflation.toFixed(2)}×</b><small>{Math.round(auctionPlan.knownSaleCoverage * 100)}% exact sales</small></div></div>
+          <div className="budget-plan-mini">{Object.entries(auctionPlan.positionBudgets).map(([position, budget]) => <span key={position}>{position} <b>${auctionUsage.usage[position] || 0} / ${budget}</b></span>)}{auctionUsage.reallocated > 0 && <span>VALUE <b>${auctionUsage.reallocated} reallocated</b></span>}</div>
+          <details className="secondary-details"><summary>Opponent leverage <span>${auctionPlan.opponentSpend} spent</span></summary><div className="opponent-budgets">{[...auctionPlan.opponents].sort((left, right) => right.maxOffer - left.maxOffer).map((opponent) => <span key={opponent.teamId}><em>{opponent.name}</em><small>{opponent.players} players · ${opponent.spent} spent · max ${opponent.maxOffer} · needs {Object.entries(opponent.openStarters).filter(([, count]) => count > 0).map(([position, count]) => `${position}${count > 1 ? count : ""}`).join("/") || "depth"}</small></span>)}</div></details>
+        </>}
+        <div className="roster-list">{rosterRows.map(({ slot, item }, index) => <div className={`roster-row ${item ? "filled" : ""}`} key={`${slot}-${index}`}><span>{slot}</span>{item ? <><div><b>{item.player.name}</b><small>{item.player.team}{item.pick.amount ? ` · $${item.pick.amount}` : ""}</small></div><i className={`pos ${item.player.pos.toLowerCase()}`}>{item.player.pos}</i></> : <em>Open</em>}</div>)}</div>
+        <details className="secondary-details activity-details"><summary>Recent ESPN activity <span>{authoritativePicks.length} picks</span></summary><div className="draft-log">{authoritativePicks.slice(-5).reverse().map((pick) => { const player = players.find((item) => item.id === pick.playerId); return <div key={`${pick.overall}-${pick.playerId}`}><span>{pick.overall}</span><b>{player?.name || `Player ${pick.playerId}`}</b><small>{pick.amount ? `$${pick.amount}` : `Team ${pick.teamId}`}</small></div>; })}{!authoritativePicks.length && <small>No picks imported yet.</small>}</div></details>
+      </aside>
+
       <section className="players-panel panel">
-        <div className="panel-head"><div><p className="eyebrow">LIVE ESPN PLAYER POOL</p><h1>{league.draftType === "AUCTION" ? "Find the next value." : "Make the next pick."}</h1></div><label className="search-box">⌕<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search player or team" /></label></div>
-        <div className="filters">{FILTERS.map((item) => <button key={item} className={filter === item ? "active" : ""} onClick={() => setFilter(item)}>{item}</button>)}</div>
-        <div className="table-head"><span>#</span><span>PLAYER</span><span>POS</span><span>{league.draftType === "AUCTION" ? "FAIR $" : "ADP"}</span><span>PROJ</span><span>MODEL</span></div>
-        <div className="player-list">{visible.slice(0, 150).map((player, index) => <button key={player.id} className={`player-row ${selected?.id === player.id ? "selected" : ""}`} onClick={() => setSelectedId(player.id)}>
+        <div className="panel-head"><div><p className="eyebrow">NEXT BEST OPTIONS</p><h2>Live player board</h2></div><label className="search-box"><span aria-hidden="true">⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search player or team" aria-label="Search player or team" /></label></div>
+        {alternatives.length > 0 && <div className="alternatives" aria-label="Top alternatives">{alternatives.map((player, index) => <button key={player.id} onClick={() => setSelectedId(player.id)}><span>#{index + 2} alternative</span><b>{player.name}</b><small>{player.pos} · {league.draftType === "AUCTION" ? `$${Math.round(player.fairValue)} fair` : `ADP ${player.adp < 900 ? player.adp.toFixed(1) : "—"}`}</small></button>)}</div>}
+        <div className="filters" aria-label="Filter player board">{FILTERS.map((item) => <button key={item} className={filter === item ? "active" : ""} onClick={() => setFilter(item)} aria-pressed={filter === item}>{item}</button>)}</div>
+        <div className="table-head" aria-hidden="true"><span>#</span><span>PLAYER</span><span>POS</span><span>{league.draftType === "AUCTION" ? "FAIR $" : "ADP"}</span><span>PROJ</span><span>MODEL</span></div>
+        <div className="player-list">{visible.slice(0, 150).map((player, index) => <button key={player.id} className={`player-row ${selected?.id === player.id ? "selected" : ""}`} onClick={() => setSelectedId(player.id)} aria-pressed={selected?.id === player.id}>
           <span className="rank">{index + 1}</span><span className="player-name"><span><b>{player.name}</b><small>{player.team}{player.injured ? " · Injury flag" : ""}{player.sleeperLabel !== "NONE" ? ` · ${player.sleeperLabel.replace("_", " ")} ${player.sleeperScore}` : ""}</small></span></span><i className={`pos ${player.pos.toLowerCase()}`}>{player.pos}</i><span>{league.draftType === "AUCTION" ? `$${Math.round(player.auction)}` : player.adp < 900 ? player.adp.toFixed(1) : "—"}</span><span>{player.projected ? player.projected.toFixed(1) : "—"}</span><span className="model-score">{Math.round(player.score)}</span>
           {index === 0 && <em className="best-badge">BEST FIT</em>}
         </button>)}</div>
       </section>
-
-      <aside className="coach-column">
-        {focusPlayer && <section className="recommendation panel">
-          <div className="rec-label"><span>◆</span> RECOMMENDATION · {league.draftType}</div>
-          {nominated && <p className="auction-live">LIVE NOMINATION · {context.currentBid ? `$${context.currentBid}` : "Opening bid"}{ownNominationIntent ? ` · ${ownNominationIntent}` : ""}</p>}
-          {!nominated && league.draftType === "AUCTION" && auctionNomination && <p className="auction-live">{auctionNomination.intent} NOMINATION · OPEN ${auctionNomination.openingBid} · {auctionNomination.reason}</p>}
-          <div className="rec-player"><div className={`avatar ${focusPlayer.pos.toLowerCase()}`}>{focusPlayer.name.split(" ").map((part) => part[0]).join("").slice(0, 2)}</div><div><h2>{focusPlayer.name}</h2><p>{focusPlayer.pos} · {focusPlayer.team} <span>Consensus #{focusPlayer.consensusRank || "—"}</span>{focusPlayer.sleeperLabel !== "NONE" && <span className="sleeper-chip">{focusPlayer.sleeperLabel.replace("_", " ")} {focusPlayer.sleeperScore}/100</span>}</p></div></div>
-          <div className="confidence"><div><span>Decision confidence · {focusPlayer.sourceCount || 1}/5 sources</span><b>{focusPlayer.confidence}%</b></div><div className="confidence-track"><i style={{ width: `${focusPlayer.confidence}%` }} /></div></div>
-          <p className="reason">{describeRecommendation(focusPlayer, league, strategy)}</p>
-          {league.draftType === "AUCTION" && focusPlayer.sourceAuctions && <div className="source-values">{Object.entries(focusPlayer.sourceAuctions).map(([source, amount]) => <span key={source}>{source.toUpperCase()} <b>${Math.round(amount)}</b></span>)}</div>}
-          <div className="rec-stats"><div><span>VORP</span><b>+{focusPlayer.vorp.toFixed(1)}</b></div><div><span>TIER DROP</span><b>{focusPlayer.scarcity.toFixed(1)}</b></div>{league.draftType === "AUCTION" ? <><div><span>FAIR</span><b>${Math.round(focusPlayer.fairValue)}</b></div><div><span>TARGET / WALK</span><b>${focusPlayer.targetBid} / ${focusPlayer.maxBid}</b></div></> : <div><span>ADP EDGE</span><b>{`${focusPlayer.adpValue >= 0 ? "+" : ""}${focusPlayer.adpValue.toFixed(1)}`}</b></div>}</div>
-          <ul className="reason-list">{focusPlayer.reasons.slice(0, 4).map((reason) => <li key={reason}>{reason}</li>)}</ul>
-          {league.draftType === "SNAKE" ? <button className="draft-button full" onClick={() => submit(focusPlayer, false, "SELECT")} disabled={!settingsConfirmed || extension !== "connected" || !actionWindowOpen}>Select & submit pick in ESPN</button> : <div className="pick-actions"><button className="draft-button" onClick={() => auctionNomination && submit(auctionNomination.player, false, "NOMINATE", auctionNomination.openingBid, auctionNomination.intent)} disabled={!settingsConfirmed || extension !== "connected" || !actionWindowOpen || Boolean(nominated || context.nominatedPlayer || Number(context.currentBid || 0) > 0) || !auctionNomination}>Nominate {auctionNomination?.intent === "DRAIN" ? "budget drain" : "target"}<small>open ${auctionNomination?.openingBid || 1}</small></button><button className="bid-button" onClick={() => submit(focusPlayer, false, "BID", nextBid)} disabled={!settingsConfirmed || extension !== "connected" || !nominated || context.leadingBid || ownNominationIntent === "DRAIN" || nextBid > focusPlayer.maxBid || !bidWindowOpen}>{ownNominationIntent === "DRAIN" ? "Pass — no price enforcing" : `Bid $${nextBid}`}<small>{ownNominationIntent === "DRAIN" ? "decoy nomination" : `walk at $${focusPlayer.maxBid}`}</small></button></div>}
-          {!settingsConfirmed && <small className="locked-note">Confirm imported league rules to unlock ESPN actions.</small>}
-        </section>}
-        <section className="on-clock-card panel"><span className={actionWindowOpen ? "pulse" : ""}>●</span><div><b>{actionWindowOpen ? `Your ESPN action is ready · ${remainingSeconds}s left` : context.onClock ? "ESPN clock is too short — no action sent" : context.inDraftRoom ? "Draft room connected" : "Open the ESPN draft room"}</b><small>{autoDraft ? "Auto-Draft will submit the top legal recommendation only inside the safe window." : "You approve every pick, nomination, and bid here."}</small></div></section>
-      </aside>
-
-      <aside className="roster-panel panel">
-        <div className="roster-head"><div><p className="eyebrow">MY ESPN TEAM</p><h2>Roster & budget</h2></div><span>{myRoster.length}/{league.rosterSize}</span></div>
-        {league.draftType === "AUCTION" && <><div className="budget-card"><div><span>Remaining</span><b>${league.auctionBudget - spent}</b></div><div><span>Remaining-value market</span><b>{auctionPlan.roomInflation.toFixed(2)}×</b><small>{Math.round(auctionPlan.knownSaleCoverage * 100)}% exact sales</small></div><div><span>Opponent spend</span><b>${auctionPlan.opponentSpend}</b></div></div><div className="budget-plan-mini">{Object.entries(auctionPlan.positionBudgets).map(([position, budget]) => <span key={position}>{position} <b>${auctionUsage.usage[position] || 0}/${budget}</b></span>)}{auctionUsage.reallocated > 0 && <span>VALUE <b>${auctionUsage.reallocated} reallocated</b></span>}</div><div className="opponent-budgets"><b>Opponent leverage</b>{auctionPlan.opponents.sort((left, right) => right.maxOffer - left.maxOffer).map((opponent) => <span key={opponent.teamId}><em>{opponent.name}</em><small>{opponent.players} players · ${opponent.spent} spent · max ${opponent.maxOffer} · needs {Object.entries(opponent.openStarters).filter(([, count]) => count > 0).map(([position, count]) => `${position}${count > 1 ? count : ""}`).join("/") || "depth"}</small></span>)}</div></>}
-        <div className="roster-list">{rosterRows.map(({ slot, item }, index) => <div className={`roster-row ${item ? "filled" : ""}`} key={`${slot}-${index}`}><span>{slot}</span>{item ? <><div><b>{item.player.name}</b><small>{item.player.team}{item.pick.amount ? ` · $${item.pick.amount}` : ""}</small></div><i className={`pos ${item.player.pos.toLowerCase()}`}>{item.player.pos}</i></> : <em>Open</em>}</div>)}</div>
-        <div className="draft-log"><p>RECENT ESPN ACTIVITY</p>{authoritativePicks.slice(-5).reverse().map((pick) => { const player = players.find((item) => item.id === pick.playerId); return <div key={`${pick.overall}-${pick.playerId}`}><span>{pick.overall}</span><b>{player?.name || `Player ${pick.playerId}`}</b><small>{pick.amount ? `$${pick.amount}` : `Team ${pick.teamId}`}</small></div>; })}{!authoritativePicks.length && <small>No picks imported yet.</small>}</div>
-      </aside>
     </section>
 
     {autoWarning && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Enable Auto-Draft"><div className="warning-modal"><span className="warning-icon">!</span><h2>Live-room checklist passed</h2><p>The extension is bound to the exact imported ESPN draft tab and the local control room completed a no-click recommendation dry run.</p><ul>{liveChecks.map((check) => <li key={check.label}>✓ {check.label}</li>)}<li>{league.draftType === "AUCTION" ? "Offers rise by exactly $1 and stop at the lower of fair value, portfolio walk-away, pacing guardrail, and ESPN's legal maximum; DraftForge never rebids on its own DRAIN nomination." : "Each pick is re-ranked against the live remaining pool and positional tier cliffs."}</li><li>Turn Auto-Draft off at any time.</li></ul><div><button className="secondary-button" onClick={() => dispatchUi({ type: "set", key: "autoWarning", value: false })}>Cancel</button><button className="danger-button" onClick={confirmEnableAutoDraft}>Enable Auto-Draft</button></div></div></div>}
