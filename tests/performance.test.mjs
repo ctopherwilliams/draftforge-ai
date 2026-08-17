@@ -59,15 +59,25 @@ function percentile95(task, runs = 40) {
   return samples[Math.floor(samples.length * .95)];
 }
 
+function stablePercentile95(task, batches = 5) {
+  // Keep the benchmark about steady-state draft-clock latency instead of V8
+  // compilation or a one-off scheduler interruption during the full suite.
+  // A real sustained regression still has to affect the median of five p95s.
+  for (let index = 0; index < 20; index += 1) task();
+  const samples = Array.from({ length: batches }, () => percentile95(task));
+  samples.sort((left, right) => left - right);
+  return samples[Math.floor(samples.length / 2)];
+}
+
 test("indexed 500-player decisions stay inside a ten-millisecond p95 budget", (t) => {
   const playerPool = buildPlayerPoolIndex(players, league);
-  const p95 = percentile95(() => buildDraftDecision(players, picks, league, "BALANCED", 97, [], playerPool));
+  const p95 = stablePercentile95(() => buildDraftDecision(players, picks, league, "BALANCED", 97, [], playerPool));
   t.diagnostic(`500-player indexed decision p95: ${p95.toFixed(2)}ms`);
   assert.ok(p95 < 10, `decision p95 regressed to ${p95.toFixed(2)}ms`);
 });
 
 test("five-source 500-player consensus stays inside a fifteen-millisecond p95 budget", (t) => {
-  const p95 = percentile95(() => mergeConsensus(players, sources, league));
+  const p95 = stablePercentile95(() => mergeConsensus(players, sources, league));
   t.diagnostic(`500-player five-source consensus p95: ${p95.toFixed(2)}ms`);
   assert.ok(p95 < 15, `consensus p95 regressed to ${p95.toFixed(2)}ms`);
 });

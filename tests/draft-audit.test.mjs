@@ -1,0 +1,165 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { GET, POST } from "../app/api/draft-day/route.ts";
+import {
+  evaluateDraftAuditSnapshot,
+  isDraftAuditSnapshot,
+} from "../app/lib/draft-audit.ts";
+
+const roster = [
+  [1, "Quarterback One", "QB", 8],
+  [2, "Quarterback Two", "QB", 2],
+  [3, "Running Back One", "RB", 38],
+  [4, "Running Back Two", "RB", 24],
+  [5, "Running Back Three", "RB", 4],
+  [6, "Receiver One", "WR", 42],
+  [7, "Receiver Two", "WR", 28],
+  [8, "Receiver Three", "WR", 8],
+  [9, "Receiver Four", "WR", 4],
+  [10, "Receiver Five", "WR", 2],
+  [11, "Tight End One", "TE", 12],
+  [12, "Tight End Two", "TE", 2],
+  [-16013, "Defense One", "DST", 1],
+  [14, "Kicker One", "K", 1],
+].map(([playerId, playerName, position, amount]) => ({ playerId, playerName, position, amount }));
+
+function snapshot(overrides = {}) {
+  return {
+    schemaVersion: 1,
+    capturedAt: "2026-08-17T20:00:00.000Z",
+    league: {
+      id: "audit-verified-1",
+      teamId: 7,
+      draftType: "AUCTION",
+      size: 12,
+      rosterSize: 14,
+      auctionBudget: 200,
+      lineupSlotCounts: { "0": 1, "2": 1, "4": 1, "7": 1, "16": 1, "17": 1, "20": 6, "23": 2 },
+      positionLimits: { "1": 2, "2": 3, "3": 5, "4": 2, "16": 1, "17": 1 },
+    },
+    binding: { tabId: 1234 },
+    safety: {
+      settingsConfirmed: true,
+      liveChecklistReady: true,
+      extensionConnected: true,
+      inDraftRoom: true,
+      soundMuted: true,
+      autopickActive: false,
+      autoDraft: false,
+      sourceCoverage: 5,
+      actionState: "Draft complete: ESPN confirmed every roster spot.",
+    },
+    draft: {
+      totalPicks: 168,
+      appRoster: roster,
+      espnRoster: roster,
+    },
+    ...overrides,
+  };
+}
+
+test("completed exact ESPN/app audit is final-ready", () => {
+  const candidate = snapshot();
+  assert.equal(isDraftAuditSnapshot(candidate), true);
+  assert.deepEqual(evaluateDraftAuditSnapshot(candidate), {
+    complete: true,
+    finalReady: true,
+    parity: true,
+    openSlots: 0,
+    spent: 176,
+    remainingBudget: 24,
+    hardViolations: [],
+    finalViolations: [],
+  });
+});
+
+test("audit rejects duplicate specialists, position caps, and reserve violations", () => {
+  const unsafeRoster = [
+    ...roster.slice(0, 3),
+    { playerId: 13, playerName: "Defense One", position: "DST", amount: 80 },
+    { playerId: 15, playerName: "Defense Two", position: "DST", amount: 80 },
+  ];
+  const candidate = snapshot({
+    draft: { totalPicks: 50, appRoster: unsafeRoster, espnRoster: unsafeRoster },
+  });
+  const evaluation = evaluateDraftAuditSnapshot(candidate);
+  assert.equal(evaluation.complete, false);
+  assert.ok(evaluation.hardViolations.includes("UNNECESSARY_SECOND_DST"));
+  assert.ok(evaluation.hardViolations.includes("POSITION_CAP_DST"));
+  assert.ok(evaluation.hardViolations.includes("ONE_DOLLAR_RESERVE_VIOLATION"));
+});
+
+test("audit requires the exact live extension room at final verification", () => {
+  const candidate = snapshot({
+    safety: { ...snapshot().safety, extensionConnected: false, inDraftRoom: false },
+  });
+  const evaluation = evaluateDraftAuditSnapshot(candidate);
+  assert.ok(evaluation.hardViolations.includes("EXTENSION_NOT_CONNECTED"));
+  assert.ok(evaluation.hardViolations.includes("NOT_IN_DRAFT_ROOM"));
+  assert.equal(evaluation.finalReady, false);
+});
+
+test("audit requires exact roster-and-price parity and automatic shutdown", () => {
+  const espnRoster = roster.map((entry) => entry.playerId === 6 ? { ...entry, amount: entry.amount + 1 } : entry);
+  const candidate = snapshot({
+    safety: { ...snapshot().safety, autoDraft: true },
+    draft: { totalPicks: 168, appRoster: roster, espnRoster },
+  });
+  const evaluation = evaluateDraftAuditSnapshot(candidate);
+  assert.equal(evaluation.parity, false);
+  assert.ok(evaluation.finalViolations.includes("ESPN_APP_ROSTER_MISMATCH"));
+  assert.ok(evaluation.finalViolations.includes("AUTO_DRAFT_NOT_SHUT_DOWN"));
+  assert.equal(evaluation.finalReady, false);
+});
+
+test("audit rejects a complete roster that cannot fill every ESPN starter slot", () => {
+  const noQuarterbacks = roster.map((entry) => entry.position === "QB" ? { ...entry, position: "WR" } : entry);
+  const candidate = snapshot({
+    league: { ...snapshot().league, positionLimits: { ...snapshot().league.positionLimits, "3": 10 } },
+    draft: { totalPicks: 168, appRoster: noQuarterbacks, espnRoster: noQuarterbacks },
+  });
+  const evaluation = evaluateDraftAuditSnapshot(candidate);
+  assert.ok(evaluation.finalViolations.includes("MANDATORY_STARTER_MISSING"));
+  assert.equal(evaluation.finalReady, false);
+});
+
+test("loopback dashboard can record an audit that terminal reads back", async () => {
+  const candidate = snapshot({ capturedAt: "2026-08-17T20:00:01.000Z" });
+  const recorded = await POST(new Request("http://localhost:3000/api/draft-day", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: "http://localhost:3000" },
+    body: JSON.stringify({ operation: "AUDIT", audit: candidate }),
+  }));
+  assert.equal(recorded.status, 200);
+  assert.equal((await recorded.json()).evaluation.finalReady, true);
+
+  const read = await GET(new Request("http://localhost:3000/api/draft-day?leagueId=audit-verified-1&teamId=7"));
+  assert.equal(read.status, 200);
+  const result = await read.json();
+  assert.equal(result.snapshot.league.id, "audit-verified-1");
+  assert.equal(result.evaluation.finalReady, true);
+});
+
+test("non-loopback pages cannot write or read the local certification ledger", async () => {
+  const deniedWrite = await POST(new Request("http://localhost:3000/api/draft-day", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: "https://example.com" },
+    body: JSON.stringify({ operation: "AUDIT", audit: snapshot() }),
+  }));
+  assert.equal(deniedWrite.status, 403);
+
+  const deniedRead = await GET(new Request("http://localhost:3000/api/draft-day", {
+    headers: { origin: "https://fantasy.espn.com" },
+  }));
+  assert.equal(deniedRead.status, 403);
+
+  const deniedLanRead = await GET(new Request("http://192.168.1.25:3000/api/draft-day"));
+  assert.equal(deniedLanRead.status, 403);
+
+  const deniedLanWrite = await POST(new Request("http://192.168.1.25:3000/api/draft-day", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: "http://localhost:3000" },
+    body: JSON.stringify({ operation: "AUDIT", audit: snapshot() }),
+  }));
+  assert.equal(deniedLanWrite.status, 403);
+});

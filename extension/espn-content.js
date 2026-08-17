@@ -465,6 +465,7 @@ function visiblePlayerSearchInput() {
 function preflightAction(action, context) {
   if (!context.inDraftRoom) return { ok: false, code: "NOT_IN_DRAFT_ROOM", message: "Open the ESPN draft room first." };
   if (context.autopickActive) return { ok: false, code: "AUTOPICK_ACTIVE", message: "ESPN Autopick is active. DraftForge stopped without sending another action." };
+  if (context.soundMuted !== true) return { ok: false, code: "SOUND_NOT_MUTED", message: "ESPN draft sound is still on. DraftForge stopped before sending the action." };
   if (action.expectedLeagueId && String(context.leagueId) !== String(action.expectedLeagueId)) {
     return { ok: false, code: "WRONG_LEAGUE", message: "The open ESPN draft room is for a different league." };
   }
@@ -616,6 +617,23 @@ async function executeActionAttempt(action) {
         }
       }
       if (!visibleCandidate) setNativeValue(playerSearch, "");
+    }
+    // Clearing ESPN's search causes its virtualized grid to rehydrate. The
+    // previous implementation stopped here, even when one of the ordered
+    // candidates became visible again a moment later. Re-read that live grid
+    // briefly and select the highest-ranked exact match; never select an
+    // arbitrary rendered row.
+    if (!visibleCandidate && !usedPositionFilter && playerSearch instanceof HTMLInputElement) {
+      const rehydrateDeadline = Math.min(
+        Number(action.actionDeadlineAt || Infinity),
+        Date.now() + 400,
+      );
+      while (!visibleCandidate && Date.now() < rehydrateDeadline) {
+        visibleRowsCache.revision = -1;
+        visibleCandidate = candidates
+          .find((candidate) => visiblePlayerControl(candidate.playerId, candidate.playerName)) || null;
+        if (!visibleCandidate) await new Promise((resolve) => setTimeout(resolve, 40));
+      }
     }
     // If ESPN ever removes the search box, retain a fail-closed exact-identity
     // fallback while preserving the same model order among rendered rows.

@@ -1,6 +1,4 @@
 import type { Metadata } from "next";
-import "./globals.css";
-import "./consensus.css";
 import "./draft-command.css";
 
 export const metadata: Metadata = {

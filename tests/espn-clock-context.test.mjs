@@ -5,7 +5,7 @@ import test from "node:test";
 
 const contentUrl = new URL("../extension/espn-content.js", import.meta.url);
 
-async function loadDraftContext({ text, clockTeam, clockOwnMarker = false, ownTeam, ownAuctionTeam, ownAuctionSelecting = false, nominationTurnEndsAfterSelect = false, nominationConfirmationDelayMs = null, maximumOffer, nominatedPlayer, waitingTeamId, availableIds = [], snakeHistory = [], selectPlayer, bidAmount, bidControlDelayMs = 0, autopickActive = false, autopickControlVisible = false, href = "https://fantasy.espn.com/football/draft?leagueId=701&teamId=5" }) {
+async function loadDraftContext({ text, clockTeam, clockOwnMarker = false, ownTeam, ownAuctionTeam, ownAuctionSelecting = false, nominationTurnEndsAfterSelect = false, nominationConfirmationDelayMs = null, maximumOffer, nominatedPlayer, waitingTeamId, availableIds = [], snakeHistory = [], selectPlayer, bidAmount, bidControlDelayMs = 0, autopickActive = false, autopickControlVisible = false, soundMuted = true, href = "https://fantasy.espn.com/football/draft?leagueId=701&teamId=5" }) {
   const source = await readFile(contentUrl, "utf8");
   const runtimeStart = source.indexOf("chrome.runtime.onMessage.addListener");
   assert.ok(runtimeStart > 0, "content script should expose a Chrome message listener");
@@ -109,6 +109,9 @@ async function loadDraftContext({ text, clockTeam, clockOwnMarker = false, ownTe
       return null;
     },
     querySelectorAll(selector) {
+      if (selector === ".draft-header .icon-wrapper use") return [{
+        getAttribute: (name) => name === "href" ? `#icon__controls__volume_${soundMuted ? "mute" : "up"}` : null,
+      }];
       if (selector === "[role='grid'] [role='row']") return playerRow ? [playerRow] : [];
       if (selector.startsWith("button.Button--draft")) return playerControl ? [playerControl] : [];
       if (selector === "button, [role='button']") {

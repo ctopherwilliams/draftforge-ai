@@ -62,12 +62,21 @@ The robustness gate also supports immutable live five-source capture/replay and 
 
 Re-run the full 20+20 simulation gate after any engine-affecting change. Authenticated mocks and deterministic simulations are recorded separately; simulations are not represented as live ESPN drafts.
 
+For each authenticated final rehearsal, require the loopback certification ledger before counting it:
+
+```bash
+npm run draft-day:audit -- --league <leagueId> --team <teamId> --require-complete
+```
+
+The ledger is sanitized and in-memory only, expires after 24 hours, and is not a substitute for the exact live-room checklist or fail-closed action guards.
+
 ## 6. Useful commands
 
 ```bash
 npm test
 npm run snapshot:capture -- --validate snapshots/intelligence/source-v1-....json
 npm run simulate:matrix -- --drafts 1000 --snapshot snapshots/intelligence/source-v1-....json
+npm run draft-day:audit -- --league <leagueId> --team <teamId> --require-complete
 node --check extension/background.js
 node --check extension/espn-content.js
 node --check extension/app-bridge.js
