@@ -18,6 +18,17 @@
     "allPairedMetricDeltas": 0,
     "determinismDigest": "074acfc39a1d9d93153c3f4ebf4bcfa28ea55562226ad50ffc1d3a0062056008"
   },
+  "launchConsoleReplay": {
+    "seed": 20260818,
+    "draftsPerFormat": 20,
+    "baselineCompletedDrafts": 40,
+    "finalCompletedDrafts": 40,
+    "failureCount": 0,
+    "hardViolationCount": 0,
+    "allPairedMetricDeltas": 0,
+    "baselineDigest": "6fcd6f6273e3306538f0f6c27ec60767ce63febfffb4916e14d4370f15b830b0",
+    "finalDigest": "6fcd6f6273e3306538f0f6c27ec60767ce63febfffb4916e14d4370f15b830b0"
+  },
   "rejectedCandidate": {
     "affectedDecisionClass": "Early snake QB ordering when ESPN has both QB and OP starters",
     "reproductionSeeds": [
@@ -40,7 +51,7 @@
   "acceptedChanges": [
     {
       "affectedDecisionClass": "UI presentation only",
-      "change": "A single responsive live-operations rail and dominant snake/salary-cap decision command with explicit safety state, reserve, spendable runway, and hard ceiling.",
+      "change": "A full-width responsive launch console with dominant snake/salary-cap command, bounded player board, roster rail, explicit safety state, reserve, spendable runway, and hard ceiling.",
       "strategyRisk": "None; action callbacks, engine ordering, ceilings, and authorization are unchanged."
     },
     {
@@ -48,5 +59,18 @@
       "change": "JSONL writers now respect stream backpressure and exact high-regret cases can run bounded counterfactual replay directly.",
       "strategyRisk": "None; simulation inputs and production strategy logic are unchanged."
     }
-  ]
+  ],
+  "strategyDecision": {
+    "acceptedProductionChanges": [],
+    "decision": "No strategy change accepted. The paired launch-console replay was identical, the larger counterfactual audit split evenly between bid/pass and target/drain actions, and changing production policy would overfit synthetic room outcomes.",
+    "dataBoundary": {
+      "fullFiveSourceCoveragePercent": 39.2857,
+      "sleeperAcquisitionObservations": 0,
+      "requiredNextEvidence": [
+        "A fresher snapshot with broader player-level coverage from the same deterministic five sources",
+        "Sanitized authenticated ESPN salary-cap bid, pass, nomination, and closing-price outcomes",
+        "A five-source snapshot containing corroborated sleeper candidates so sleeper timing produces non-zero observations"
+      ]
+    }
+  }
 }

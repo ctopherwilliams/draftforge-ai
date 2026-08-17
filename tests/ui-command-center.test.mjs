@@ -23,13 +23,18 @@ test("live decision precedes secondary player-board detail", () => {
   assert.match(page, /previewDraftFormat\("AUCTION"\)/);
   assert.match(page, /Spendable runway/);
   assert.match(page, /untouchable reserve/);
+  assert.match(page, /PREFLIGHT 1 OF 2/);
+  assert.match(page, /displayCommandLabel/);
 });
 
 test("command-center styles preserve readable and responsive controls", () => {
   assert.match(css, /html\s*\{[^}]*font-size:\s*16px/);
   assert.match(css, /min-height: 44px/);
+  assert.match(css, /grid-template-areas:\s*"coach players roster"/);
   assert.match(css, /grid-template-areas:\s*"coach roster"\s*"players roster"/);
   assert.match(css, /grid-template-areas: "coach" "roster" "players"/);
+  assert.match(css, /\.player-list \{[^}]*max-height:\s*390px/s);
+  assert.match(css, /\.workspace \{[^}]*max-width:\s*none/s);
   assert.match(css, /prefers-reduced-motion: reduce/);
   assert.match(css, /\.settings-button::after, \.auto-toggle::after \{ content: none/);
   assert.doesNotMatch(css, /font-size:\s*(?:[0-9]|1[0-3])px/);

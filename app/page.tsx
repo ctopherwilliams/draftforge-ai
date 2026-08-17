@@ -984,6 +984,9 @@ export default function Home() {
     inDraftRoom: context.inDraftRoom === true,
   });
   const { commandLabel, safetyLabel } = presentation;
+  const displayCommandLabel = presentation.stateTone === "blocked" && context.autopickActive !== true && focusPlayer
+    ? `${league.draftType === "SNAKE" ? "PREPARE" : "TRACK"} ${focusPlayer.name}`
+    : commandLabel;
   const alternatives = liveRecommendations.filter((player) => player.id !== focusPlayer?.id).slice(0, 3);
 
   return <main className="app-shell">
@@ -1010,7 +1013,7 @@ export default function Home() {
 
     {(extension !== "connected" || settingsOpen) && <section className="setup-drawer">
       {extension !== "connected" ? <div className="connect-card">
-        <div><p className="eyebrow">STEP 1 · ESPN CONNECTION</p><h1>Import your real draft.</h1><p>Open your ESPN league in another Chrome tab. The companion reads your authenticated settings without exposing your password or cookies.</p></div>
+        <div><p className="eyebrow">PREFLIGHT 1 OF 2 · CONNECT ESPN</p><h1>Import your real draft.</h1><p>Open your ESPN league in another Chrome tab. The companion reads your authenticated settings without exposing your password or cookies.</p></div>
         <label>League ID <input value={leagueId} onChange={(event) => setLeagueId(event.target.value.replace(/\D/g, ""))} placeholder="Auto-detect or enter ID" inputMode="numeric" /></label>
         <button className="primary-button" onClick={connect} disabled={extension === "missing" || extension === "connecting"}>{extension === "connecting" ? "Importing…" : "Import from ESPN"}</button>
         {extension === "missing" && <p className="connect-error">Download and unzip the Chrome companion, load that folder at chrome://extensions, then refresh this page.</p>}
@@ -1021,7 +1024,7 @@ export default function Home() {
           <button className={league.id === "demo" && league.draftType === "AUCTION" ? "active" : ""} onClick={() => previewDraftFormat("AUCTION")}>Salary cap</button>
         </div>
       </div> : <div className="rules-card">
-        <div className="rules-heading"><div><p className="eyebrow">STEP 2 · VERIFY IMPORT</p><h2>Confirm ESPN league rules</h2><p>Draft actions stay locked until these imported settings match your ESPN league.</p></div><button onClick={() => dispatchUi({ type: "set", key: "settingsOpen", value: false })} aria-label="Close settings">×</button></div>
+        <div className="rules-heading"><div><p className="eyebrow">PREFLIGHT 2 OF 2 · VERIFY LEAGUE</p><h2>Confirm ESPN league rules</h2><p>Draft actions stay locked until these imported settings match your ESPN league.</p></div><button onClick={() => dispatchUi({ type: "set", key: "settingsOpen", value: false })} aria-label="Close settings">×</button></div>
         <div className="rule-grid">
           <div><span>Draft</span><b>{league.draftType === "AUCTION" ? "Salary cap" : "Snake"}</b><small>{league.secondsPerPick}s timer{league.keeperCount ? ` · ${league.keeperCount} keepers` : " · no keepers"}</small></div>
           <div><span>League</span><b>{league.size} teams</b><small>{league.rosterSize} roster spots</small></div>
@@ -1044,7 +1047,7 @@ export default function Home() {
       <aside className="coach-column">
         {focusPlayer && <section className="recommendation panel" aria-labelledby="decision-title">
           <div className="decision-head">
-            <div><p className="eyebrow">DO THIS NOW · {league.draftType === "AUCTION" ? "SALARY CAP" : "SNAKE"}</p><h1 id="decision-title">{commandLabel}</h1></div>
+            <div><p className="eyebrow">DO THIS NOW · {league.draftType === "AUCTION" ? "SALARY CAP" : "SNAKE"}</p><h1 id="decision-title">{displayCommandLabel}</h1></div>
             <span className={`decision-state ${presentation.stateTone}`}>{presentation.stateLabel}</span>
           </div>
           {nominated && <p className="auction-live">LIVE NOMINATION · {context.currentBid ? `$${context.currentBid}` : "Opening bid"}{ownNominationIntent ? ` · ${ownNominationIntent}` : ""}</p>}
@@ -1069,8 +1072,7 @@ export default function Home() {
           </div>
           {league.draftType === "SNAKE" ? <button className="draft-button full" onClick={() => submit(focusPlayer, false, "SELECT")} disabled={!settingsConfirmed || extension !== "connected" || !actionWindowOpen}>Draft {focusPlayer.name} in ESPN<small>{Number.isFinite(remainingSeconds) ? `${remainingSeconds}s remaining` : "Waiting for verified clock"}</small></button> : <div className="pick-actions"><button className="draft-button" onClick={() => auctionNomination && submit(auctionNomination.player, false, "NOMINATE", auctionNomination.openingBid, auctionNomination.intent)} disabled={!settingsConfirmed || extension !== "connected" || !actionWindowOpen || Boolean(nominated || context.nominatedPlayer || Number(context.currentBid || 0) > 0) || !auctionNomination}>Nominate {auctionNomination?.intent === "DRAIN" ? "budget drain" : "target"}<small>Open ${auctionNomination?.openingBid || 1}</small></button><button className="bid-button" onClick={() => submit(focusPlayer, false, "BID", nextBid)} disabled={!settingsConfirmed || extension !== "connected" || !nominated || context.leadingBid || ownNominationIntent === "DRAIN" || nextBid > focusPlayer.maxBid || !bidWindowOpen}>{ownNominationIntent === "DRAIN" ? "Pass — no price enforcing" : context.leadingBid ? "Hold — already leading" : nextBid > focusPlayer.maxBid ? "Pass — ceiling reached" : `Bid $${nextBid}`}<small>{ownNominationIntent === "DRAIN" ? "Decoy nomination" : `Hard stop $${focusPlayer.maxBid}`}</small></button></div>}
           {!settingsConfirmed && <small className="locked-note">Confirm imported league rules to unlock ESPN actions.</small>}
-          <div className="confidence"><div><span>Decision confidence · {focusPlayer.sourceCount || 1}/5 sources</span><b>{focusPlayer.confidence}%</b></div><div className="confidence-track"><i style={{ width: `${focusPlayer.confidence}%` }} /></div></div>
-          <details className="decision-details"><summary>Why this is the move</summary><p className="reason">{describeRecommendation(focusPlayer, league, strategy)}</p>{league.draftType === "AUCTION" && focusPlayer.sourceAuctions && <div className="source-values">{Object.entries(focusPlayer.sourceAuctions).map(([source, amount]) => <span key={source}>{source.toUpperCase()} <b>${Math.round(amount)}</b></span>)}</div>}<ul className="reason-list">{focusPlayer.reasons.slice(0, 4).map((reason) => <li key={reason}>{reason}</li>)}</ul></details>
+          <details className="decision-details"><summary>Decision intelligence <span>{focusPlayer.confidence}% confidence</span></summary><div className="confidence"><div><span>Source agreement · {focusPlayer.sourceCount || 1}/5 sources</span><b>{focusPlayer.confidence}%</b></div><div className="confidence-track"><i style={{ width: `${focusPlayer.confidence}%` }} /></div></div><p className="reason">{describeRecommendation(focusPlayer, league, strategy)}</p>{league.draftType === "AUCTION" && focusPlayer.sourceAuctions && <div className="source-values">{Object.entries(focusPlayer.sourceAuctions).map(([source, amount]) => <span key={source}>{source.toUpperCase()} <b>${Math.round(amount)}</b></span>)}</div>}<ul className="reason-list">{focusPlayer.reasons.slice(0, 4).map((reason) => <li key={reason}>{reason}</li>)}</ul></details>
         </section>}
         <section className="on-clock-card panel"><span className={actionWindowOpen ? "pulse" : ""} aria-hidden="true">●</span><div><b>{actionWindowOpen ? `Verified ESPN action window · ${remainingSeconds}s` : context.onClock ? "ESPN clock too short — nothing will be sent" : context.inDraftRoom ? "Exact ESPN draft room connected" : "Open the exact ESPN draft room"}</b><small>{autoDraft ? "Auto-Draft is armed only for this verified league and tab." : "Guided mode: you approve every pick, nomination, and bid."}</small></div></section>
       </aside>
