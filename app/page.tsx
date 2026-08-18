@@ -122,6 +122,10 @@ const EXACT_TAB_WATCHDOG_MS = 5000;
 const ACTION_CANDIDATE_LIMIT = 64;
 const MIN_SNAKE_SELECTION_WINDOW_SECONDS = 10;
 const MIN_OTHER_ACTION_WINDOW_SECONDS = 5;
+const COMMAND_CENTER_PUBLISHER = {
+  sessionId: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  startedAt: new Date().toISOString(),
+};
 const RETRIABLE_SELECT_CODES = new Set(["PLAYER_NOT_FOUND", "ACTION_TIMEOUT", "ROSTER_NOT_CONFIRMED"]);
 const RETRIABLE_TURN_CODES = new Set(["ACTION_NOT_FOUND", "PLAYER_CONTROL_DRIFT", "PLAYER_POOL_STALE", "PICK_CHANGED", "NOT_ON_CLOCK", "CLOCK_TOO_SHORT", "BID_CHANGED", "BID_OUT_OF_SEQUENCE"]);
 const RETRIABLE_BID_CODES = new Set([...RETRIABLE_TURN_CODES, "ACTION_TIMEOUT", "NOMINEE_MISMATCH", "NOMINEE_UNKNOWN"]);
@@ -1050,7 +1054,11 @@ export default function Home() {
         lineupSlotCounts: league.lineupSlotCounts,
         positionLimits: league.positionLimits,
       },
-      binding: { tabId: Number(exactTabId) },
+      binding: {
+        tabId: Number(exactTabId),
+        commandCenterSessionId: COMMAND_CENTER_PUBLISHER.sessionId,
+        commandCenterStartedAt: COMMAND_CENTER_PUBLISHER.startedAt,
+      },
       safety: {
         settingsConfirmed,
         liveChecklistReady,
