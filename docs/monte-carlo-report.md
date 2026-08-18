@@ -1,5 +1,48 @@
 # DraftForge Monte Carlo stress tests
 
+## 2026-08-18 overnight 20+20 battle qualification
+
+DraftForge completed four bounded five-draft batches per format against one frozen authenticated ESPN five-source snapshot: **20 accepted snake drafts and 20 accepted salary-cap drafts**. Each format used 16 saved authenticated-settings trials and four seeded ESPN-compatible adversarial trials, split into 12 discovery, four validation, and four holdout drafts. Every roster completed with zero duplicate-player, incomplete-roster, duplicate-specialist, position-cap, salary-cap, reserve, max-bid, mandatory-starter, or simulation violations.
+
+The immutable snapshot was captured at `2026-08-17T23:11:22.400Z` with digest `25c2f8bf053c6491bca73cbacca7fa7502493c380f52937f9b2bc713501f7abd`. Its deterministic inputs are ESPN, FFC, MFL, Tradyr, and GNG. The batch seeds were `20260821`, `20260822`, `20260823`, and `20260824`. The sealed fourth batch was exposed only after the candidate held through the preceding batches; replaying it produced the same five records per format and exact zero paired metric deltas.
+
+| Format | Drafts | Lineup mean | Lineup P25 | VORP mean | Objective mean | Objective P25 | Regret mean |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Snake | 20 | 2564.32 | 2553.08 | 1697.21 | 2996.39 | 2958.51 | 475.12 |
+| Salary cap | 20 | 2052.92 | 1975.52 | 1186.90 | 2188.98 | 2049.19 | 1665.15 |
+
+Salary-cap remaining-budget efficiency averaged `0.9087` with a `0.8602` P25. Snake roster fragility averaged `30.17` with a `28.64` P25; salary-cap fragility averaged `22.65` with a `20.13` P25.
+
+### Evidence-linked engine change
+
+Batch one reproduced the same snake decision defect in two independent saved-settings `ELITE_QB` seeds: `570294550` and `536739312`. At decision 13, a fractional FLEX need caused a one-TE lineup to treat a third tight end as starter depth. The production engine now uses the exact dedicated TE slot count for tight-end depth saturation, while preserving fractional FLEX eligibility for VORP comparisons.
+
+The five-seed paired replay improved mean starting-lineup projection by `+5.51`, total projection by `+55.18`, VORP by `+25.18`, regret by `-93.15`, and composite objective by `+26.49`. P25 total projection improved `+19.68`, P25 VORP `+14.70`, P25 regret `-112.17`, and P25 objective `+26.44`; lineup P25 and fragility P25 were unchanged. Mean fragility rose `+1.36` in that small paired batch, with an interval spanning zero. Focused tests, the full suite, the next 15 drafts per format, and the untouched holdout found no safety regression.
+
+No salary-cap strategy change was accepted. Bid, pass, alternate-ceiling, target-nomination, and drain-nomination continuations remained directionally contradictory across discovery and validation. Some target/bid branches improved, some drain/pass branches improved, and some target branches materially worsened. A global auction-policy change would overfit these synthetic rooms.
+
+### Reproduction
+
+```bash
+npm run snapshot:capture -- --validate snapshots/intelligence/source-v1-2026-08-17T23-11-22.400Z-ppr-12t-25c2f8bf053c.json
+
+npm run simulate:monte-carlo -- --drafts 5 --seed 20260821 --formats snake --snapshot snapshots/intelligence/source-v1-2026-08-17T23-11-22.400Z-ppr-12t-25c2f8bf053c.json --expose-holdout --skip-counterfactuals --output outputs/monte-carlo/overnight-b1-snake-replay-seed-20260821
+
+npm run simulate:monte-carlo -- --drafts 5 --seed 20260821 --formats salary-cap --snapshot snapshots/intelligence/source-v1-2026-08-17T23-11-22.400Z-ppr-12t-25c2f8bf053c.json --expose-holdout --skip-counterfactuals --output outputs/monte-carlo/overnight-b1-salary-cap-replay-seed-20260821
+
+npm run check
+```
+
+Repeat the two simulation commands with seeds `20260822`, `20260823`, and `20260824` for the remaining batches. Machine-readable evidence, including the ten largest remaining regret cases, is tracked in `simulation/evidence/overnight-battle-20260818.json`; exact ledgers remain in ignored `outputs/monte-carlo/overnight-*` directories.
+
+### Remaining evidence boundary
+
+- The opponent field is varied but synthetic and cannot reproduce every human room.
+- Only 37.5% of rosterable players had four-source coverage and 23.21% had full five-source player-level coverage. Live actions still fail closed when required current coverage is incomplete.
+- The snapshot produced no qualifying corroborated sleeper acquisitions. Sleeper protections remain covered by deterministic tests, but this campaign supplies no new evidence of sleeper upside.
+- Snake static-roster win probability saturated at one, so projection, VORP, regret, fragility, and objective are the useful discriminators here.
+- This was intentionally browser-free and does not advance authenticated ESPN completion counts.
+
 ## Independent mission-control verification seed
 
 After the mission-control visual rebuild, the frozen production engine completed the explicit 20-draft gate for each format: 20 snake drafts (2,560 selections) and 20 salary-cap drafts (2,560 sales), with no incomplete rosters or invariant failures.

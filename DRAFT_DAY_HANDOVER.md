@@ -31,13 +31,14 @@ Keep Codex open in the desktop app and exactly two controlled Chrome tabs: `http
 
 ## Certification ledger
 
-Last updated: 2026-08-17.
+Last updated: 2026-08-18.
 
 | Gate | State |
 | --- | --- |
-| Local release gate | 142/142 tests, lint, typecheck, production build, UI, extension safety, replay, and latency passing |
+| Local release gate | 144/144 tests, lint, typecheck, production build, UI, extension safety, replay, and latency passing |
 | Deterministic drafts | 20/20 snake and 20/20 salary-cap complete and legal |
 | Live-snapshot Monte Carlo | 10,000 snake + 10,000 salary-cap; zero hard violations and zero simulation errors |
+| Overnight battle qualification | Four 5-draft batches per format: 20/20 snake + 20/20 salary cap, exact holdout replay, zero hard violations |
 | Post-sleeper authenticated snake | 19/20 countable |
 | Post-sleeper authenticated salary cap | 15/20 countable |
 | Remaining certification | 1 snake and 5 salary-cap rooms |

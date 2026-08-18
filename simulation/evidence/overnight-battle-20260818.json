@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "campaign": "overnight-battle-20260818",
+  "status": "accepted",
+  "scope": {
+    "formats": ["snake", "salary-cap"],
+    "draftsPerFormat": 20,
+    "batchesPerFormat": 4,
+    "draftsPerBatch": 5,
+    "seeds": [20260821, 20260822, 20260823, 20260824],
+    "savedEspnSettingsShare": 0.8,
+    "adversarialEspnSettingsShare": 0.2,
+    "browserFree": true
+  },
+  "snapshot": {
+    "path": "snapshots/intelligence/source-v1-2026-08-17T23-11-22.400Z-ppr-12t-25c2f8bf053c.json",
+    "digest": "25c2f8bf053c6491bca73cbacca7fa7502493c380f52937f9b2bc713501f7abd",
+    "capturedAt": "2026-08-17T23:11:22.400Z",
+    "sources": ["espn", "ffc", "mfl", "tradyr", "gng"],
+    "coverageAtLeastFour": 0.375,
+    "fullFiveSourceCoverage": 0.23214285714285715
+  },
+  "results": {
+    "acceptedDrafts": {
+      "snake": 20,
+      "salaryCap": 20
+    },
+    "splitByFormat": {
+      "discovery": 12,
+      "validation": 4,
+      "holdout": 4
+    },
+    "settingsByFormat": {
+      "savedAuthenticated": 16,
+      "adversarialEspnCompatible": 4
+    },
+    "simulationErrors": 0,
+    "hardViolations": {
+      "duplicatePlayers": 0,
+      "incompleteRosters": 0,
+      "unnecessarySecondSpecialists": 0,
+      "positionCaps": 0,
+      "salaryCaps": 0,
+      "reserve": 0,
+      "maxBid": 0,
+      "mandatoryStarters": 0
+    },
+    "deterministicHoldoutReplay": {
+      "seed": 20260824,
+      "snakeRecords": 5,
+      "salaryCapRecords": 5,
+      "allPairedMetricDeltas": 0
+    }
+  },
+  "metrics": {
+    "snake": {
+      "startingLineupProjection": {"mean": 2564.320385, "p25": 2553.082328, "min": 2289.023651, "max": 2725.264230},
+      "totalProjection": {"mean": 3992.788996, "p25": 3956.105701},
+      "vorp": {"mean": 1697.210714, "p25": 1653.105701},
+      "positionalScarcity": {"mean": 331.908519, "p25": 265.419141},
+      "rosterFragility": {"mean": 30.165530, "p25": 28.644081, "min": 26.363045, "max": 37.181118},
+      "marketSurplus": {"mean": -4.858125, "p25": -36.275833},
+      "sourceConfidenceDownside": {"mean": 111.462120, "p25": 105.516012},
+      "decisionRegret": {"mean": 475.123402, "p25": 313.287878, "max": 970.985092},
+      "objective": {"mean": 2996.386512, "p25": 2958.508725, "min": 2694.072748, "max": 3201.120852},
+      "sleeperAcquisitionValue": 0,
+      "sleeperTiming": 0
+    },
+    "salaryCap": {
+      "startingLineupProjection": {"mean": 2052.915864, "p25": 1975.518407, "min": 1870.654490, "max": 2427.150994},
+      "totalProjection": {"mean": 3015.458981, "p25": 2929.030550},
+      "vorp": {"mean": 1186.901995, "p25": 1163.349981},
+      "positionalScarcity": {"mean": 167.821489, "p25": 110.792075},
+      "rosterFragility": {"mean": 22.646574, "p25": 20.132292, "min": 17.704227, "max": 33.313385},
+      "marketSurplus": {"mean": 36.411812, "p25": 17.384956},
+      "remainingBudgetEfficiency": {"mean": 0.908695, "p25": 0.860215, "min": 0.741935, "max": 1},
+      "sourceConfidenceDownside": {"mean": 78.386295, "p25": 71.513709},
+      "staticRosterWinProbability": {"mean": 0.88125, "p25": 0.921875, "min": 0.109375, "max": 1},
+      "decisionRegret": {"mean": 1665.147122, "p25": 1382.962527, "max": 2739.668174},
+      "objective": {"mean": 2188.975927, "p25": 2049.194162, "min": 1959.848499, "max": 2502.787585},
+      "sleeperAcquisitionValue": 0,
+      "sleeperTiming": 0
+    }
+  },
+  "acceptedChange": {
+    "decisionClass": "single-TE leagues with a FLEX fraction and two rostered tight ends",
+    "reproductionSeeds": [570294550, 536739312],
+    "baselineFailure": "The fractional FLEX need disabled the third-tight-end saturation rule and allowed Travis Kelce as a third tight end at decision 13.",
+    "implementation": "Use the exact dedicated TE lineup-slot count for second- and third-TE depth protection while preserving fractional FLEX need for VORP comparisons.",
+    "pairedBatchOneDeltas": {
+      "startingLineupProjectionMean": 5.5055,
+      "startingLineupProjectionP25": 0,
+      "totalProjectionMean": 55.1829,
+      "totalProjectionP25": 19.6846,
+      "vorpMean": 25.1829,
+      "vorpP25": 14.6997,
+      "decisionRegretMean": -93.1480,
+      "decisionRegretP25": -112.1652,
+      "objectiveMean": 26.4894,
+      "objectiveP25": 26.4418,
+      "rosterFragilityMean": 1.3625,
+      "rosterFragilityP25": 0
+    },
+    "safety": "Focused, full-suite, subsequent-batch, and holdout checks found zero hard violations. The fragility mean increased in the five-seed paired batch and its interval included zero; P25 fragility was unchanged."
+  },
+  "rejectedChanges": [
+    {
+      "decisionClass": "salary-cap bid/pass/alternate-ceiling and target/drain nomination policy",
+      "reason": "The leading continuations were directionally contradictory across discovery and validation: target/bid won some cases, drain/pass won others, and target materially worsened other cases. A global policy change would overfit synthetic rooms."
+    }
+  ],
+  "largestRemainingRegretCases": [
+    {"format": "snake", "batch": 1, "trial": 3, "seed": 553516931, "split": "validation", "preset": "ZERO_RB", "regret": 970.985092, "objective": 2919.076981},
+    {"format": "snake", "batch": 1, "trial": 4, "seed": 637405026, "split": "holdout", "preset": "ELITE_QB", "regret": 936.587215, "objective": 2694.072748},
+    {"format": "snake", "batch": 3, "trial": 4, "seed": 3894728392, "split": "holdout", "preset": "ZERO_RB", "regret": 828.761523, "objective": 2811.440580},
+    {"format": "snake", "batch": 4, "trial": 2, "seed": 3278428955, "split": "discovery", "preset": "ZERO_RB", "regret": 790.158315, "objective": 3095.278398},
+    {"format": "snake", "batch": 2, "trial": 3, "seed": 1055541150, "split": "validation", "preset": "ZERO_RB", "regret": 574.456041, "objective": 3034.976020},
+    {"format": "salary-cap", "batch": 1, "trial": 0, "seed": 1455384437, "split": "discovery", "preset": "HERO_RB", "regret": 2739.668174, "objective": 1977.098529},
+    {"format": "salary-cap", "batch": 1, "trial": 4, "seed": 1388273961, "split": "holdout", "preset": "HERO_RB", "regret": 2238.933889, "objective": 2394.803522},
+    {"format": "salary-cap", "batch": 1, "trial": 1, "seed": 1438606818, "split": "discovery", "preset": "ELITE_QB", "regret": 2112.169094, "objective": 1961.600244},
+    {"format": "salary-cap", "batch": 2, "trial": 0, "seed": 3552385958, "split": "discovery", "preset": "BALANCED", "regret": 2091.015645, "objective": 1976.658534},
+    {"format": "salary-cap", "batch": 4, "trial": 3, "seed": 3998571265, "split": "validation", "preset": "ELITE_QB", "regret": 2074.097968, "objective": 1959.848499}
+  ],
+  "limitations": [
+    "Opponent rooms are varied but synthetic.",
+    "Only 23.21% of rosterable players have full five-source player-level coverage.",
+    "The snapshot produced no qualifying corroborated sleeper acquisitions, so this campaign does not measure sleeper upside.",
+    "Snake static-roster win probability saturated and is not a useful discriminator in this campaign.",
+    "This browser-free campaign does not advance the authenticated ESPN certification counts."
+  ],
+  "reproduction": [
+    "npm run snapshot:capture -- --validate snapshots/intelligence/source-v1-2026-08-17T23-11-22.400Z-ppr-12t-25c2f8bf053c.json",
+    "npm run simulate:monte-carlo -- --drafts 5 --seed 20260821 --formats snake --snapshot snapshots/intelligence/source-v1-2026-08-17T23-11-22.400Z-ppr-12t-25c2f8bf053c.json --expose-holdout --skip-counterfactuals --output outputs/monte-carlo/overnight-b1-snake-replay-seed-20260821",
+    "npm run simulate:monte-carlo -- --drafts 5 --seed 20260821 --formats salary-cap --snapshot snapshots/intelligence/source-v1-2026-08-17T23-11-22.400Z-ppr-12t-25c2f8bf053c.json --expose-holdout --skip-counterfactuals --output outputs/monte-carlo/overnight-b1-salary-cap-replay-seed-20260821",
+    "npm run check"
+  ]
+}

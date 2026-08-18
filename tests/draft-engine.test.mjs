@@ -319,6 +319,31 @@ test("one-QB leagues penalize backups while core starters are open and reject a 
   assert.equal(auction.find((player) => player.id === 8).maxBid, 0);
 });
 
+test("a FLEX fraction cannot make a third tight end look like starter depth", () => {
+  const oneTeFlexLeague = {
+    ...league,
+    rosterSize: 16,
+    lineupSlotCounts: { "0": 1, "2": 2, "4": 2, "6": 1, "23": 1, "16": 1, "17": 1, "20": 7 },
+  };
+  const depthPlayers = [
+    ...players,
+    { id: 7, name: "TE One", team: "G", pos: "TE", rank: 4, adp: 45, auction: 22, projected: 260 },
+    { id: 8, name: "TE Two", team: "H", pos: "TE", rank: 5, adp: 75, auction: 12, projected: 240 },
+    { id: 9, name: "TE Three", team: "I", pos: "TE", rank: 6, adp: 105, auction: 6, projected: 230 },
+    { id: 10, name: "RB Depth", team: "J", pos: "RB", rank: 7, adp: 110, auction: 5, projected: 220 },
+  ];
+  const twoTightEnds = [
+    { playerId: 7, teamId: 1, overall: 1, round: 1, amount: 20 },
+    { playerId: 8, teamId: 1, overall: 2, round: 2, amount: 10 },
+  ];
+
+  const snake = recommendPlayers(depthPlayers, twoTightEnds, oneTeFlexLeague, "BALANCED", 100);
+  assert.ok(snake.find((player) => player.id === 9).score < snake.find((player) => player.id === 10).score);
+
+  const auction = recommendPlayers(depthPlayers, twoTightEnds, { ...oneTeFlexLeague, draftType: "AUCTION" }, "BALANCED", 100);
+  assert.equal(auction.find((player) => player.id === 9).maxBid, 0);
+});
+
 test("an ESPN QB plus OP lineup rejects a third quarterback", () => {
   const qbOpLeague = {
     ...league,

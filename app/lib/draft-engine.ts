@@ -699,22 +699,22 @@ export function recommendPlayers(
     const requiredAtPosition = Number(needs[player.pos] || 0);
     const need = requiredAtPosition > rosteredAtPosition ? 1 : 0;
     const singleStarterPosition = requiredAtPosition > 0 && requiredAtPosition <= 1;
-    // OP contributes a fractional need to every eligible position so VORP can
-    // compare them fairly, but that fraction must not disable roster caps. A
-    // team can start at most its dedicated QBs plus its OP slots; after that,
-    // another QB is pure bench depth. Preserve one backup in ordinary 1-QB
-    // leagues while preventing a QB+OP league from accumulating a third QB.
+    // OP/FLEX contributes a fractional need to every eligible position so VORP
+    // can compare them fairly, but that fraction must not disable depth caps.
+    // Use exact dedicated slots for QB and TE saturation instead of the
+    // fractional need total.
     const quarterbackStarterCapacity = Number(league.lineupSlotCounts?.["0"] || 0)
       + Number(league.lineupSlotCounts?.["7"] || 0);
     const quarterbackDepthCap = Math.max(2, quarterbackStarterCapacity);
+    const singleTightEndStarter = Number(league.lineupSlotCounts?.["6"] || 0) === 1;
     const hardSaturation = (player.pos === "QB" && rosteredAtPosition >= quarterbackDepthCap)
-      || (player.pos === "TE" && singleStarterPosition && rosteredAtPosition >= 2)
+      || (player.pos === "TE" && singleTightEndStarter && rosteredAtPosition >= 2)
       || (["K", "DST"].includes(player.pos) && rosteredAtPosition >= 1);
     const saturationPenalty = hardSaturation
       ? 1_000
       : player.pos === "QB" && singleStarterPosition && rosteredAtPosition >= 1
         ? coreSkillOpen ? 70 : 38
-        : player.pos === "TE" && singleStarterPosition && rosteredAtPosition >= 1
+        : player.pos === "TE" && singleTightEndStarter && rosteredAtPosition >= 1
           ? coreSkillOpen ? 48 : 24
           : 0;
     const fillsMandatoryStarter = Number(starterNeedsByPosition[player.pos] || 0) > 0;
