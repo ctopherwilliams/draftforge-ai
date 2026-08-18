@@ -140,6 +140,57 @@ test("loopback dashboard can record an audit that terminal reads back", async ()
   assert.equal(result.evaluation.finalReady, true);
 });
 
+test("newest command center owns audit publishing for an ESPN room", async () => {
+  const league = { ...snapshot().league, id: "audit-publisher-ownership" };
+  const older = snapshot({
+    capturedAt: "2026-08-17T20:00:10.000Z",
+    league,
+    binding: {
+      tabId: 4321,
+      commandCenterSessionId: "older-command-center",
+      commandCenterStartedAt: "2026-08-17T20:00:00.000Z",
+    },
+  });
+  const newer = snapshot({
+    capturedAt: "2026-08-17T20:01:10.000Z",
+    league,
+    binding: {
+      tabId: 4321,
+      commandCenterSessionId: "newer-command-center",
+      commandCenterStartedAt: "2026-08-17T20:01:00.000Z",
+    },
+  });
+  const post = (audit) => POST(new Request("http://localhost:3000/api/draft-day", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: "http://localhost:3000" },
+    body: JSON.stringify({ operation: "AUDIT", audit }),
+  }));
+
+  assert.equal((await post(older)).status, 200);
+  assert.equal((await post(newer)).status, 200);
+
+  const staleLegacy = { ...snapshot({ capturedAt: "2026-08-17T20:02:00.000Z", league }), binding: { tabId: 4321 } };
+  const staleLegacyResponse = await post(staleLegacy);
+  assert.equal(staleLegacyResponse.status, 409);
+  assert.equal((await staleLegacyResponse.json()).code, "DRAFT_AUDIT_STALE_PUBLISHER");
+
+  const staleOlderResponse = await post({ ...older, capturedAt: "2026-08-17T20:03:00.000Z" });
+  assert.equal(staleOlderResponse.status, 409);
+  assert.equal((await staleOlderResponse.json()).code, "DRAFT_AUDIT_STALE_PUBLISHER");
+
+  const currentUpdate = {
+    ...newer,
+    capturedAt: "2026-08-17T20:04:00.000Z",
+    safety: { ...newer.safety, actionState: "Current command center still owns this room." },
+  };
+  assert.equal((await post(currentUpdate)).status, 200);
+
+  const read = await GET(new Request("http://localhost:3000/api/draft-day?leagueId=audit-publisher-ownership&teamId=7"));
+  const result = await read.json();
+  assert.equal(result.snapshot.binding.commandCenterSessionId, "newer-command-center");
+  assert.equal(result.snapshot.safety.actionState, "Current command center still owns this room.");
+});
+
 test("non-loopback pages cannot write or read the local certification ledger", async () => {
   const deniedWrite = await POST(new Request("http://localhost:3000/api/draft-day", {
     method: "POST",

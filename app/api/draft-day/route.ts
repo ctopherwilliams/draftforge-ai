@@ -158,7 +158,25 @@ export async function POST(request: Request) {
     pruneAudits();
     const key = auditKey(body.audit.league.id, body.audit.league.teamId);
     const previous = draftAuditSnapshots.get(key);
-    if (!previous || Date.parse(body.audit.capturedAt) >= Date.parse(previous.capturedAt)) {
+    const previousPublisher = previous?.binding.commandCenterSessionId;
+    const nextPublisher = body.audit.binding.commandCenterSessionId;
+    const previousPublisherStartedAt = Date.parse(String(previous?.binding.commandCenterStartedAt || ""));
+    const nextPublisherStartedAt = Date.parse(String(body.audit.binding.commandCenterStartedAt || ""));
+    const samePublisher = Boolean(previousPublisher && nextPublisher && previousPublisher === nextPublisher);
+    const newerPublisher = Boolean(
+      nextPublisher
+      && Number.isFinite(nextPublisherStartedAt)
+      && (!previousPublisher || !Number.isFinite(previousPublisherStartedAt) || nextPublisherStartedAt > previousPublisherStartedAt)
+    );
+    const stalePublisher = Boolean(previousPublisher && !samePublisher && !newerPublisher);
+    if (stalePublisher && previous) {
+      return response(origin, {
+        ok: false,
+        code: "DRAFT_AUDIT_STALE_PUBLISHER",
+        evaluation: evaluateDraftAuditSnapshot(previous),
+      }, 409);
+    }
+    if (!previous || newerPublisher || (samePublisher && Date.parse(body.audit.capturedAt) >= Date.parse(previous.capturedAt)) || (!previousPublisher && !nextPublisher && Date.parse(body.audit.capturedAt) >= Date.parse(previous.capturedAt))) {
       draftAuditSnapshots.set(key, body.audit);
     }
     const snapshot = draftAuditSnapshots.get(key) as DraftAuditSnapshot;

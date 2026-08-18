@@ -22,6 +22,8 @@ export type DraftAuditSnapshot = {
   };
   binding: {
     tabId: number;
+    commandCenterSessionId?: string;
+    commandCenterStartedAt?: string;
   };
   safety: {
     settingsConfirmed: boolean;
@@ -102,6 +104,11 @@ export function isDraftAuditSnapshot(value: unknown): value is DraftAuditSnapsho
   if (!Number.isInteger(league.size) || Number(league.size) < 2 || !Number.isInteger(league.rosterSize) || Number(league.rosterSize) < 1) return false;
   if (!Number.isFinite(league.auctionBudget) || Number(league.auctionBudget) < 0) return false;
   if (!league.lineupSlotCounts || !league.positionLimits || !binding || !Number.isInteger(binding.tabId) || Number(binding.tabId) <= 0) return false;
+  const hasPublisherId = typeof binding.commandCenterSessionId === "string" && binding.commandCenterSessionId.trim().length >= 8;
+  const hasPublisherStartedAt = Number.isFinite(Date.parse(String(binding.commandCenterStartedAt || "")));
+  if (binding.commandCenterSessionId !== undefined || binding.commandCenterStartedAt !== undefined) {
+    if (!hasPublisherId || !hasPublisherStartedAt) return false;
+  }
   if (!safety || !draft || !Number.isInteger(draft.totalPicks) || Number(draft.totalPicks) < 0) return false;
   if ([
     safety.settingsConfirmed,
