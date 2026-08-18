@@ -1,6 +1,6 @@
 # DraftForge migration runbook
 
-This repository is the portable source of truth for moving DraftForge to another machine and another Codex account. Do not copy `node_modules`, `.next`, browser profiles, ESPN cookies, or Chrome extension storage.
+This repository is the portable source of truth for moving DraftForge to another machine and another Codex account. Do not copy `node_modules`, `.next`, browser profiles, ESPN cookies, or Chrome extension storage. After migration, use [DRAFT_DAY_HANDOVER.md](DRAFT_DAY_HANDOVER.md) for every rehearsal and real draft.
 
 ## 1. Clone on the new machine
 

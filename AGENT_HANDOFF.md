@@ -1,5 +1,7 @@
 # DraftForge agent handoff
 
+Operational draft-day procedure and the current certification ledger live in [DRAFT_DAY_HANDOVER.md](DRAFT_DAY_HANDOVER.md). Keep that document and this implementation history synchronized whenever a countable or excluded rehearsal changes the evidence.
+
 ## Active objective
 
 Build and verify an ESPN-only fantasy football draft copilot whose primary control plane is the Codex conversation orchestrating the authenticated Chrome companion and local dashboard, that:
