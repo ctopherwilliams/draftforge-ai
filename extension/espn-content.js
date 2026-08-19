@@ -553,12 +553,20 @@ async function executeActionAttempt(action) {
     let visibleCandidate = primaryCandidate && visiblePlayerControl(primaryCandidate.playerId, primaryCandidate.playerName)
       ? primaryCandidate
       : null;
+    const mandatoryPositionPlan = buildMandatoryPositionPlan(candidates);
+    const mandatoryPositionFilter = !visibleCandidate && mandatoryPositionPlan
+      ? visiblePositionFilter(mandatoryPositionPlan.slotId)
+      : null;
     // ESPN briefly tears down and rebuilds its virtualized player grid when a
     // snake turn begins. Hold the top deterministic candidate locally so a
     // lower-ranked rendered row cannot jump ahead during that rebuild.
     // ESPN's first turn performs a longer one-time grid hydration. Do not let
     // that startup race consume the front of the ordered shortlist.
-    const playerGridDeadline = Math.min(Number(action.actionDeadlineAt || Infinity), Date.now() + (context.ownRoster.length ? 400 : 700));
+    // A visible exact K/DST filter is the authoritative fast path for final
+    // mandatory slots. Waiting for the unfiltered virtualized grid first adds
+    // a second hydration delay without improving identity safety.
+    const playerGridWaitMs = mandatoryPositionFilter ? 0 : context.ownRoster.length ? 400 : 700;
+    const playerGridDeadline = Math.min(Number(action.actionDeadlineAt || Infinity), Date.now() + playerGridWaitMs);
     while (!visibleCandidate && Date.now() < playerGridDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 40));
       if (primaryCandidate && visiblePlayerControl(primaryCandidate.playerId, primaryCandidate.playerName)) {
@@ -569,9 +577,8 @@ async function executeActionAttempt(action) {
     // (and occasionally early elite players) may not exist in the DOM even
     // though they are available. Resolve the shortlist strictly in model order:
     // search each leading candidate before considering any lower visible row.
-    const mandatoryPositionPlan = buildMandatoryPositionPlan(candidates);
     if (!visibleCandidate && mandatoryPositionPlan) {
-      const positionFilter = visiblePositionFilter(mandatoryPositionPlan.slotId);
+      const positionFilter = mandatoryPositionFilter || visiblePositionFilter(mandatoryPositionPlan.slotId);
       if (positionFilter) {
         usedPositionFilter = positionFilter;
         if (String(positionFilter.value) !== mandatoryPositionPlan.slotId) {

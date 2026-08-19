@@ -5,7 +5,7 @@ import test from "node:test";
 
 const contentUrl = new URL("../extension/espn-content.js", import.meta.url);
 
-async function loadDraftContext({ text, clockTeam, clockOwnMarker = false, ownTeam, ownAuctionTeam, ownAuctionSelecting = false, nominationTurnEndsAfterSelect = false, nominationConfirmationDelayMs = null, maximumOffer, nominatedPlayer, waitingTeamId, availableIds = [], snakeHistory = [], selectPlayer, bidAmount, bidControlDelayMs = 0, autopickActive = false, autopickControlVisible = false, soundMuted = true, href = "https://fantasy.espn.com/football/draft?leagueId=701&teamId=5" }) {
+async function loadDraftContext({ text, clockTeam, clockOwnMarker = false, ownTeam, ownAuctionTeam, ownAuctionSelecting = false, nominationTurnEndsAfterSelect = false, nominationConfirmationDelayMs = null, mandatoryPositionFilterDelayMs = null, maximumOffer, nominatedPlayer, waitingTeamId, availableIds = [], snakeHistory = [], selectPlayer, bidAmount, bidControlDelayMs = 0, autopickActive = false, autopickControlVisible = false, soundMuted = true, href = "https://fantasy.espn.com/football/draft?leagueId=701&teamId=5" }) {
   const source = await readFile(contentUrl, "utf8");
   const runtimeStart = source.indexOf("chrome.runtime.onMessage.addListener");
   assert.ok(runtimeStart > 0, "content script should expose a Chrome message listener");
@@ -26,6 +26,27 @@ async function loadDraftContext({ text, clockTeam, clockOwnMarker = false, ownTe
   const actionState = { selected: false, selectedAt: 0, selectClicks: 0, nominationClicks: 0, bidClicks: 0, autopickDisableClicks: 0 };
   let simulatedAutopickActive = autopickActive || /you(?:'|’)re on autopick/i.test(text);
   const bidControlAvailableAt = Date.now() + bidControlDelayMs;
+  let mandatoryPositionFilterActivatedAt = 0;
+  let mandatoryPositionFilterValue = "-1";
+  const mandatoryPositionFilterPrototype = {};
+  Object.defineProperty(mandatoryPositionFilterPrototype, "value", {
+    get: () => mandatoryPositionFilterValue,
+    set: (value) => {
+      mandatoryPositionFilterValue = String(value);
+      if (mandatoryPositionFilterValue !== "-1" && !mandatoryPositionFilterActivatedAt) mandatoryPositionFilterActivatedAt = Date.now();
+    },
+  });
+  const mandatoryPositionFilter = mandatoryPositionFilterDelayMs === null ? null : Object.assign(
+    Object.create(mandatoryPositionFilterPrototype),
+    {
+      disabled: false,
+      options: [{ value: "16", textContent: "D/ST" }, { value: "17", textContent: "K" }],
+      dispatchEvent() {},
+      getClientRects: () => [{ width: 1, height: 1 }],
+    },
+  );
+  const mandatoryPositionPlayerVisible = () => mandatoryPositionFilterDelayMs === null
+    || (mandatoryPositionFilterActivatedAt > 0 && Date.now() - mandatoryPositionFilterActivatedAt >= mandatoryPositionFilterDelayMs);
   let playerRow = null;
   const playerControl = selectPlayer ? {
     textContent: nominationTurnEndsAfterSelect || nominationConfirmationDelayMs !== null ? "Select" : "Draft",
@@ -45,6 +66,29 @@ async function loadDraftContext({ text, clockTeam, clockOwnMarker = false, ownTe
     },
     querySelectorAll(selector) {
       if (selector.includes("button")) return [playerControl];
+      return [];
+    },
+    getClientRects: () => [{ width: 1, height: 1 }],
+  } : null;
+  let surfaceRow = null;
+  const surfaceControl = mandatoryPositionFilter ? {
+    textContent: "Select",
+    disabled: false,
+    click() {},
+    scrollIntoView() {},
+    getClientRects: () => [{ width: 1, height: 1 }],
+    getAttribute: (name) => name === "data-player-id" ? "99999" : null,
+    closest: () => surfaceRow,
+  } : null;
+  surfaceRow = surfaceControl ? {
+    textContent: "Visible Player",
+    querySelector(selector) {
+      if (/playername|player-name/i.test(selector)) return { textContent: "Visible Player" };
+      if (selector.includes("img[src*='/players/full/']")) return { getAttribute: () => "https://a.espncdn.com/i/headshots/nfl/players/full/99999.png" };
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector.includes("button")) return [surfaceControl];
       return [];
     },
     getClientRects: () => [{ width: 1, height: 1 }],
@@ -112,8 +156,12 @@ async function loadDraftContext({ text, clockTeam, clockOwnMarker = false, ownTe
       if (selector === ".draft-header .icon-wrapper use") return [{
         getAttribute: (name) => name === "href" ? `#icon__controls__volume_${soundMuted ? "mute" : "up"}` : null,
       }];
-      if (selector === "[role='grid'] [role='row']") return playerRow ? [playerRow] : [];
-      if (selector.startsWith("button.Button--draft")) return playerControl ? [playerControl] : [];
+      if (selector === "[role='grid'] [role='row']") return [
+        ...(surfaceRow ? [surfaceRow] : []),
+        ...(playerRow && mandatoryPositionPlayerVisible() ? [playerRow] : []),
+      ];
+      if (selector.startsWith("button.Button--draft")) return playerControl && mandatoryPositionPlayerVisible() ? [playerControl] : [];
+      if (selector === "select") return mandatoryPositionFilter ? [mandatoryPositionFilter] : [];
       if (selector === "button, [role='button']") {
         const controls = [];
         if (nominationControl && actionState.selected && Date.now() - actionState.selectedAt >= nominationConfirmationDelayMs) controls.push(nominationControl);
@@ -747,4 +795,31 @@ test("final kicker and defense slots filter ESPN once before exact candidate res
   assert.equal(room.mandatoryPositionPlan(defenses).candidates.length, 32);
   assert.equal(room.mandatoryPositionPlan(kickers).slotId, "17");
   assert.equal(room.mandatoryPositionPlan([{ ...defenses[0], fillsMandatoryStarter: false }]), null);
+});
+
+test("an available mandatory position filter skips the redundant unfiltered grid wait", async () => {
+  const room = await loadDraftContext({
+    text: "PK 126 OF 128\n00:20\nYour turn to nominate a player!\nSelect a player below to nominate",
+    ownAuctionTeam: "Us",
+    ownAuctionSelecting: true,
+    nominationConfirmationDelayMs: 0,
+    mandatoryPositionFilterDelayMs: 120,
+    maximumOffer: 4,
+    selectPlayer: { id: -16023, name: "Steelers D/ST" },
+  });
+  const startedAt = Date.now();
+  const result = await room.executeAction({
+    operation: "NOMINATE",
+    playerId: -16023,
+    playerName: "Steelers D/ST",
+    position: "DST",
+    candidates: [{ playerId: -16023, playerName: "Steelers D/ST", position: "DST", fillsMandatoryStarter: true }],
+    amount: 1,
+    expectedLeagueId: "701",
+  });
+
+  assert.equal(result.code, "SUBMITTED");
+  assert.equal(room.actionState.selectClicks, 1);
+  assert.equal(room.actionState.nominationClicks, 1);
+  assert.ok(Date.now() - startedAt < 520, "mandatory filter path should not wait for the unfiltered grid first");
 });
