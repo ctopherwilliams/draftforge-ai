@@ -31,18 +31,20 @@ Keep Codex open in the desktop app and exactly two controlled Chrome tabs: `http
 
 ## Certification ledger
 
-Last updated: 2026-08-18 21:30 CT.
+Last updated: 2026-08-18 23:30 CT.
 
 | Gate | State |
 | --- | --- |
-| Local release gate | 152/152 tests, lint, typecheck, production build, UI, extension safety, replay, and latency passing |
+| Local release gate | 156/156 tests, lint, typecheck, production build, UI, extension safety, replay, and latency passing |
 | Deterministic drafts | 20/20 snake and 20/20 salary-cap complete and legal |
 | Live-snapshot Monte Carlo | 10,000 snake + 10,000 salary-cap; zero hard violations and zero simulation errors |
 | Overnight battle qualification | Four 5-draft batches per format: 20/20 snake + 20/20 salary cap, exact holdout replay, zero hard violations |
 | Historical post-sleeper authenticated ledger | 19/20 snake and 15/20 salary-cap; retained as historical evidence |
-| Current clean-room authenticated campaign | 2/20 snake and 15/20 salary-cap, every room final-audited |
-| Cold-start and recovery | Pre-room cold start passed; full dashboard-reload fail-closed recovery passed in room `1214429767` |
-| Remaining clean-room certification | 18 snake and 5 salary-cap rooms; not required to repeat the already-passed release or recovery gates |
+| Current clean-room authenticated campaign | 3/20 snake and 16/20 salary-cap, every countable room final-audited |
+| Latest authenticated completions | Salary-cap `14824417`: 14/14, exact prices, $5 left; snake `1664929220`: 16/16, exact parity; both auto-shut down with zero violations |
+| Cold-start and recovery | Server, tab, extension, source, stale-action, and ESPN-Autopick recovery paths passed fail-closed checks; contaminated recovery room `1446060763` remains excluded |
+| One-command READY gates | Saved snake and salary-cap profiles both return `DRAFT_DAY_READY` with every exact setting/source/tab/safety check true |
+| Remaining clean-room certification | 17 snake and 4 salary-cap rooms; optional additional evidence, not a substitute for per-room final audit |
 
 Do not advance an authenticated count without a complete final-ready loopback audit. Current evidence is machine-readable in `simulation/evidence/authenticated-certification-20260818.json`; older excluded rooms remain historical and must not be retroactively counted.
 
@@ -87,6 +89,15 @@ Do not advance an authenticated count without a complete final-ready loopback au
    ```
 
 8. Require `FIVE_SOURCE_READY` before room creation. A cold warmup may take about 20 seconds.
+9. Require the exact saved-profile gate before creating the room:
+
+   ```bash
+   npm run draft-day:ready -- --format snake --phase pre-room
+   # or
+   npm run draft-day:ready -- --format salary-cap --phase pre-room
+   ```
+
+   Do not continue unless it returns `DRAFT_DAY_READY` with no blockers and `Auto-Draft OFF`.
 
 ## First READY gate: before the room
 
@@ -115,6 +126,8 @@ After ESPN creates the room, explicitly bind its new league ID and rerun the com
 - the no-click engine returns one legal recommendation;
 - salary-cap ceiling, reserve, nomination, and next-offer state are exact; and
 - DraftForge is still off.
+
+Then run the matching command with `--phase live`. It must return `DRAFT_DAY_READY` before the authorization modal may arm Auto-Draft.
 
 Only then may Codex arm Auto-Draft for that named room. Arming is scoped to the room and resets on reload, league switch, safety failure, completion, `hold`, or `stop`.
 
@@ -169,7 +182,8 @@ Record the room ID, format, roster, prices/budget when applicable, audit result,
 
 - Chrome-control recovery is no longer an untested blocker: a clean two-tab cold start and a deliberate in-room dashboard reload both passed, including Auto-Draft resetting off, exact-room re-import, full revalidation, safe re-arming, 16/16 parity, and automatic shutdown. ESPN/Chrome drift can still recur, so every real draft must run both READY gates.
 - The expanded 2026-08-19 snapshot improved player-level coverage to 60.12% at four or more sources and 47.62% at all five, but GNG remains the shortest model board at 150 rows and not every late player can be corroborated. Treat confidence and sleeper labels accordingly.
-- The expanded snapshot produced zero production-qualified sleeper signals: five players had positive model evidence, one cleared the eight-point edge, and none reached the unchanged 50-point threshold. Do not claim sleeper performance has been authenticated until a fresh snapshot produces qualifying candidates and countable rooms exercise them.
+- The immutable expanded snapshot produced zero production-qualified sleeper signals. The latest fresh saved-snake pre-room state now produces two unchanged-threshold, five-source candidates (Jalen Hurts and Kyler Murray), while salary cap produces none. Treat these as current recommendation evidence, not authenticated sleeper-acquisition outcome evidence, until countable rooms exercise them.
+- Fresh room imports now forcibly reset Auto-Draft and old-room telemetry. A 30-second ESPN practice room can still start before manual setup finishes, so warm and pass the pre-room gate before room creation and use one bounded import/checklist/arming sequence inside the room. Any ESPN Autopick contamination excludes that room.
 - ESPN practice rooms may disappear after completion; the loopback audit must be captured before the tab is closed or ESPN deletes the state.
 
 ## Maintenance rule

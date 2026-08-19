@@ -112,8 +112,13 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(page, /payload\.code === "ROSTER_CONFIRMED"/);
   const rosterConfirmedHandler = page.match(/if \(payload\.code === "ROSTER_CONFIRMED"\) \{([\s\S]*?)\n\s*\}/)?.[1] || "";
   assert.match(rosterConfirmedHandler, /pendingSnakeActionRef\.current = null/);
-  assert.match(rosterConfirmedHandler, /lastAutoAction\.current = ""/);
+  assert.doesNotMatch(rosterConfirmedHandler, /lastAutoAction\.current = ""/);
   assert.doesNotMatch(rosterConfirmedHandler, /setActionRetryNonce/);
+  const importHandler = page.match(/if \(type === "DF_IMPORT_SUCCESS"[\s\S]*?if \(type === "DF_DRAFT_UPDATE"\)/)?.[0] || "";
+  assert.match(importHandler, /setAutoDraft\(false\)/);
+  assert.match(importHandler, /pendingActionTelemetryRef\.current\.clear\(\)/);
+  assert.match(importHandler, /actionTelemetryRef\.current = \[\]/);
+  assert.match(page, /ESPN confirmed roster \$\{myPickCount\}\/\$\{league\.rosterSize\}/);
   assert.match(page, /contextMatchesActiveDraftTab/);
   assert.match(page, /expectedTabId/);
   assert.match(page, /REFRESH_ESPN_CONTEXT/);

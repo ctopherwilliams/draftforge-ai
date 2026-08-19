@@ -7,16 +7,43 @@ export type DraftAuditRosterEntry = {
   amount: number;
 };
 
+export type DraftActionTelemetryEvent = {
+  occurredAt: string;
+  operation: "SELECT" | "BID" | "NOMINATE";
+  ok: boolean;
+  code: string;
+  roundTripMs: number;
+  clockSeconds: number | null;
+  automatic: boolean;
+};
+
+export type DraftAuditSleeperCandidate = {
+  playerId: number;
+  playerName: string;
+  position: string;
+  adp: number;
+  label: "VALUE" | "SLEEPER" | "DEEP_STASH";
+  score: number;
+  modelMarketEdge: number;
+  modelSpread: number;
+  sourceCount: number;
+};
+
 export type DraftAuditSnapshot = {
   schemaVersion: 1;
   capturedAt: string;
   league: {
     id: string;
     teamId: number;
+    season: number;
     draftType: "SNAKE" | "AUCTION";
     size: number;
     rosterSize: number;
     auctionBudget: number;
+    secondsPerPick: number;
+    scoringLabel: string;
+    scoringRules: number;
+    keeperCount: number;
     lineupSlotCounts: Record<string, number>;
     positionLimits: Record<string, number>;
   };
@@ -34,12 +61,20 @@ export type DraftAuditSnapshot = {
     autopickActive: boolean;
     autoDraft: boolean;
     sourceCoverage: number;
+    sourceIds: string[];
     actionState: string;
   };
   draft: {
     totalPicks: number;
     appRoster: DraftAuditRosterEntry[];
     espnRoster: DraftAuditRosterEntry[];
+  };
+  telemetry: {
+    actions: DraftActionTelemetryEvent[];
+  };
+  sleeperEvidence: {
+    candidateCount: number;
+    candidates: DraftAuditSleeperCandidate[];
   };
 };
 
@@ -120,8 +155,12 @@ export function isDraftAuditSnapshot(value: unknown): value is DraftAuditSnapsho
   if (snapshot.schemaVersion !== 1 || !Number.isFinite(Date.parse(String(snapshot.capturedAt || "")))) return false;
   if (!league || !String(league.id || "").trim() || !Number.isInteger(league.teamId) || Number(league.teamId) <= 0) return false;
   if (!["SNAKE", "AUCTION"].includes(String(league.draftType))) return false;
+  if (!Number.isInteger(league.season) || Number(league.season) < 2026) return false;
   if (!Number.isInteger(league.size) || Number(league.size) < 2 || !Number.isInteger(league.rosterSize) || Number(league.rosterSize) < 1) return false;
   if (!Number.isFinite(league.auctionBudget) || Number(league.auctionBudget) < 0) return false;
+  if (!Number.isInteger(league.secondsPerPick) || Number(league.secondsPerPick) < 1) return false;
+  if (!String(league.scoringLabel || "").trim() || !Number.isInteger(league.scoringRules) || Number(league.scoringRules) < 1) return false;
+  if (!Number.isInteger(league.keeperCount) || Number(league.keeperCount) < 0) return false;
   if (!league.lineupSlotCounts || !league.positionLimits || !binding || !Number.isInteger(binding.tabId) || Number(binding.tabId) <= 0) return false;
   const hasPublisherId = typeof binding.commandCenterSessionId === "string" && binding.commandCenterSessionId.trim().length >= 8;
   const hasPublisherStartedAt = Number.isFinite(Date.parse(String(binding.commandCenterStartedAt || "")));
@@ -139,7 +178,39 @@ export function isDraftAuditSnapshot(value: unknown): value is DraftAuditSnapsho
     safety.autoDraft,
   ].some((value) => typeof value !== "boolean")) return false;
   if (!Number.isInteger(safety.sourceCoverage) || typeof safety.actionState !== "string") return false;
+  if (!Array.isArray(safety.sourceIds) || safety.sourceIds.some((id) => typeof id !== "string")) return false;
   if (!Array.isArray(draft.appRoster) || !Array.isArray(draft.espnRoster)) return false;
+  if (!snapshot.telemetry) return false;
+  if (!Array.isArray(snapshot.telemetry.actions) || snapshot.telemetry.actions.length > 25) return false;
+  if (!snapshot.telemetry.actions.every((event) => (
+    Number.isFinite(Date.parse(String(event?.occurredAt || "")))
+    && ["SELECT", "BID", "NOMINATE"].includes(String(event?.operation))
+    && typeof event?.ok === "boolean"
+    && Boolean(String(event?.code || "").trim())
+    && Number.isInteger(event?.roundTripMs)
+    && Number(event.roundTripMs) >= 0
+    && (event.clockSeconds === null || (Number.isFinite(event.clockSeconds) && Number(event.clockSeconds) >= 0))
+    && typeof event?.automatic === "boolean"
+  ))) return false;
+  if (!snapshot.sleeperEvidence || !Number.isInteger(snapshot.sleeperEvidence.candidateCount) || snapshot.sleeperEvidence.candidateCount < 0) return false;
+  if (!Array.isArray(snapshot.sleeperEvidence.candidates) || snapshot.sleeperEvidence.candidates.length > 20) return false;
+  if (snapshot.sleeperEvidence.candidateCount !== snapshot.sleeperEvidence.candidates.length) return false;
+  if (!snapshot.sleeperEvidence.candidates.every((candidate) => (
+    Number.isInteger(candidate?.playerId)
+    && candidate.playerId !== 0
+    && Boolean(String(candidate.playerName || "").trim())
+    && POSITIONS.has(String(candidate.position))
+    && Number.isFinite(candidate.adp)
+    && ["VALUE", "SLEEPER", "DEEP_STASH"].includes(String(candidate.label))
+    && Number.isInteger(candidate.score)
+    && candidate.score >= 50
+    && Number.isFinite(candidate.modelMarketEdge)
+    && candidate.modelMarketEdge >= 8
+    && Number.isFinite(candidate.modelSpread)
+    && candidate.modelSpread <= 12
+    && Number.isInteger(candidate.sourceCount)
+    && candidate.sourceCount >= 4
+  ))) return false;
   return [...draft.appRoster, ...draft.espnRoster].every((entry) => (
     Number.isInteger(entry?.playerId)
     && Number(entry.playerId) !== 0

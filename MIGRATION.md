@@ -60,6 +60,15 @@ The code, production build, public data adapters, and local tests pass. The issu
 
 The robustness gate also supports immutable live five-source capture/replay and sequential independent-seed matrices. Generated snapshot JSON and Monte Carlo outputs are intentionally ignored by Git; reproduce them from a fresh authenticated ESPN import rather than copying browser credentials or profiles.
 
+The release also includes a fail-closed readiness gate for the two saved authenticated league profiles:
+
+```bash
+npm run draft-day:ready -- --format snake --phase pre-room
+npm run draft-day:ready -- --format salary-cap --phase pre-room
+```
+
+Use `--phase live` only after entering the exact ESPN room. A migrated machine is not draft-ready until both the imported settings and this gate pass; a cached profile alone is insufficient.
+
 Re-run the full 20+20 simulation gate after any engine-affecting change. Authenticated mocks and deterministic simulations are recorded separately; simulations are not represented as live ESPN drafts.
 
 For each authenticated final rehearsal, require the loopback certification ledger before counting it:
@@ -74,6 +83,8 @@ The ledger is sanitized and in-memory only, expires after 24 hours, and is not a
 
 ```bash
 npm test
+npm run draft-day:ready -- --format snake --phase pre-room
+npm run draft-day:ready -- --format salary-cap --phase pre-room
 npm run snapshot:capture -- --validate snapshots/intelligence/source-v1-....json
 npm run simulate:matrix -- --drafts 1000 --snapshot snapshots/intelligence/source-v1-....json
 npm run draft-day:audit -- --league <leagueId> --team <teamId> --require-complete

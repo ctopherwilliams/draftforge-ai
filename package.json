@@ -17,7 +17,8 @@
     "simulate:matrix": "node scripts/monte-carlo-matrix.mjs",
     "snapshot:capture": "node scripts/capture-source-snapshot.mjs",
     "draft-day:warm": "node scripts/draft-day-warm.mjs",
-    "draft-day:audit": "node scripts/draft-day-audit.mjs"
+    "draft-day:audit": "node scripts/draft-day-audit.mjs",
+    "draft-day:ready": "node scripts/draft-day-ready.mjs"
   },
   "dependencies": {
     "react": "19.2.8",

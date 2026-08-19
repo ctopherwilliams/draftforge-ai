@@ -49,6 +49,7 @@ function printValidation(snapshot, validation) {
     corroboratedSleeperCandidateCount: validation.corroboratedSleeperCandidateCount,
     sleeperEvidenceFunnel: validation.sleeperEvidenceFunnel,
     sleeperSignalCounts: validation.sleeperSignalCounts,
+    sleeperCandidates: validation.sleeperCandidates,
     sources: validation.sourceSummaries,
     warnings: validation.warnings,
     errors: validation.errors,

@@ -88,6 +88,7 @@ test("five-source snapshots are sanitized, content-addressed, and deterministica
     productionSignals: 0,
   });
   assert.deepEqual(snapshot.validation.sleeperSignalCounts, { VALUE: 0, SLEEPER: 0, DEEP_STASH: 0 });
+  assert.deepEqual(snapshot.validation.sleeperCandidates, []);
 });
 
 test("snapshot replay fails closed on tampering or stale captured sources", () => {

@@ -8,8 +8,8 @@
     "batchSize": 5
   },
   "newCountableDrafts": {
-    "snake": 2,
-    "salaryCap": 15
+    "snake": 3,
+    "salaryCap": 16
   },
   "invariants": {
     "authenticatedEspnOnly": true,
@@ -32,6 +32,11 @@
       "leagueId": "1743483683",
       "format": "salary-cap",
       "reason": "Roster and price parity passed, but the original completion audit recomputed the live action checklist after ESPN removed its action surface and returned LIVE_CHECKLIST_NOT_READY. The room was excluded and the same-tab completion-evidence regression was fixed before any count advanced."
+    },
+    {
+      "leagueId": "1446060763",
+      "format": "snake",
+      "reason": "The live room started before the first checklist and arming sequence completed. ESPN Autopick filled the opening roster slots; DraftForge detected it, stopped, disabled Autopick through the exact authenticated control, and proved recovery with a subsequent exact DraftForge pick. The contaminated room was discarded before the clean certification repeat."
     }
   ],
   "countableRooms": [
@@ -531,6 +536,66 @@
         ["Jake Bates", 0],
         ["Alvin Kamara", 0]
       ]
+    },
+    {
+      "leagueId": "14824417",
+      "format": "salary-cap",
+      "teamId": 7,
+      "audit": "DRAFT_AUDIT_READY",
+      "finalReady": true,
+      "parity": true,
+      "spent": 195,
+      "remainingBudget": 5,
+      "hardViolations": [],
+      "finalViolations": [],
+      "exercisedSignals": ["BID_CHANGED", "BID_OUT_OF_SEQUENCE", "NOMINEE_UNKNOWN", "target-nomination", "exact-bid-ceilings", "mandatory-specialist-completion", "automatic-shutdown"],
+      "roster": [
+        ["Trey McBride", 42],
+        ["Saquon Barkley", 34],
+        ["Derrick Henry", 32],
+        ["A.J. Brown", 30],
+        ["Malik Nabers", 20],
+        ["Patrick Mahomes", 20],
+        ["Rome Odunze", 7],
+        ["Brian Thomas Jr.", 1],
+        ["Christian Watson", 2],
+        ["Michael Wilson", 2],
+        ["Tucker Kraft", 2],
+        ["C.J. Stroud", 1],
+        ["Steelers D/ST", 1],
+        ["Cameron Dicker", 1]
+      ]
+    },
+    {
+      "leagueId": "1664929220",
+      "format": "snake",
+      "teamId": 6,
+      "audit": "DRAFT_AUDIT_READY",
+      "finalReady": true,
+      "parity": true,
+      "spent": 0,
+      "remainingBudget": 0,
+      "hardViolations": [],
+      "finalViolations": [],
+      "exercisedSignals": ["NOT_ON_CLOCK_FAIL_CLOSED", "exact-roster-confirmation", "mandatory-specialist-completion", "automatic-shutdown"],
+      "roster": [
+        ["Jalen Hurts", 0],
+        ["De'Von Achane", 0],
+        ["Saquon Barkley", 0],
+        ["Josh Jacobs", 0],
+        ["Kyren Williams", 0],
+        ["Davante Adams", 0],
+        ["Kyler Murray", 0],
+        ["DK Metcalf", 0],
+        ["Jaylen Warren", 0],
+        ["Brian Thomas Jr.", 0],
+        ["Mark Andrews", 0],
+        ["J.K. Dobbins", 0],
+        ["RJ Harvey", 0],
+        ["Texans D/ST", 0],
+        ["Brandon Aubrey", 0],
+        ["Alvin Kamara", 0]
+      ]
     }
   ],
   "batchReviews": [
@@ -651,6 +716,110 @@
       "identicalReplay": true
     },
     "decision": "Coverage expansion is accepted because it extends the existing Tradyr redraft-PPR feed through its documented, equivalent single-QB pagination path without changing source identity, source weight, consensus math, or strategy. Sleeper thresholds remain unchanged because the expanded snapshot still contains no production-qualified sleeper signal."
+  },
+  "draftDayReadinessCertification": {
+    "completedAt": "2026-08-19T04:24:55.268Z",
+    "savedLeagueProfiles": {
+      "snake": {
+        "leagueId": "1603083723",
+        "teamId": 6,
+        "season": 2026,
+        "draftType": "SNAKE",
+        "teams": 10,
+        "rosterSize": 16,
+        "secondsPerPick": 60,
+        "scoring": "Standard",
+        "scoringRules": 29,
+        "keepers": 0
+      },
+      "salaryCap": {
+        "leagueId": "44050",
+        "teamId": 7,
+        "season": 2026,
+        "draftType": "AUCTION",
+        "teams": 12,
+        "rosterSize": 14,
+        "auctionBudget": 200,
+        "secondsPerPick": 60,
+        "scoring": "PPR",
+        "scoringRules": 45,
+        "keepers": 2
+      }
+    },
+    "oneCommandReadiness": {
+      "snake": "DRAFT_DAY_READY",
+      "salaryCap": "DRAFT_DAY_READY",
+      "checksPerFormat": 24,
+      "allChecksPassed": true,
+      "exactSourceSet": ["espn", "ffc", "gng", "mfl", "tradyr"],
+      "autoDraftOff": true,
+      "telemetryResetOnImport": true
+    },
+    "authenticatedCompletion": {
+      "salaryCapRoom": "14824417",
+      "salaryCapRoster": "14/14",
+      "salaryCapSpent": 195,
+      "salaryCapRemaining": 5,
+      "snakeRoom": "1664929220",
+      "snakeRoster": "16/16",
+      "exactParity": true,
+      "hardViolations": 0,
+      "finalViolations": 0,
+      "automaticShutdown": true,
+      "soundMuted": true,
+      "espnAutopickOff": true
+    },
+    "recoveryEvidence": [
+      "Production-server restart failed closed until the exact league, tab, settings, and five-source snapshot were re-established.",
+      "Closing the ESPN tab made the one-command gate fail on extension binding; reopening exactly one tab and re-importing restored readiness.",
+      "Extension reload reset the dashboard to preview, 1/5 sources, and Auto-Draft off until re-import and revalidation.",
+      "A deliberately missed opening snake clock activated ESPN Autopick; DraftForge detected it and stopped, the exact authenticated disable control recovered the room, and the contaminated room was excluded.",
+      "A fresh bounded snake launch armed before any pick and completed 16/16 without ESPN Autopick.",
+      "A transient NOT_ON_CLOCK response failed closed and re-evaluated without losing the next valid turn."
+    ],
+    "sleeperEvidence": {
+      "thresholdsChanged": false,
+      "snakeCurrentCandidates": ["Jalen Hurts", "Kyler Murray"],
+      "salaryCapCurrentCandidates": [],
+      "note": "Current live candidates satisfy the unchanged five-source evidence contract; they are not yet authenticated sleeper-acquisition outcome evidence."
+    },
+    "telemetry": {
+      "sanitized": true,
+      "maxEvents": 25,
+      "privateIdentifiersStored": false,
+      "operationsObserved": ["SELECT", "BID", "NOMINATE"],
+      "liveRoundTripPattern": "Successful actions were usually sub-second; stale ESPN bid transitions failed closed and were retried from fresh room state."
+    },
+    "uiCertification": {
+      "authenticatedSnake": true,
+      "authenticatedSalaryCap": true,
+      "desktopOverlap": false,
+      "responsiveStaticGate": true,
+      "salaryFairValueConsistency": true,
+      "palette": "graphite-white-blue-amber"
+    },
+    "releaseGate": {
+      "npmRunCheck": "156/156 passed",
+      "deterministicSnakeDrafts": 20,
+      "deterministicSalaryCapDrafts": 20,
+      "pairedMonteCarloDraftsPerFormat": 20,
+      "pairedMonteCarloSeed": 20260819,
+      "pairedMonteCarloDigest": "4212d1912eb290beadb1ba3a5782b4c8b9c8d42331ac988b4268ad7ec81a5a96",
+      "identicalReplay": true,
+      "hardViolations": 0,
+      "lint": "passed",
+      "typecheck": "passed",
+      "build": "passed"
+    },
+    "acceptedCodeChanges": [
+      "Add exact saved authenticated league profiles and a fail-closed one-command readiness evaluator/CLI.",
+      "Publish bounded sanitized action telemetry and unchanged-threshold sleeper evidence in the loopback audit.",
+      "Reset Auto-Draft and telemetry on every fresh ESPN import.",
+      "Preserve the completed-turn dedupe key after ROSTER_CONFIRMED so stale ESPN context cannot trigger same-turn retry bursts.",
+      "Keep live status aligned with authoritative roster-count changes.",
+      "Correct Monte Carlo saved settings to the exact authenticated ESPN timer, scoring, lineup, keeper, and raw position-limit values.",
+      "Display the same source-backed salary fair value in the command card and player board."
+    ]
   },
   "observationsForBatchReview": [
     "ESPN late-room opponent price coverage can fall below 100% while DraftForge's own roster and prices remain exact; every room still requires final ESPN/app price parity.",

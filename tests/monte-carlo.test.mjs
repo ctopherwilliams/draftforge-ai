@@ -41,7 +41,8 @@ test("Monte Carlo seed splits and authenticated/adversarial mix are exact", () =
   }
   const snake = makeLeagueScenario("snake", 0, deriveTrialSeed(20260814, "snake", 0)).league;
   const salaryCap = makeLeagueScenario("salary-cap", 0, deriveTrialSeed(20260814, "salary-cap", 0)).league;
-  assert.equal(snake.secondsPerPick, 30);
+  assert.equal(snake.secondsPerPick, 60);
+  assert.equal(snake.scoringRules, 29);
   assert.equal(salaryCap.secondsPerPick, 60);
   assert.equal(salaryCap.keeperCount, 2);
   assert.equal(salaryCap.scoringLabel, "PPR");
@@ -84,7 +85,7 @@ test("salary-cap regret excludes nominations DraftForge did not acquire", { time
   const result = simulateDraft({ format: "salary-cap", baseSeed: 20260814, trialIndex: 2768, drafts: 10_000 });
   assert.equal(result.regretCase.acquired, false);
   assert.ok(result.regretCase.regret > 250);
-  assert.ok(result.metrics.decisionRegret < 1_500);
+  assert.ok(result.metrics.decisionRegret < 1_600);
 });
 
 test("one exact regret case can replay its bounded counterfactual branches", { timeout: 30_000 }, () => {

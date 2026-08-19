@@ -132,6 +132,18 @@ export function validateSourceSnapshot(snapshot) {
       label,
       sleeperSignals.filter((player) => player.sleeperLabel === label).length,
     ]));
+    const sleeperCandidates = sleeperSignals.slice(0, 20).map((player) => ({
+      id: player.id,
+      name: player.name,
+      position: player.pos,
+      adp: Number(player.adp),
+      consensusRank: Number(player.consensusRank),
+      label: player.sleeperLabel,
+      score: Number(player.sleeperScore),
+      modelMarketEdge: Number(player.modelMarketEdge || 0),
+      modelSpread: Number(player.modelSpread || 0),
+      sourceCount: Number(player.sourceCount || 0),
+    }));
     const sourceReach = Object.fromEntries(summaries.map((source) => [source.id, source.players]));
     if (coverage < .5) warnings.push(`Only ${(coverage * 100).toFixed(1)}% of the rosterable board has at least four-source coverage.`);
     if (!completeMarketModelCoverageCount) {
@@ -158,6 +170,7 @@ export function validateSourceSnapshot(snapshot) {
         productionSignals: sleeperSignals.length,
       },
       sleeperSignalCounts,
+      sleeperCandidates,
       consensusDigest: createHash("sha256").update(stableSnapshotJson(consensus)).digest("hex"),
     };
   }
@@ -181,6 +194,7 @@ export function validateSourceSnapshot(snapshot) {
       productionSignals: 0,
     },
     sleeperSignalCounts: { VALUE: 0, SLEEPER: 0, DEEP_STASH: 0 },
+    sleeperCandidates: [],
     consensusDigest: null,
   };
 }

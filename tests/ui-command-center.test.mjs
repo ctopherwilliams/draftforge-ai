@@ -32,6 +32,8 @@ test("live decision precedes secondary player-board detail", () => {
   assert.match(page, /resolveEspnNominatedPlayer\(recommendations, context\)/);
   assert.doesNotMatch(page, /league\.draftType === "AUCTION" && context\.onClock && auctionNomination/);
   assert.match(page, /function displayAuctionValue/);
+  assert.match(page, /displayAuctionValue\(player\.id, league\.id, player\.fairValue\)/);
+  assert.doesNotMatch(page, /displayAuctionValue\(player\.id, league\.id, player\.auction\)/);
   assert.match(page, /draftAuditPendingRef/);
   assert.match(page, /DRAFT_AUDIT_RECORDED/);
   assert.match(page, /attempt < 3/);

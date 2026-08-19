@@ -33,7 +33,7 @@ The optional single-tab recovery path can reuse an authenticated in-app-browser 
 
 For local development after the companion has been loaded once from this repository's `extension/` directory, opening `http://localhost:3000/?reloadCompanion=1` reloads the unpacked companion from disk. The command is rejected from non-localhost pages. Reload the ESPN and dashboard tabs after it runs; never invoke it during an active action window.
 
-For a second league, choose **Import another ESPN league**, open that league on ESPN, and import it. DraftForge stores each league's settings, picks, player pool, and strategy separately. Auto-Draft is always reset to off when switching leagues or reloading.
+For a second league, choose **Import another ESPN league**, open that league on ESPN, and import it. DraftForge stores each league's settings, picks, player pool, and strategy separately. Auto-Draft and old-room telemetry are always reset when importing, switching leagues, or reloading.
 
 ## Draft operating modes
 
@@ -57,7 +57,17 @@ Draft day is a cold-start workflow, not a continuation of whatever tabs or serve
    ```
 
    Change scoring and team count to the imported league values. The command exits nonzero unless ESPN plus FFC, MFL, Tradyr, and GNG are all ready.
+   After importing and confirming the saved league, require the matching one-command pre-room gate:
+
+   ```bash
+   npm run draft-day:ready -- --format snake --phase pre-room
+   # or
+   npm run draft-day:ready -- --format salary-cap --phase pre-room
+   ```
+
+   This gate compares the live loopback audit with the exact saved ESPN settings, tab binding, publisher session, five-source set, source freshness, extension state, telemetry schema, and Auto-Draft/ESPN-Autopick safety state. It exits nonzero on any mismatch.
 4. Create the league-specific practice or live room in the same ESPN tab, let the companion bind that exact tab, mute sound, disable ESPN Autopick, and verify the exact league/team/action surface.
+   Before arming, rerun the command with `--phase live`; it additionally requires the second live-room checklist, muted sound, and resolved ESPN action surface.
 5. Only then start the guarded loop. It polls cheap DOM state off-clock, calls the production engine only for an own snake turn or active salary-cap decision, submits through the shared action implementation, and requires ESPN roster confirmation.
 6. At completion, verify the exact roster, prices/budget, mandatory slots, position caps, one-dollar reserve, Autopick-off state, muted sound, and close the completed ESPN tab while keeping the dashboard available for the next rehearsal.
 

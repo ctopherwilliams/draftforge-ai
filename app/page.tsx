@@ -32,6 +32,7 @@ import { buildDraftPresentation, resolveActionSurfaceStatus, resolveLiveOperator
 import {
   draftAuditChecklistBindingKey,
   resolveDraftAuditChecklistReady,
+  type DraftActionTelemetryEvent,
   type DraftAuditRosterEntry,
   type DraftAuditSnapshot,
 } from "./lib/draft-audit";
@@ -170,6 +171,9 @@ export default function Home() {
   const [profiles, setProfiles] = useState<Record<string, DraftProfile>>({});
   const [rejectedSnakePlayerIds, setRejectedSnakePlayerIds] = useState<number[]>([]);
   const [actionRetryNonce, setActionRetryNonce] = useState(0);
+  const [activeEspnTabId, setActiveEspnTabId] = useState<number | null>(null);
+  const [auditHeartbeat, setAuditHeartbeat] = useState(0);
+  const [telemetryVersion, setTelemetryVersion] = useState(0);
   const [pendingAuctionNomination, setPendingAuctionNomination] = useState<{
     playerId: number;
     playerName: string;
@@ -207,6 +211,14 @@ export default function Home() {
   } | null>(null);
   const draftAuditDigestRef = useRef("");
   const draftAuditPendingRef = useRef("");
+  const actionTelemetryRef = useRef<DraftActionTelemetryEvent[]>([]);
+  const pendingActionTelemetryRef = useRef(new Map<number, {
+    sentAt: number;
+    operation: "SELECT" | "BID" | "NOMINATE";
+    clockSeconds: number | null;
+    automatic: boolean;
+  }>());
+  const lastRosterStatusKeyRef = useRef("");
   const lastValidatedLiveChecklistBindingRef = useRef("");
   const authoritativeRosterContext = useMemo(() => ({
     inDraftRoom: context.inDraftRoom,
@@ -227,6 +239,7 @@ export default function Home() {
     // A saved profile does not prove which currently-open ESPN tab supplied
     // it. Require a fresh explicit import before it can become actionable.
     activeEspnTabRef.current = null;
+    setActiveEspnTabId(null);
     activeEspnTeamRef.current = null;
     latestActionRequestRef.current = ++actionRequestSequenceRef.current;
     pendingSnakeActionRef.current = null;
@@ -255,6 +268,7 @@ export default function Home() {
     activeLeagueRef.current = "demo";
     activeLeagueSettingsRef.current = DEMO_LEAGUE;
     activeEspnTabRef.current = null;
+    setActiveEspnTabId(null);
     activeEspnTeamRef.current = null;
     latestActionRequestRef.current = ++actionRequestSequenceRef.current;
     pendingSnakeActionRef.current = null;
@@ -282,6 +296,7 @@ export default function Home() {
     activeLeagueRef.current = previewLeague.id;
     activeLeagueSettingsRef.current = previewLeague;
     activeEspnTabRef.current = null;
+    setActiveEspnTabId(null);
     activeEspnTeamRef.current = null;
     latestActionRequestRef.current = ++actionRequestSequenceRef.current;
     pendingSnakeActionRef.current = null;
@@ -346,6 +361,7 @@ export default function Home() {
           setExtension("connected");
         } else if (payload.rebound === true && contextCanRebindDraftTab(roomContext, activeLeagueRef.current, activeEspnTeamRef.current)) {
           activeEspnTabRef.current = Number(roomContext.tabId);
+          setActiveEspnTabId(Number(roomContext.tabId));
           setContext((current) => stabilizeEspnContext(current, roomContext));
           setExtension("connected");
         }
@@ -370,6 +386,7 @@ export default function Home() {
         activeLeagueRef.current = importedLeague.id;
         activeLeagueSettingsRef.current = importedLeague;
         activeEspnTabRef.current = Number.isInteger(importedTabId) ? importedTabId : null;
+        setActiveEspnTabId(Number.isInteger(importedTabId) ? importedTabId : null);
         activeEspnTeamRef.current = Number(importedContext?.teamId || importedLeague.teamId || 0) || null;
         latestActionRequestRef.current = ++actionRequestSequenceRef.current;
         pendingSnakeActionRef.current = null;
@@ -377,6 +394,12 @@ export default function Home() {
         pendingAuctionBidRef.current = null;
         setPendingAuctionNomination(null);
         setRejectedSnakePlayerIds([]);
+        setAutoDraft(false);
+        lastAutoAction.current = "";
+        setActionRetryNonce(0);
+        pendingActionTelemetryRef.current.clear();
+        actionTelemetryRef.current = [];
+        setTelemetryVersion((version) => version + 1);
         pendingAutoArmRequestRef.current = null;
         setAutoArmVerification(null);
         dispatchUi({ type: "set", key: "autoWarning", value: false });
@@ -428,6 +451,20 @@ export default function Home() {
       if (type === "DF_ACTION_RESULT") {
         const actionRequestId = Number(payload.action?.actionRequestId);
         if (Number.isInteger(actionRequestId) && actionRequestId !== latestActionRequestRef.current) return;
+        const pendingTelemetry = pendingActionTelemetryRef.current.get(actionRequestId);
+        if (pendingTelemetry) {
+          pendingActionTelemetryRef.current.delete(actionRequestId);
+          actionTelemetryRef.current = [...actionTelemetryRef.current, {
+            occurredAt: new Date().toISOString(),
+            operation: pendingTelemetry.operation,
+            ok: payload.ok === true,
+            code: String(payload.code || (payload.ok ? "ACTION_OK" : "ACTION_FAILED")),
+            roundTripMs: Math.max(0, Math.round(Date.now() - pendingTelemetry.sentAt)),
+            clockSeconds: pendingTelemetry.clockSeconds,
+            automatic: pendingTelemetry.automatic,
+          }].slice(-25);
+          setTelemetryVersion((version) => version + 1);
+        }
         if (!payload.ok && payload.action?.operation === "NOMINATE") {
           pendingAuctionNominationRef.current = null;
           setPendingAuctionNomination(null);
@@ -448,7 +485,6 @@ export default function Home() {
           }
           if (payload.code === "ROSTER_CONFIRMED") {
             pendingSnakeActionRef.current = null;
-            lastAutoAction.current = "";
             setExtension("connected");
           }
         }
@@ -709,6 +745,20 @@ export default function Home() {
     [players, authoritativePicks, league, strategy, recommendationPick, context.auctionBudgets, playerPool],
   );
   const recommendations = decision.recommendations;
+  const sleeperEvidence = useMemo(() => recommendations
+    .filter((player) => player.sleeperLabel !== "NONE")
+    .slice(0, 20)
+    .map((player) => ({
+      playerId: player.id,
+      playerName: player.name,
+      position: player.pos,
+      adp: Number(player.adp),
+      label: player.sleeperLabel as "VALUE" | "SLEEPER" | "DEEP_STASH",
+      score: Number(player.sleeperScore),
+      modelMarketEdge: Number(player.modelMarketEdge || 0),
+      modelSpread: Number(player.modelSpread || 0),
+      sourceCount: Number(player.sourceCount || 0),
+    })), [recommendations]);
   const remainingRosterSlots = Math.max(0, league.rosterSize - authoritativePicks.filter((pick) => pick.teamId === league.teamId).length);
   const liveRecommendations = useMemo(() => {
     return liveEspnRecommendations(recommendations, context, rejectedSnakePlayerIds, remainingRosterSlots);
@@ -742,12 +792,23 @@ export default function Home() {
     [authoritativePicks, league.teamId],
   );
   const myPickCount = myPicks.length;
+  useEffect(() => {
+    const rosterStatusKey = `${league.id}:${activeEspnTabId ?? "none"}:${myPickCount}`;
+    if (lastRosterStatusKeyRef.current === rosterStatusKey) return;
+    lastRosterStatusKeyRef.current = rosterStatusKey;
+    if (context.inDraftRoom !== true || myPickCount <= 0 || myPickCount >= league.rosterSize) return;
+    // Roster reconciliation is authoritative even when a rapid ESPN action
+    // result arrives out of order. Keep the command status aligned with the
+    // visible roster instead of leaving an older player confirmation behind.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setActionState(`ESPN confirmed roster ${myPickCount}/${league.rosterSize}. Recommendations and roster needs updated.`);
+  }, [activeEspnTabId, context.inDraftRoom, league.id, league.rosterSize, myPickCount]);
   const myRoster = myPicks.map((pick) => ({ pick, player: playerPool.playerById.get(pick.playerId) })).filter((item) => item.player) as { pick: DraftPick; player: DraftPlayer }[];
   const currentPick = recommendationPick;
   const currentRound = league.draftType === "SNAKE" ? Math.floor((Math.max(1, currentPick) - 1) / league.size) + 1 : null;
   const remainingSeconds = typeof context.remainingSeconds === "number" ? context.remainingSeconds : Number.NaN;
   const minimumActionWindow = league.draftType === "SNAKE" ? MIN_SNAKE_SELECTION_WINDOW_SECONDS : MIN_OTHER_ACTION_WINDOW_SECONDS;
-  const healthySources = sources.filter(isIntelligenceSourceFresh);
+  const healthySources = useMemo(() => sources.filter(isIntelligenceSourceFresh), [sources]);
   const sourceCoverageReady = isCompleteFreshIntelligenceSnapshot(sources);
   const actionWindowOpen = sourceCoverageReady && context.actionSurfaceReady === true && context.autopickActive !== true && Boolean(context.onClock) && Number.isFinite(remainingSeconds) && remainingSeconds >= minimumActionWindow;
   const bidWindowOpen = sourceCoverageReady && context.autopickActive !== true && Number.isFinite(remainingSeconds) && remainingSeconds >= MIN_OTHER_ACTION_WINDOW_SECONDS;
@@ -859,6 +920,17 @@ export default function Home() {
     }
     const actionRequestId = ++actionRequestSequenceRef.current;
     latestActionRequestRef.current = actionRequestId;
+    pendingActionTelemetryRef.current.set(actionRequestId, {
+      sentAt: Date.now(),
+      operation: resolvedOperation,
+      clockSeconds: Number.isFinite(remainingSeconds) ? remainingSeconds : null,
+      automatic,
+    });
+    while (pendingActionTelemetryRef.current.size > 25) {
+      const oldestRequestId = pendingActionTelemetryRef.current.keys().next().value;
+      if (oldestRequestId === undefined) break;
+      pendingActionTelemetryRef.current.delete(oldestRequestId);
+    }
     if (resolvedOperation === "BID") {
       pendingAuctionBidRef.current = {
         actionRequestId,
@@ -1010,7 +1082,13 @@ export default function Home() {
   });
 
   useEffect(() => {
-    const exactTabId = activeEspnTabRef.current;
+    if (league.id === "demo" || !Number.isInteger(activeEspnTabId)) return;
+    const timer = window.setInterval(() => setAuditHeartbeat((heartbeat) => heartbeat + 1), 5_000);
+    return () => window.clearInterval(timer);
+  }, [activeEspnTabId, league.id]);
+
+  useEffect(() => {
+    const exactTabId = activeEspnTabId;
     if (league.id === "demo" || !Number.isInteger(exactTabId) || Number(exactTabId) <= 0) return;
     const currentLiveChecklistBindingKey = draftAuditChecklistBindingKey(
       league.id,
@@ -1038,7 +1116,7 @@ export default function Home() {
     const appRoster = myPicks
       .map((pick) => toAuditEntry(pick.playerId, pick.amount))
       .filter((entry): entry is DraftAuditRosterEntry => Boolean(entry));
-    const espnRoster = resolveOwnRoster(context, espnPlayers)
+    const espnRoster = (context.inDraftRoom === true ? resolveOwnRoster(context, espnPlayers) : [])
       .map((entry) => toAuditEntry(entry.playerId, entry.amount))
       .filter((entry): entry is DraftAuditRosterEntry => Boolean(entry));
     const stable = {
@@ -1053,10 +1131,14 @@ export default function Home() {
       autopickActive: context.autopickActive === true,
       autoDraft,
       sourceCoverage: 1 + healthySources.length,
+      sourceIds: ["espn", ...healthySources.map((source) => source.id)].sort(),
       actionState,
       totalPicks: authoritativePicks.length,
       appRoster,
       espnRoster,
+      telemetryVersion,
+      auditHeartbeat,
+      sleeperEvidence,
     };
     const digest = JSON.stringify(stable);
     if (draftAuditDigestRef.current === digest || draftAuditPendingRef.current === digest) return;
@@ -1066,10 +1148,15 @@ export default function Home() {
       league: {
         id: league.id,
         teamId: Number(league.teamId),
+        season: Number(league.season),
         draftType: league.draftType,
         size: league.size,
         rosterSize: league.rosterSize,
         auctionBudget: league.auctionBudget,
+        secondsPerPick: league.secondsPerPick,
+        scoringLabel: league.scoringLabel,
+        scoringRules: league.scoringRules,
+        keeperCount: league.keeperCount,
         lineupSlotCounts: league.lineupSlotCounts,
         positionLimits: league.positionLimits,
       },
@@ -1087,12 +1174,20 @@ export default function Home() {
         autopickActive: context.autopickActive === true,
         autoDraft,
         sourceCoverage: 1 + healthySources.length,
+        sourceIds: ["espn", ...healthySources.map((source) => source.id)].sort(),
         actionState,
       },
       draft: {
         totalPicks: authoritativePicks.length,
         appRoster,
         espnRoster,
+      },
+      telemetry: {
+        actions: [...actionTelemetryRef.current],
+      },
+      sleeperEvidence: {
+        candidateCount: sleeperEvidence.length,
+        candidates: sleeperEvidence,
       },
     };
     draftAuditPendingRef.current = digest;
@@ -1118,7 +1213,7 @@ export default function Home() {
       }
       if (draftAuditPendingRef.current === digest) draftAuditPendingRef.current = "";
     })();
-  }, [actionState, autoDraft, authoritativePicks.length, context, espnPlayers, extension, healthySources.length, league, liveChecklistReady, myPickCount, myPicks, playerPool.playerById, settingsConfirmed]);
+  }, [actionState, activeEspnTabId, auditHeartbeat, autoDraft, authoritativePicks.length, context, espnPlayers, extension, healthySources, league, liveChecklistReady, myPickCount, myPicks, playerPool.playerById, settingsConfirmed, sleeperEvidence, telemetryVersion]);
 
   const { commandLabel, safetyLabel } = presentation;
   const displayCommandLabel = presentation.stateTone === "blocked" && context.autopickActive !== true && focusPlayer
@@ -1248,7 +1343,7 @@ export default function Home() {
         <div className="filters" aria-label="Filter player board">{FILTERS.map((item) => <button key={item} className={filter === item ? "active" : ""} onClick={() => setFilter(item)} aria-pressed={filter === item}>{item}</button>)}</div>
         <div className="table-head" aria-hidden="true"><span>#</span><span>PLAYER</span><span>POS</span><span>{league.draftType === "AUCTION" ? "FAIR $" : "ADP"}</span><span>PROJ</span><span>MODEL</span></div>
         <div className="player-list">{visible.slice(0, 150).map((player, index) => <button key={player.id} className={`player-row ${selected?.id === player.id ? "selected" : ""}`} onClick={() => setSelectedId(player.id)} aria-pressed={selected?.id === player.id}>
-          <span className="rank">{index + 1}</span><span className="player-name"><span><b>{player.name}</b><small>{player.team}{player.injured ? " · Injury flag" : ""}{player.sleeperLabel !== "NONE" ? ` · ${player.sleeperLabel.replace("_", " ")} ${player.sleeperScore}` : ""}</small></span></span><i className={`pos ${player.pos.toLowerCase()}`}>{player.pos}</i><span>{league.draftType === "AUCTION" ? `$${displayAuctionValue(player.id, league.id, player.auction)}` : player.adp < 900 ? player.adp.toFixed(1) : "—"}</span><span>{player.projected ? player.projected.toFixed(1) : "—"}</span><span className="model-score">{Math.round(player.score)}</span>
+          <span className="rank">{index + 1}</span><span className="player-name"><span><b>{player.name}</b><small>{player.team}{player.injured ? " · Injury flag" : ""}{player.sleeperLabel !== "NONE" ? ` · ${player.sleeperLabel.replace("_", " ")} ${player.sleeperScore}` : ""}</small></span></span><i className={`pos ${player.pos.toLowerCase()}`}>{player.pos}</i><span>{league.draftType === "AUCTION" ? `$${displayAuctionValue(player.id, league.id, player.fairValue)}` : player.adp < 900 ? player.adp.toFixed(1) : "—"}</span><span>{player.projected ? player.projected.toFixed(1) : "—"}</span><span className="model-score">{Math.round(player.score)}</span>
           {index === 0 && <em className="best-badge">BEST FIT</em>}
         </button>)}</div>
       </section>
