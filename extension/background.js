@@ -183,6 +183,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       await broadcast("DF_ACTION_RESOLVED", { ...action, tabId: senderTabId });
       return { ok: true };
     }
+    if (message.type === "ESPN_ACTION_SUBMITTED") {
+      const action = message.payload || {};
+      const expectedTabId = Number(action.expectedTabId);
+      const senderTabId = Number(sender.tab?.id);
+      let senderLeagueId = "";
+      try { senderLeagueId = new URL(sender.tab?.url || "").searchParams.get("leagueId") || ""; } catch { /* invalid sender URL */ }
+      if (!Number.isInteger(expectedTabId) || senderTabId !== expectedTabId || String(action.expectedLeagueId || "") !== senderLeagueId) {
+        return { ok: false, code: "ACTION_SUBMISSION_REJECTED" };
+      }
+      await broadcast("DF_ACTION_SUBMITTED", { ...action, tabId: senderTabId });
+      return { ok: true };
+    }
     if (message.type === "REFRESH_ESPN_CONTEXT") {
       const autoArmRequestId = Number(message.payload?.autoArmRequestId);
       const verification = Number.isInteger(autoArmRequestId) ? { autoArmRequestId } : {};

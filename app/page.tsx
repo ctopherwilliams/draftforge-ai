@@ -218,6 +218,7 @@ export default function Home() {
   const actionTelemetryRef = useRef<DraftActionTelemetryEvent[]>([]);
   const pendingActionTelemetryRef = useRef(new Map<number, {
     sentAt: number;
+    submittedAt: number | null;
     operation: "SELECT" | "BID" | "NOMINATE";
     clockSeconds: number | null;
     automatic: boolean;
@@ -463,17 +464,40 @@ export default function Home() {
           pending.playerName = String(payload.playerName || pending.playerName);
         }
       }
+      if (type === "DF_ACTION_SUBMITTED") {
+        const actionRequestId = Number(payload.actionRequestId);
+        const pendingTelemetry = pendingActionTelemetryRef.current.get(actionRequestId);
+        const submittedAt = Number(payload.submittedAt);
+        if (pendingTelemetry
+          && Number.isInteger(actionRequestId)
+          && actionRequestId === latestActionRequestRef.current
+          && Number(payload.tabId) === activeEspnTabRef.current
+          && Number.isFinite(submittedAt)
+          && submittedAt >= pendingTelemetry.sentAt
+          && pendingTelemetry.submittedAt === null) {
+          pendingTelemetry.submittedAt = submittedAt;
+        }
+      }
       if (type === "DF_ACTION_RESULT") {
         const actionRequestId = Number(payload.action?.actionRequestId);
         if (Number.isInteger(actionRequestId) && actionRequestId !== latestActionRequestRef.current) return;
         const pendingTelemetry = pendingActionTelemetryRef.current.get(actionRequestId);
         if (pendingTelemetry) {
           pendingActionTelemetryRef.current.delete(actionRequestId);
+          const resultSubmittedAt = Number(payload.action?.submittedAt);
+          const submittedAt = pendingTelemetry.submittedAt ?? (
+            Number.isFinite(resultSubmittedAt) && resultSubmittedAt >= pendingTelemetry.sentAt
+              ? resultSubmittedAt
+              : null
+          );
           actionTelemetryRef.current = [...actionTelemetryRef.current, {
             occurredAt: new Date().toISOString(),
             operation: pendingTelemetry.operation,
             ok: payload.ok === true,
             code: String(payload.code || (payload.ok ? "ACTION_OK" : "ACTION_FAILED")),
+            submitMs: submittedAt === null
+              ? null
+              : Math.max(0, Math.round(submittedAt - pendingTelemetry.sentAt)),
             roundTripMs: Math.max(0, Math.round(Date.now() - pendingTelemetry.sentAt)),
             clockSeconds: pendingTelemetry.clockSeconds,
             automatic: pendingTelemetry.automatic,
@@ -937,6 +961,7 @@ export default function Home() {
     latestActionRequestRef.current = actionRequestId;
     pendingActionTelemetryRef.current.set(actionRequestId, {
       sentAt: Date.now(),
+      submittedAt: null,
       operation: resolvedOperation,
       clockSeconds: Number.isFinite(remainingSeconds) ? remainingSeconds : null,
       automatic,

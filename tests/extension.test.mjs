@@ -68,6 +68,7 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(background, /chrome\.runtime\.getManifest\(\)\.version/);
   assert.match(background, /ESPN_HEARTBEAT/);
   assert.match(background, /ESPN_ACTION_RESOLVED/);
+  assert.match(background, /ESPN_ACTION_SUBMITTED/);
   assert.match(background, /senderTabId !== expectedTabId/);
   assert.match(background, /DF_ACTION_RESOLVED/);
   assert.match(background, /DISABLE_ESPN_AUTOPICK/);
@@ -92,6 +93,7 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(content, /candidates\s*\.find\(\(candidate\) => visiblePlayerControl/);
   assert.match(content, /setNativeSelectValue\(usedPositionFilter, "-1"\)/);
   assert.match(content, /sendToCompanion\(\{ type: "ESPN_ACTION_RESOLVED", payload: resolvedAction \}\)/);
+  assert.match(content, /sendToCompanion\(\{ type: "ESPN_ACTION_SUBMITTED"/);
   assert.match(content, /WRONG_LEAGUE/);
   assert.match(content, /NOMINEE_MISMATCH/);
   assert.match(content, /BID_CHANGED/);
@@ -119,6 +121,7 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(page, /if \(!payload\.ok\) setAutoDraft\(false\)/);
   assert.match(page, /actionRequestId !== latestActionRequestRef\.current/);
   assert.match(page, /type === "DF_ACTION_RESOLVED"/);
+  assert.match(page, /type === "DF_ACTION_SUBMITTED"/);
   assert.match(page, /pending\.playerId = Number\(payload\.playerId\)/);
   assert.match(page, /payload\.code === "ROSTER_CONFIRMED"/);
   const rosterConfirmedHandler = page.match(/if \(payload\.code === "ROSTER_CONFIRMED"\) \{([\s\S]*?)\n\s*\}/)?.[1] || "";

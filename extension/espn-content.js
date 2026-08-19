@@ -802,6 +802,7 @@ async function executeActionAttempt(action) {
     sendToCompanion({ type: "ESPN_ACTION_RESOLVED", payload: resolvedAction });
   }
   submit.click();
+  let submittedAt = Date.now();
   await new Promise((resolve) => setTimeout(resolve, 75));
   if (usedPositionFilter && String(usedPositionFilter.value) !== "-1") {
     setNativeSelectValue(usedPositionFilter, "-1");
@@ -812,6 +813,9 @@ async function executeActionAttempt(action) {
     /^(confirm|submit|yes)|confirm (pick|bid|nomination)|yes,? (draft|bid|nominate)/i.test((node.textContent || "").trim())
   );
   confirmation?.click();
+  if (confirmation) submittedAt = Date.now();
+  resolvedAction = { ...resolvedAction, submittedAt };
+  sendToCompanion({ type: "ESPN_ACTION_SUBMITTED", payload: { ...resolvedAction, submittedAt } });
   if (action.operation === "SELECT") {
     const confirmationDeadline = Math.min(Number(action.actionDeadlineAt || Infinity), Date.now() + SELECT_CONFIRMATION_WINDOW_MS);
     let confirmedContext = getContext();

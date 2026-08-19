@@ -14,6 +14,7 @@ export type DraftActionTelemetryEvent = {
   operation: "SELECT" | "BID" | "NOMINATE";
   ok: boolean;
   code: string;
+  submitMs: number | null;
   roundTripMs: number;
   clockSeconds: number | null;
   automatic: boolean;
@@ -203,6 +204,7 @@ export function isDraftAuditSnapshot(value: unknown): value is DraftAuditSnapsho
     && ["SELECT", "BID", "NOMINATE"].includes(String(event?.operation))
     && typeof event?.ok === "boolean"
     && Boolean(String(event?.code || "").trim())
+    && (event.submitMs === null || (Number.isInteger(event?.submitMs) && Number(event.submitMs) >= 0))
     && Number.isInteger(event?.roundTripMs)
     && Number(event.roundTripMs) >= 0
     && (event.clockSeconds === null || (Number.isFinite(event.clockSeconds) && Number(event.clockSeconds) >= 0))

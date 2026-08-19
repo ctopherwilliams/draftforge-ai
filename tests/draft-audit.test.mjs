@@ -79,6 +79,7 @@ function snapshot(overrides = {}) {
         operation: "BID",
         ok: true,
         code: "ACTION_SUBMITTED",
+        submitMs: 21,
         roundTripMs: 84,
         clockSeconds: 31,
         automatic: false,

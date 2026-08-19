@@ -18,6 +18,7 @@ const ESPN_MESSAGE_TYPES = new Set([
   "ESPN_CONTEXT",
   "ESPN_HEARTBEAT",
   "ESPN_ACTION_RESOLVED",
+  "ESPN_ACTION_SUBMITTED",
 ]);
 
 const ESPN_ORIGIN = "https://fantasy.espn.com";
