@@ -9,7 +9,7 @@
   },
   "newCountableDrafts": {
     "snake": 20,
-    "salaryCap": 16
+    "salaryCap": 17
   },
   "invariants": {
     "authenticatedEspnOnly": true,
@@ -1191,6 +1191,38 @@
         ["Texans D/ST", 0],
         ["Brandon Aubrey", 0],
         ["Alvin Kamara", 0]
+      ]
+    },
+    {
+      "leagueId": "910914185",
+      "format": "salary-cap",
+      "teamId": 7,
+      "draftSlot": 1,
+      "audit": "DRAFT_AUDIT_READY",
+      "doctor": "DRAFT_DAY_DOCTOR_READY",
+      "finalReady": true,
+      "parity": true,
+      "spent": 194,
+      "remainingBudget": 6,
+      "maxRoundTripMs": 1833,
+      "hardViolations": [],
+      "finalViolations": [],
+      "exercisedSignals": ["exact-price-parity", "BID_CHANGED", "exact-bid-ceiling", "one-dollar-increments", "bid-confirmation", "nomination-confirmation", "portfolio-budget", "late-budget-leverage", "mandatory-specialist-completion", "required-audit-command", "global-tab-cleanup", "automatic-shutdown"],
+      "roster": [
+        ["Trey McBride", 43],
+        ["Saquon Barkley", 36],
+        ["Chase Brown", 30],
+        ["Malik Nabers", 20],
+        ["A.J. Brown", 28],
+        ["Kyler Murray", 12],
+        ["Davante Adams", 15],
+        ["Jared Goff", 1],
+        ["Parker Washington", 2],
+        ["Rico Dowdle", 2],
+        ["Rhamondre Stevenson", 2],
+        ["Matthew Golden", 1],
+        ["Texans D/ST", 1],
+        ["Brandon Aubrey", 1]
       ]
     }
   ],
