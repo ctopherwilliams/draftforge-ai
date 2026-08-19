@@ -9,7 +9,7 @@
   },
   "newCountableDrafts": {
     "snake": 20,
-    "salaryCap": 18
+    "salaryCap": 19
   },
   "invariants": {
     "authenticatedEspnOnly": true,
@@ -1260,6 +1260,38 @@
         ["Wan'Dale Robinson", 1],
         ["Broncos D/ST", 1],
         ["Cameron Dicker", 1]
+      ]
+    },
+    {
+      "leagueId": "1770654772",
+      "format": "salary-cap",
+      "teamId": 7,
+      "draftSlot": 1,
+      "audit": "DRAFT_AUDIT_READY",
+      "doctor": "DRAFT_DAY_DOCTOR_READY",
+      "finalReady": true,
+      "parity": true,
+      "spent": 193,
+      "remainingBudget": 7,
+      "maxRoundTripMs": 1234,
+      "hardViolations": [],
+      "finalViolations": [],
+      "exercisedSignals": ["exact-price-parity", "exact-bid-ceiling", "one-dollar-increments", "bid-confirmation", "nomination-confirmation", "portfolio-budget", "late-budget-leverage", "mandatory-specialist-completion", "required-audit-command", "global-tab-cleanup", "automatic-shutdown"],
+      "roster": [
+        ["Trey McBride", 44],
+        ["Saquon Barkley", 38],
+        ["A.J. Brown", 27],
+        ["Malik Nabers", 21],
+        ["Omarion Hampton", 22],
+        ["Kyler Murray", 12],
+        ["George Pickens", 18],
+        ["Harold Fannin Jr.", 2],
+        ["Courtland Sutton", 2],
+        ["Michael Pittman Jr.", 2],
+        ["C.J. Stroud", 2],
+        ["Matthew Golden", 1],
+        ["Texans D/ST", 1],
+        ["Brandon Aubrey", 1]
       ]
     }
   ],
