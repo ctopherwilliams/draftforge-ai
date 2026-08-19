@@ -47,7 +47,14 @@ function snapshot(overrides = {}) {
       lineupSlotCounts: { "0": 1, "2": 1, "4": 1, "7": 1, "16": 1, "17": 1, "20": 6, "23": 2 },
       positionLimits: { "1": 2, "2": 3, "3": 5, "4": 2, "16": 1, "17": 1 },
     },
-    binding: { tabId: 1234 },
+    binding: { tabId: 1234, authenticatedImportAt: testCapturedAt() },
+    runtime: {
+      capturedAt: testCapturedAt(),
+      extensionVersion: "0.2.12",
+      browserTabCount: 2,
+      draftForgeTabCount: 1,
+      espnTabCount: 1,
+    },
     safety: {
       settingsConfirmed: true,
       liveChecklistReady: true,
@@ -213,6 +220,7 @@ test("newest command center owns audit publishing for an ESPN room", async () =>
       tabId: 4321,
       commandCenterSessionId: "older-command-center",
       commandCenterStartedAt: "2026-08-17T20:00:00.000Z",
+      authenticatedImportAt: testCapturedAt(),
     },
   });
   const newer = snapshot({
@@ -222,6 +230,7 @@ test("newest command center owns audit publishing for an ESPN room", async () =>
       tabId: 4321,
       commandCenterSessionId: "newer-command-center",
       commandCenterStartedAt: "2026-08-17T20:01:00.000Z",
+      authenticatedImportAt: testCapturedAt(),
     },
   });
   const post = (audit) => POST(new Request("http://localhost:3000/api/draft-day", {
@@ -233,7 +242,7 @@ test("newest command center owns audit publishing for an ESPN room", async () =>
   assert.equal((await post(older)).status, 200);
   assert.equal((await post(newer)).status, 200);
 
-  const staleLegacy = { ...snapshot({ capturedAt: testCapturedAt(120), league }), binding: { tabId: 4321 } };
+  const staleLegacy = { ...snapshot({ capturedAt: testCapturedAt(120), league }), binding: { tabId: 4321, authenticatedImportAt: testCapturedAt() } };
   const staleLegacyResponse = await post(staleLegacy);
   assert.equal(staleLegacyResponse.status, 409);
   assert.equal((await staleLegacyResponse.json()).code, "DRAFT_AUDIT_STALE_PUBLISHER");

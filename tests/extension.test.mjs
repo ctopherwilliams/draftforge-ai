@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { authorizeRuntimeMessage } from "../extension/origin-policy.js";
@@ -7,7 +8,11 @@ const root = new URL("../extension/", import.meta.url);
 
 test("extension is a narrowly scoped Manifest V3 ESPN companion", async () => {
   const manifest = JSON.parse(await readFile(new URL("manifest.json", root), "utf8"));
+  const release = JSON.parse(await readFile(new URL("../config/draft-day-release.json", import.meta.url), "utf8"));
+  const companionZip = await readFile(new URL("../public/draftforge-espn-companion.zip", import.meta.url));
   assert.equal(manifest.manifest_version, 3);
+  assert.equal(manifest.version, release.extensionVersion);
+  assert.equal(createHash("sha256").update(companionZip).digest("hex"), release.extensionPackageSha256);
   assert.ok(manifest.host_permissions.every((host) => /espn\.com/.test(host)));
   assert.ok(manifest.content_scripts.some((script) => script.matches.includes("https://fantasy.espn.com/*")));
   const appMatches = manifest.content_scripts.find((script) => script.js.includes("app-bridge.js")).matches;
@@ -23,6 +28,7 @@ test("privileged runtime messages require the exact DraftForge or ESPN sender or
   const localhost = "http://localhost:3000/?reloadCompanion=1";
   const espn = "https://fantasy.espn.com/football/draft?leagueId=44050";
   assert.equal(authorizeRuntimeMessage("APP_HELLO", production).ok, true);
+  assert.equal(authorizeRuntimeMessage("GET_RUNTIME_DIAGNOSTICS", production).ok, true);
   assert.equal(authorizeRuntimeMessage("RELOAD_EXTENSION", localhost).ok, true);
   assert.equal(authorizeRuntimeMessage("SUBMIT_ACTION", espn).ok, false);
   assert.equal(authorizeRuntimeMessage("ESPN_CONTEXT", espn).ok, true);
@@ -55,6 +61,11 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(background, /findUniqueDraftRoomContext/);
   assert.match(background, /matches\.length === 1/);
   assert.match(background, /createPollCoordinator/);
+  assert.match(background, /runtimeDiagnostics/);
+  assert.match(background, /browserTabCount/);
+  assert.match(background, /draftForgeTabCount/);
+  assert.match(background, /espnTabCount/);
+  assert.match(background, /chrome\.runtime\.getManifest\(\)\.version/);
   assert.match(background, /ESPN_HEARTBEAT/);
   assert.match(background, /ESPN_ACTION_RESOLVED/);
   assert.match(background, /senderTabId !== expectedTabId/);
@@ -118,6 +129,8 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(importHandler, /setAutoDraft\(false\)/);
   assert.match(importHandler, /pendingActionTelemetryRef\.current\.clear\(\)/);
   assert.match(importHandler, /actionTelemetryRef\.current = \[\]/);
+  assert.match(page, /sendToExtension\("GET_RUNTIME_DIAGNOSTICS"\)/);
+  assert.match(page, /authenticatedImportAt/);
   assert.match(page, /ESPN confirmed roster \$\{myPickCount\}\/\$\{league\.rosterSize\}/);
   assert.match(page, /contextMatchesActiveDraftTab/);
   assert.match(page, /expectedTabId/);

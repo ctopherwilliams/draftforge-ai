@@ -35,6 +35,7 @@ import {
   type DraftActionTelemetryEvent,
   type DraftAuditRosterEntry,
   type DraftAuditSnapshot,
+  type DraftRuntimeDiagnostics,
 } from "./lib/draft-audit";
 import { compactDraftProfiles, persistDraftProfiles, upsertDraftProfile, type DraftProfile } from "./lib/profiles";
 
@@ -172,6 +173,8 @@ export default function Home() {
   const [rejectedSnakePlayerIds, setRejectedSnakePlayerIds] = useState<number[]>([]);
   const [actionRetryNonce, setActionRetryNonce] = useState(0);
   const [activeEspnTabId, setActiveEspnTabId] = useState<number | null>(null);
+  const [authenticatedImportAt, setAuthenticatedImportAt] = useState("");
+  const [runtimeDiagnostics, setRuntimeDiagnostics] = useState<DraftRuntimeDiagnostics | null>(null);
   const [auditHeartbeat, setAuditHeartbeat] = useState(0);
   const [telemetryVersion, setTelemetryVersion] = useState(0);
   const [pendingAuctionNomination, setPendingAuctionNomination] = useState<{
@@ -240,6 +243,8 @@ export default function Home() {
     // it. Require a fresh explicit import before it can become actionable.
     activeEspnTabRef.current = null;
     setActiveEspnTabId(null);
+    setAuthenticatedImportAt("");
+    setRuntimeDiagnostics(null);
     activeEspnTeamRef.current = null;
     latestActionRequestRef.current = ++actionRequestSequenceRef.current;
     pendingSnakeActionRef.current = null;
@@ -269,6 +274,8 @@ export default function Home() {
     activeLeagueSettingsRef.current = DEMO_LEAGUE;
     activeEspnTabRef.current = null;
     setActiveEspnTabId(null);
+    setAuthenticatedImportAt("");
+    setRuntimeDiagnostics(null);
     activeEspnTeamRef.current = null;
     latestActionRequestRef.current = ++actionRequestSequenceRef.current;
     pendingSnakeActionRef.current = null;
@@ -297,6 +304,8 @@ export default function Home() {
     activeLeagueSettingsRef.current = previewLeague;
     activeEspnTabRef.current = null;
     setActiveEspnTabId(null);
+    setAuthenticatedImportAt("");
+    setRuntimeDiagnostics(null);
     activeEspnTeamRef.current = null;
     latestActionRequestRef.current = ++actionRequestSequenceRef.current;
     pendingSnakeActionRef.current = null;
@@ -337,6 +346,9 @@ export default function Home() {
     function onMessage(event: MessageEvent) {
       if (event.source !== window || event.origin !== window.location.origin || event.data?.source !== "draftforge-extension") return;
       const { type, payload } = event.data;
+      if ((type === "EXTENSION_READY" || type === "COMMAND_RESULT") && payload?.runtime) {
+        setRuntimeDiagnostics(payload.runtime as DraftRuntimeDiagnostics);
+      }
       if (type === "EXTENSION_READY" || (type === "COMMAND_RESULT" && payload?.ready)) {
         setExtension((current) => current === "connected" ? current : "ready");
         const roomContext = payload?.context as EspnContext | undefined;
@@ -387,6 +399,8 @@ export default function Home() {
         activeLeagueSettingsRef.current = importedLeague;
         activeEspnTabRef.current = Number.isInteger(importedTabId) ? importedTabId : null;
         setActiveEspnTabId(Number.isInteger(importedTabId) ? importedTabId : null);
+        setAuthenticatedImportAt(new Date().toISOString());
+        if (data.runtime) setRuntimeDiagnostics(data.runtime as DraftRuntimeDiagnostics);
         activeEspnTeamRef.current = Number(importedContext?.teamId || importedLeague.teamId || 0) || null;
         latestActionRequestRef.current = ++actionRequestSequenceRef.current;
         pendingSnakeActionRef.current = null;
@@ -1083,13 +1097,16 @@ export default function Home() {
 
   useEffect(() => {
     if (league.id === "demo" || !Number.isInteger(activeEspnTabId)) return;
-    const timer = window.setInterval(() => setAuditHeartbeat((heartbeat) => heartbeat + 1), 5_000);
+    const timer = window.setInterval(() => {
+      setAuditHeartbeat((heartbeat) => heartbeat + 1);
+      sendToExtension("GET_RUNTIME_DIAGNOSTICS");
+    }, 5_000);
     return () => window.clearInterval(timer);
   }, [activeEspnTabId, league.id]);
 
   useEffect(() => {
     const exactTabId = activeEspnTabId;
-    if (league.id === "demo" || !Number.isInteger(exactTabId) || Number(exactTabId) <= 0) return;
+    if (league.id === "demo" || !Number.isInteger(exactTabId) || Number(exactTabId) <= 0 || !runtimeDiagnostics || !authenticatedImportAt) return;
     const currentLiveChecklistBindingKey = draftAuditChecklistBindingKey(
       league.id,
       Number(league.teamId),
@@ -1123,6 +1140,8 @@ export default function Home() {
       league: league.id,
       team: league.teamId,
       tab: exactTabId,
+      authenticatedImportAt,
+      runtimeDiagnostics,
       settingsConfirmed,
       liveChecklistReady: auditLiveChecklistReady,
       extension,
@@ -1164,7 +1183,9 @@ export default function Home() {
         tabId: Number(exactTabId),
         commandCenterSessionId: COMMAND_CENTER_PUBLISHER.sessionId,
         commandCenterStartedAt: COMMAND_CENTER_PUBLISHER.startedAt,
+        authenticatedImportAt,
       },
+      runtime: runtimeDiagnostics,
       safety: {
         settingsConfirmed,
         liveChecklistReady: auditLiveChecklistReady,
@@ -1213,7 +1234,7 @@ export default function Home() {
       }
       if (draftAuditPendingRef.current === digest) draftAuditPendingRef.current = "";
     })();
-  }, [actionState, activeEspnTabId, auditHeartbeat, autoDraft, authoritativePicks.length, context, espnPlayers, extension, healthySources, league, liveChecklistReady, myPickCount, myPicks, playerPool.playerById, settingsConfirmed, sleeperEvidence, telemetryVersion]);
+  }, [actionState, activeEspnTabId, auditHeartbeat, authenticatedImportAt, autoDraft, authoritativePicks.length, context, espnPlayers, extension, healthySources, league, liveChecklistReady, myPickCount, myPicks, playerPool.playerById, runtimeDiagnostics, settingsConfirmed, sleeperEvidence, telemetryVersion]);
 
   const { commandLabel, safetyLabel } = presentation;
   const displayCommandLabel = presentation.stateTone === "blocked" && context.autopickActive !== true && focusPlayer

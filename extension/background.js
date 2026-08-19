@@ -3,13 +3,29 @@ import { normalizeSettings } from "./league-import.js";
 import { normalizePlayers } from "./player-normalizers.js";
 import { createPollCoordinator } from "./poll-coordinator.js";
 import { selectUniqueEspnContext } from "./context-selector.js";
-import { authorizeRuntimeMessage, isLocalDraftForgeSenderUrl } from "./origin-policy.js";
+import { DRAFTFORGE_APP_ORIGINS, authorizeRuntimeMessage, isLocalDraftForgeSenderUrl } from "./origin-policy.js";
 
 const appTabs = new Set();
 let espnContext = null;
 const draftPolls = createPollCoordinator({ minIntervalMs: 1800 });
 const CONNECT_CONTEXT_TIMEOUT_MS = 4000;
 const CONNECT_CONTEXT_RETRY_MS = 150;
+
+function originForTab(tab) {
+  try { return new URL(tab?.url || "").origin; }
+  catch { return ""; }
+}
+
+async function runtimeDiagnostics() {
+  const tabs = await chrome.tabs.query({});
+  return {
+    capturedAt: new Date().toISOString(),
+    extensionVersion: chrome.runtime.getManifest().version,
+    browserTabCount: tabs.length,
+    draftForgeTabCount: tabs.filter((tab) => DRAFTFORGE_APP_ORIGINS.includes(originForTab(tab))).length,
+    espnTabCount: tabs.filter((tab) => originForTab(tab) === "https://fantasy.espn.com").length,
+  };
+}
 
 async function broadcast(type, payload) {
   for (const tabId of [...appTabs]) {
@@ -137,7 +153,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === "APP_HELLO") {
       if (sender.tab?.id) appTabs.add(sender.tab.id);
       const context = await findEspnContext();
-      return { ready: true, espnOpen: Boolean(context), context };
+      return { ready: true, espnOpen: Boolean(context), context, runtime: await runtimeDiagnostics() };
+    }
+    if (message.type === "GET_RUNTIME_DIAGNOSTICS") {
+      return { ok: true, runtime: await runtimeDiagnostics() };
     }
     if (message.type === "ESPN_CONTEXT") {
       espnContext = { ...message.payload, tabId: sender.tab?.id };
@@ -185,6 +204,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.payload?.season) context.season = message.payload.season;
       if (!context.leagueId || !context.tabId) return { ok: false, code: "NO_LEAGUE", message: "Open the exact ESPN league or draft tab, then connect again." };
       const data = await importLeague(context);
+      data.runtime = await runtimeDiagnostics();
       espnContext = { ...context, season: data.league.season };
       await broadcast("DF_IMPORT_SUCCESS", data);
       return { ok: true, data };

@@ -15,6 +15,14 @@ function audit(overrides = {}) {
       tabId: 1234,
       commandCenterSessionId: "command-center-ready",
       commandCenterStartedAt: "2026-08-18T11:59:00.000Z",
+      authenticatedImportAt: "2026-08-18T11:59:30.000Z",
+    },
+    runtime: {
+      capturedAt: "2026-08-18T12:00:00.000Z",
+      extensionVersion: "0.2.12",
+      browserTabCount: 2,
+      draftForgeTabCount: 1,
+      espnTabCount: 1,
     },
     safety: {
       settingsConfirmed: true,

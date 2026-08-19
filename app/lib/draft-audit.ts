@@ -29,6 +29,14 @@ export type DraftAuditSleeperCandidate = {
   sourceCount: number;
 };
 
+export type DraftRuntimeDiagnostics = {
+  capturedAt: string;
+  extensionVersion: string;
+  browserTabCount: number;
+  draftForgeTabCount: number;
+  espnTabCount: number;
+};
+
 export type DraftAuditSnapshot = {
   schemaVersion: 1;
   capturedAt: string;
@@ -51,7 +59,9 @@ export type DraftAuditSnapshot = {
     tabId: number;
     commandCenterSessionId?: string;
     commandCenterStartedAt?: string;
+    authenticatedImportAt: string;
   };
+  runtime: DraftRuntimeDiagnostics;
   safety: {
     settingsConfirmed: boolean;
     liveChecklistReady: boolean;
@@ -150,6 +160,7 @@ export function isDraftAuditSnapshot(value: unknown): value is DraftAuditSnapsho
   const snapshot = value as Partial<DraftAuditSnapshot>;
   const league = snapshot.league;
   const binding = snapshot.binding;
+  const runtime = snapshot.runtime;
   const safety = snapshot.safety;
   const draft = snapshot.draft;
   if (snapshot.schemaVersion !== 1 || !Number.isFinite(Date.parse(String(snapshot.capturedAt || "")))) return false;
@@ -162,11 +173,14 @@ export function isDraftAuditSnapshot(value: unknown): value is DraftAuditSnapsho
   if (!String(league.scoringLabel || "").trim() || !Number.isInteger(league.scoringRules) || Number(league.scoringRules) < 1) return false;
   if (!Number.isInteger(league.keeperCount) || Number(league.keeperCount) < 0) return false;
   if (!league.lineupSlotCounts || !league.positionLimits || !binding || !Number.isInteger(binding.tabId) || Number(binding.tabId) <= 0) return false;
+  if (!Number.isFinite(Date.parse(String(binding.authenticatedImportAt || "")))) return false;
   const hasPublisherId = typeof binding.commandCenterSessionId === "string" && binding.commandCenterSessionId.trim().length >= 8;
   const hasPublisherStartedAt = Number.isFinite(Date.parse(String(binding.commandCenterStartedAt || "")));
   if (binding.commandCenterSessionId !== undefined || binding.commandCenterStartedAt !== undefined) {
     if (!hasPublisherId || !hasPublisherStartedAt) return false;
   }
+  if (!runtime || !Number.isFinite(Date.parse(String(runtime.capturedAt || ""))) || !String(runtime.extensionVersion || "").trim()) return false;
+  if (![runtime.browserTabCount, runtime.draftForgeTabCount, runtime.espnTabCount].every((count) => Number.isInteger(count) && Number(count) >= 0)) return false;
   if (!safety || !draft || !Number.isInteger(draft.totalPicks) || Number(draft.totalPicks) < 0) return false;
   if ([
     safety.settingsConfirmed,
