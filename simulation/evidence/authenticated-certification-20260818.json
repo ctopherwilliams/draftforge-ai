@@ -1369,6 +1369,35 @@
         "build": "passed",
         "diffCheck": "passed"
       }
+    },
+    {
+      "format": "snake",
+      "batch": 4,
+      "countableDrafts": 5,
+      "leagueIds": ["708595617", "8421486", "285017982", "956073884", "1937477515"],
+      "terminalResults": {
+        "complete": 5,
+        "finalReady": 5,
+        "exactParity": 5,
+        "zeroViolations": 5,
+        "automaticShutdown": 5
+      },
+      "repeatedFailurePattern": "No wrong or missed DraftForge action, roster, source, or strategy defect appeared. ESPN stopped its opponent bots after DraftForge's final confirmed roster slot in two rooms, leaving global history at 159/160 and 158/160; both required complete audits still passed exact 16/16 parity. SELECT confirmation maxima of 2.523 and 2.521 seconds narrowly exceeded the 2.5-second p99 release target in two independent rooms.",
+      "reproductionEvidence": [
+        "Rooms 708595617 and 285017982 completed our roster and disabled Auto-Draft before ESPN's remaining opponent bots stopped; no further action was sent and both mandatory audits passed.",
+        "Rooms 8421486 and 1937477515 each recorded one SELECT confirmation just over 2.5 seconds, with no clock miss or wrong action.",
+        "All five rooms passed the required complete audit command, exact-room doctor, 5/5 source check, one-K/one-DST completion, and two-tab runtime check."
+      ],
+      "change": "No strategy or action-authority change. Carry the repeated confirmation-latency outliers into the component-level Phase 4 investigation before release acceptance.",
+      "safetyRisks": "Shortening ESPN confirmation waits to improve a percentile could create duplicate actions. Any latency change must preserve confirmation-before-advance and fail-closed dedupe behavior.",
+      "verification": {
+        "fullReleaseGate": "162/162 passed",
+        "terminalDoctors": "5/5 passed",
+        "typecheck": "passed",
+        "lint": "passed",
+        "build": "passed",
+        "diffCheck": "passed"
+      }
     }
   ],
   "sourceCoverageEvidence": {
