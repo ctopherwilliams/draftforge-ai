@@ -211,7 +211,7 @@ async function loadDraftContext({ text, clockTeam, clockOwnMarker = false, ownTe
     CSS: { escape: (value) => String(value) },
     Event: class Event {},
   };
-  vm.runInNewContext(`${source.slice(0, runtimeStart)}\nglobalThis.readDraftContext = getContext; globalThis.hasSafeWindow = hasSafeActionWindow; globalThis.snakePoolStable = snakePlayerPoolIsStable; globalThis.nominationStarted = nominationHasStarted; globalThis.updateSales = updateAuctionSales; globalThis.executeDraftAction = executeAction; globalThis.disableDraftAutopick = disableEspnAutopick; globalThis.planCandidateSearch = buildCandidateSearchPlan; globalThis.planMandatoryPosition = buildMandatoryPositionPlan; globalThis.pruneSnakeCandidates = availableSnakeCandidates;`, sandbox);
+  vm.runInNewContext(`${source.slice(0, runtimeStart)}\nglobalThis.readDraftContext = getContext; globalThis.hasSafeWindow = hasSafeActionWindow; globalThis.snakePoolStable = snakePlayerPoolIsStable; globalThis.nominationStarted = nominationHasStarted; globalThis.updateSales = updateAuctionSales; globalThis.executeDraftAction = executeAction; globalThis.disableDraftAutopick = disableEspnAutopick; globalThis.planCandidateSearch = buildCandidateSearchPlan; globalThis.planPlayerResolution = playerResolutionTiming; globalThis.planMandatoryPosition = buildMandatoryPositionPlan; globalThis.pruneSnakeCandidates = availableSnakeCandidates;`, sandbox);
   let context = sandbox.readDraftContext();
   if (context.onClock && !context.actionSurfaceReady) {
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -226,6 +226,7 @@ async function loadDraftContext({ text, clockTeam, clockOwnMarker = false, ownTe
     executeAction: sandbox.executeDraftAction,
     disableAutopick: sandbox.disableDraftAutopick,
     candidateSearchPlan: sandbox.planCandidateSearch,
+    playerResolutionPlan: sandbox.planPlayerResolution,
     mandatoryPositionPlan: sandbox.planMandatoryPosition,
     availableSnakeCandidates: sandbox.pruneSnakeCandidates,
     actionState,
@@ -802,6 +803,41 @@ test("late snake resolution skips only players ESPN already confirms as drafted"
     Array.from(room.availableSnakeCandidates(candidates, room.context), (candidate) => candidate.playerName),
     ["Best Legal Choice", "Next Legal Choice"],
   );
+});
+
+test("late snake resolution preserves model order inside a bounded search budget", async () => {
+  const room = await loadDraftContext({ text: "RND 12 OF 16\n00:20\nON THE CLOCK: PICK 115", clockTeam: "Us", ownTeam: "Us" });
+  const candidates = Array.from({ length: 9 }, (_, index) => ({
+    playerId: index + 1,
+    playerName: `Candidate ${index + 1}`,
+  }));
+  const lateContext = { ownRoster: Array.from({ length: 10 }, (_, index) => ({ playerId: index + 100 })) };
+  const plan = room.candidateSearchPlan(candidates, lateContext, "SELECT");
+  const timing = room.playerResolutionPlan(lateContext, "SELECT", null);
+
+  assert.deepEqual(Array.from(plan, (entry) => entry.candidate.playerName), candidates.slice(0, 7).map((candidate) => candidate.playerName));
+  assert.deepEqual(Array.from(plan, (entry) => entry.waitMs), [500, 80, 80, 80, 80, 80, 80]);
+  assert.deepEqual({ ...timing }, {
+    playerGridWaitMs: 120,
+    resolutionWindowMs: 1000,
+    rehydrateWindowMs: 120,
+  });
+  assert.ok(timing.playerGridWaitMs + timing.resolutionWindowMs + timing.rehydrateWindowMs < 1500);
+});
+
+test("late snake timing does not change salary-cap or mandatory-slot resolution", async () => {
+  const room = await loadDraftContext({ text: "RND 12 OF 16\n00:20\nON THE CLOCK: PICK 115", clockTeam: "Us", ownTeam: "Us" });
+  const lateContext = { ownRoster: Array.from({ length: 12 }, (_, index) => ({ playerId: index + 100 })) };
+  const ordinaryCandidates = [{ playerId: 1, playerName: "Candidate" }];
+  const mandatoryCandidates = [{ playerId: 2, playerName: "Defense", position: "DST", fillsMandatoryStarter: true }];
+
+  assert.deepEqual(Array.from(room.candidateSearchPlan(ordinaryCandidates, lateContext, "NOMINATE"), (entry) => entry.waitMs), [900]);
+  assert.deepEqual(Array.from(room.candidateSearchPlan(mandatoryCandidates, lateContext, "SELECT"), (entry) => entry.waitMs), [120]);
+  assert.deepEqual({ ...room.playerResolutionPlan(lateContext, "NOMINATE", null) }, {
+    playerGridWaitMs: 400,
+    resolutionWindowMs: 2200,
+    rehydrateWindowMs: 400,
+  });
 });
 
 test("final kicker and defense slots filter ESPN once before exact candidate resolution", async () => {

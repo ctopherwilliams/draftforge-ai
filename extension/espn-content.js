@@ -5,6 +5,12 @@ const MAX_MANDATORY_SEARCH_CANDIDATES = 18;
 const PLAYER_RESOLUTION_WINDOW_MS = 2200;
 const PRIMARY_CANDIDATE_SEARCH_WINDOW_MS = 900;
 const CANDIDATE_SEARCH_WINDOW_MS = 250;
+const LATE_SNAKE_ROSTER_THRESHOLD = 10;
+const LATE_SNAKE_PLAYER_GRID_WINDOW_MS = 120;
+const LATE_SNAKE_RESOLUTION_WINDOW_MS = 1000;
+const LATE_SNAKE_PRIMARY_SEARCH_WINDOW_MS = 500;
+const LATE_SNAKE_CANDIDATE_SEARCH_WINDOW_MS = 80;
+const LATE_SNAKE_REHYDRATE_WINDOW_MS = 120;
 const MANDATORY_CANDIDATE_SEARCH_WINDOW_MS = 120;
 const MANDATORY_POSITION_FILTER_WINDOW_MS = 1800;
 const SELECT_CONFIRMATION_WINDOW_MS = 700;
@@ -418,15 +424,37 @@ function availableSnakeCandidates(candidates, context) {
   });
 }
 
-function buildCandidateSearchPlan(candidates) {
+function isLateSnakeResolution(context, operation) {
+  return operation === "SELECT"
+    && Array.isArray(context?.ownRoster)
+    && context.ownRoster.length >= LATE_SNAKE_ROSTER_THRESHOLD;
+}
+
+function buildCandidateSearchPlan(candidates, context, operation) {
   const mandatorySearch = candidates.some((candidate) => candidate.fillsMandatoryStarter === true);
+  const lateSnakeSearch = !mandatorySearch && isLateSnakeResolution(context, operation);
   const limit = mandatorySearch ? MAX_MANDATORY_SEARCH_CANDIDATES : MAX_SEARCH_CANDIDATES;
   return candidates.slice(0, limit).map((candidate, index) => ({
     candidate,
     waitMs: mandatorySearch
       ? MANDATORY_CANDIDATE_SEARCH_WINDOW_MS
-      : index === 0 ? PRIMARY_CANDIDATE_SEARCH_WINDOW_MS : CANDIDATE_SEARCH_WINDOW_MS,
+      : lateSnakeSearch
+        ? index === 0 ? LATE_SNAKE_PRIMARY_SEARCH_WINDOW_MS : LATE_SNAKE_CANDIDATE_SEARCH_WINDOW_MS
+        : index === 0 ? PRIMARY_CANDIDATE_SEARCH_WINDOW_MS : CANDIDATE_SEARCH_WINDOW_MS,
   }));
+}
+
+function playerResolutionTiming(context, operation, mandatoryPositionFilter) {
+  const lateSnakeSearch = isLateSnakeResolution(context, operation);
+  return {
+    playerGridWaitMs: mandatoryPositionFilter
+      ? 0
+      : lateSnakeSearch
+        ? LATE_SNAKE_PLAYER_GRID_WINDOW_MS
+        : context.ownRoster.length ? 400 : 700,
+    resolutionWindowMs: lateSnakeSearch ? LATE_SNAKE_RESOLUTION_WINDOW_MS : PLAYER_RESOLUTION_WINDOW_MS,
+    rehydrateWindowMs: lateSnakeSearch ? LATE_SNAKE_REHYDRATE_WINDOW_MS : 400,
+  };
 }
 
 function buildMandatoryPositionPlan(candidates) {
@@ -593,7 +621,14 @@ async function executeActionAttempt(action) {
     // A visible exact K/DST filter is the authoritative fast path for final
     // mandatory slots. Waiting for the unfiltered virtualized grid first adds
     // a second hydration delay without improving identity safety.
-    const playerGridWaitMs = mandatoryPositionFilter ? 0 : context.ownRoster.length ? 400 : 700;
+    // Once ten roster spots are confirmed, repeated authenticated drafts show
+    // that ESPN's virtualized pool resolves normally inside 500 ms, while the
+    // original sequential fallback can consume more than 2.4 seconds. Keep the
+    // same deterministic order and exact identity checks, but bound only this
+    // proven late-snake path so an unsuccessful search returns control while
+    // the 10-second safety window is still intact.
+    const resolutionTiming = playerResolutionTiming(context, action.operation, mandatoryPositionFilter);
+    const playerGridWaitMs = resolutionTiming.playerGridWaitMs;
     const playerGridDeadline = Math.min(Number(action.actionDeadlineAt || Infinity), Date.now() + playerGridWaitMs);
     while (!visibleCandidate && Date.now() < playerGridDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 40));
@@ -629,8 +664,11 @@ async function executeActionAttempt(action) {
     }
     const playerSearch = visiblePlayerSearchInput();
     if (!visibleCandidate && !usedPositionFilter && playerSearch instanceof HTMLInputElement) {
-      const resolutionDeadline = Math.min(Number(action.actionDeadlineAt || Infinity), Date.now() + PLAYER_RESOLUTION_WINDOW_MS);
-      for (const { candidate, waitMs } of buildCandidateSearchPlan(candidates)) {
+      const resolutionDeadline = Math.min(
+        Number(action.actionDeadlineAt || Infinity),
+        Date.now() + resolutionTiming.resolutionWindowMs,
+      );
+      for (const { candidate, waitMs } of buildCandidateSearchPlan(candidates, context, action.operation)) {
         if (Date.now() >= resolutionDeadline) break;
         if (visiblePlayerControl(candidate.playerId, candidate.playerName)) {
           visibleCandidate = candidate;
@@ -661,7 +699,7 @@ async function executeActionAttempt(action) {
     if (!visibleCandidate && !usedPositionFilter && playerSearch instanceof HTMLInputElement) {
       const rehydrateDeadline = Math.min(
         Number(action.actionDeadlineAt || Infinity),
-        Date.now() + 400,
+        Date.now() + resolutionTiming.rehydrateWindowMs,
       );
       while (!visibleCandidate && Date.now() < rehydrateDeadline) {
         visibleRowsCache.revision = -1;
