@@ -37,6 +37,11 @@
       "leagueId": "1446060763",
       "format": "snake",
       "reason": "The live room started before the first checklist and arming sequence completed. ESPN Autopick filled the opening roster slots; DraftForge detected it, stopped, disabled Autopick through the exact authenticated control, and proved recovery with a subsequent exact DraftForge pick. The contaminated room was discarded before the clean certification repeat."
+    },
+    {
+      "leagueId": "324523798",
+      "format": "salary-cap",
+      "reason": "The first launch did not open a room tab within the bounded window. A single retry opened the room, but its exact live import began at 1/5 sources and stayed fail-closed while the source snapshot warmed. The room was never armed or acted on and was excluded as setup-delay contamination before a fresh replacement."
     }
   ],
   "countableRooms": [
