@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { evaluateDraftDayDoctor } from "../app/lib/draft-day-doctor.ts";
+import { evaluateDraftDayDoctor, resolveDraftDayDoctorLeague } from "../app/lib/draft-day-doctor.ts";
 
 const leagues = JSON.parse(await readFile(new URL("../config/authenticated-espn-leagues.json", import.meta.url), "utf8"));
 const release = JSON.parse(await readFile(new URL("../config/draft-day-release.json", import.meta.url), "utf8"));
@@ -90,4 +90,13 @@ test("live doctor enforces the five-second recheck SLO and live safety gate", ()
   assert.equal(evaluateDraftDayDoctor({ snapshot: live, expected, phase: "live", system: system(), now }).ready, true);
   const slow = evaluateDraftDayDoctor({ snapshot: live, expected, phase: "live", system: system({ totalCheckMs: 5_001 }), now });
   assert.ok(slow.blockers.includes("liveRecheckWithinSlo"));
+});
+
+test("doctor can bind a temporary ESPN practice-room identity without changing saved rules", () => {
+  const room = resolveDraftDayDoctorLeague(expected, "1594208142", 6);
+  assert.equal(room.id, "1594208142");
+  assert.equal(room.teamId, 6);
+  assert.equal(room.draftType, expected.draftType);
+  assert.equal(room.rosterSize, expected.rosterSize);
+  assert.throws(() => resolveDraftDayDoctorLeague(expected, "not-an-espn-id", 6), /DRAFT_DAY_ROOM_IDENTITY_INVALID/);
 });

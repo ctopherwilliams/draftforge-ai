@@ -36,6 +36,19 @@ export type DraftDayDoctorResult = {
   authenticatedImportAgeMs: number;
 };
 
+export function resolveDraftDayDoctorLeague(
+  profile: DraftDayExpectedLeague,
+  roomLeagueId?: string,
+  roomTeamId?: number,
+): DraftDayExpectedLeague {
+  const id = String(roomLeagueId || profile.id).trim();
+  const teamId = roomTeamId ?? profile.teamId;
+  if (!/^\d+$/.test(id) || !Number.isInteger(teamId) || teamId <= 0) {
+    throw new Error("DRAFT_DAY_ROOM_IDENTITY_INVALID");
+  }
+  return { ...profile, id, teamId };
+}
+
 export function evaluateDraftDayDoctor(input: {
   snapshot: DraftAuditSnapshot;
   expected: DraftDayExpectedLeague;

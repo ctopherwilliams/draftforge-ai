@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { evaluateDraftDayDoctor } from "../app/lib/draft-day-doctor.ts";
+import { evaluateDraftDayDoctor, resolveDraftDayDoctorLeague } from "../app/lib/draft-day-doctor.ts";
 
 const args = process.argv.slice(2);
 const valueFor = (name, fallback = "") => {
@@ -18,15 +18,27 @@ const startServer = !args.includes("--no-start-server");
 const startedAt = Date.now();
 
 if (!new Set(["snake", "salary-cap"]).has(format) || !new Set(["pre-room", "live", "complete"]).has(phase)) {
-  console.error(JSON.stringify({ ok: false, code: "USAGE", usage: "npm run draft-day:doctor -- --format snake|salary-cap [--phase pre-room|live|complete] [--no-start-server]" }));
+  console.error(JSON.stringify({ ok: false, code: "USAGE", usage: "npm run draft-day:doctor -- --format snake|salary-cap [--phase pre-room|live|complete] [--league PRACTICE_ROOM_ID --team TEAM_ID] [--no-start-server]" }));
   process.exit(2);
 }
 
 const leagueConfig = JSON.parse(readFileSync(resolve("config/authenticated-espn-leagues.json"), "utf8"));
 const releaseConfig = JSON.parse(readFileSync(resolve("config/draft-day-release.json"), "utf8"));
-const expected = leagueConfig?.profiles?.[format];
-if (!expected) {
+const profile = leagueConfig?.profiles?.[format];
+if (!profile) {
   console.error(JSON.stringify({ ok: false, code: "PROFILE_NOT_FOUND", format }));
+  process.exit(2);
+}
+let expected;
+try {
+  const roomTeam = valueFor("--team");
+  expected = resolveDraftDayDoctorLeague(
+    profile,
+    valueFor("--league") || undefined,
+    roomTeam ? Number(roomTeam) : undefined,
+  );
+} catch (error) {
+  console.error(JSON.stringify({ ok: false, code: error instanceof Error ? error.message : "DRAFT_DAY_ROOM_IDENTITY_INVALID" }));
   process.exit(2);
 }
 
@@ -150,6 +162,8 @@ console.log(JSON.stringify({
   code: result.ready ? "DRAFT_DAY_DOCTOR_READY" : "DRAFT_DAY_DOCTOR_LOCKED",
   format,
   phase,
+  leagueId: expected.id,
+  teamId: expected.teamId,
   revision: head,
   sourceCoverage: warm.sourceCoverage,
   timing: { serverReadyMs, sourceWarmMs, totalCheckMs: Date.now() - startedAt },
