@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "campaign": "authenticated-espn-certification-20260818",
-  "status": "in-progress",
+  "status": "authenticated-campaign-complete",
   "target": {
     "snake": 20,
     "salaryCap": 20,
@@ -1531,6 +1531,36 @@
         "build": "passed",
         "diffCheck": "passed"
       }
+    },
+    {
+      "format": "salary-cap",
+      "batch": 4,
+      "countableDrafts": 4,
+      "leagueIds": ["910914185", "2104263940", "1770654772", "273508263"],
+      "terminalResults": {
+        "complete": 4,
+        "finalReady": 4,
+        "exactParity": 4,
+        "zeroViolations": 4,
+        "automaticShutdown": 4
+      },
+      "repeatedFailurePattern": "No repeated salary-cap strategy, roster, reserve, price-parity, or action-authority defect appeared. The four countable rooms exercised full-spend and surplus-budget endings, exact one-dollar closeouts, changing offers, stale bid transitions, mandatory specialist completion, and automatic shutdown. One nomination confirmation in room 273508263 reached 2.821 seconds; this is a latency outlier, not a wrong or missed action, and remains part of the Phase 4 cross-format latency investigation.",
+      "reproductionEvidence": [
+        "All four rooms completed exact 14/14 app/ESPN roster and price parity with one kicker, one defense, no duplicates, no position-cap violations, and no reserve or maximum-bid violation.",
+        "Room 273508263 preserved all $200 through the highly inflated opening market, acquired Saquon Barkley at $37 and Trey McBride at $43, then completed the final four slots for exactly $1 each without rebidding its own lead.",
+        "A delayed first Start Practice Draft response and one 1/5 live import stayed fail-closed in excluded room 324523798; a fresh room was launched only after the five-source pre-room gate was restored.",
+        "Global Chrome checks found and removed unrelated orphan tabs without touching the exact DraftForge or ESPN room; every countable room ended with exactly two tabs and one production server."
+      ],
+      "change": "No strategy or action-authority change. Accept the authenticated salary-cap campaign and carry the isolated 2.821-second nomination plus the repeated snake confirmation outliers into component-level latency analysis before release acceptance.",
+      "safetyRisks": "Reducing ESPN confirmation waits only to improve a percentile could cause duplicate bids, nominations, or selections. Preserve confirmation-before-advance, stale-state invalidation, exact-room binding, and fail-closed dedupe in any latency change.",
+      "verification": {
+        "fullReleaseGate": "162/162 passed",
+        "terminalDoctors": "4/4 passed",
+        "typecheck": "passed",
+        "lint": "passed",
+        "build": "passed",
+        "diffCheck": "passed"
+      }
     }
   ],
   "sourceCoverageEvidence": {
@@ -1677,6 +1707,7 @@
     "A completion audit must preserve prior live-checklist proof only for the same exact completed league, team, and tab. The regression is covered by focused and full-suite tests.",
     "Fresh authenticated snake room 1031241356 completed 16/16 with exact ESPN/app parity, one K, one D/ST, no Autopick, and automatic shutdown. It exposed two presentation-only states: the command card used a source-domain consensus rank instead of the visible live-board position, and a one-tick action-surface revalidation at 29 seconds was mislabeled as a short clock. Both are now explicit presentation regressions without changing selection or submit logic.",
     "Cold-start preflight on saved snake league 1603083723 rebuilt one production server and two fresh tabs, imported the exact 10-team Standard 16-slot rules, warmed all five sources, confirmed the pre-room checklist, and kept Auto-Draft locked off. Recovery room 1214429767 then armed, reloaded the dashboard, proved Auto-Draft reset off and preview state returned, re-imported and revalidated the exact live room, re-armed at 33 seconds, and completed 16/16 with exact parity and automatic shutdown.",
-    "The documented Tradyr redraft single-QB player endpoint matched the previous prebuilt redraft-PPR top 50 field-for-field and exposed 181 matched rows through bounded offsets. Four-source coverage rose from 41.07% to 60.12% and full five-source coverage from 24.40% to 47.62%. The production sleeper funnel still stopped before the 50-point threshold, so no sleeper threshold or selection policy was changed."
+    "The documented Tradyr redraft single-QB player endpoint matched the previous prebuilt redraft-PPR top 50 field-for-field and exposed 181 matched rows through bounded offsets. Four-source coverage rose from 41.07% to 60.12% and full five-source coverage from 24.40% to 47.62%. The production sleeper funnel still stopped before the 50-point threshold, so no sleeper threshold or selection policy was changed.",
+    "The authenticated clean-room campaigns completed 20/20 snake and 20/20 salary-cap rooms. Every countable room passed the required terminal audit and exact-room doctor; setup, Autopick, ambiguity, source-warmup, and completion-audit contamination remained excluded rather than counted."
   ]
 }
