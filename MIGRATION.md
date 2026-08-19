@@ -4,7 +4,7 @@ This repository is the portable source of truth for moving DraftForge to another
 
 ## 1. Clone on the new machine
 
-Install Git, Node.js 22.13 or newer, Chrome, and the Codex desktop app. Sign Codex into the destination account, then run:
+Install Git, Node.js 22.18 or newer, Chrome, and the Codex desktop app. Sign Codex into the destination account, then run:
 
 ```bash
 git clone https://github.com/ctopherwilliams/draftforge-ai.git

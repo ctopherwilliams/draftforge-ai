@@ -21,13 +21,16 @@ The user has two ESPN leagues on different draft days. Their settings, picks, pl
 
 ## Current checkpoint
 
-- Branch: `main`
-- Pre-change base commit: `70a32d5`
+- Release branch: `main`
+- Release tag: `draft-day-rc-2026-08-19`
+- Release-candidate revision at authenticated certification: `af06f0d`
 - Production app: `https://draftforge-ai.workspace-231977.chatgpt.site`
 - Chrome extension package: `public/draftforge-espn-companion.zip`
-- Extension version: `0.2.11`
+- Extension version: `0.2.16`
 - Test command: `npm run check`
-- Last verified result: `npm run check` passes 156/156 tests, lint, typecheck, production build, 20 deterministic complete snake drafts, 20 deterministic complete salary-cap drafts, Monte Carlo replay/invariant checks, UI and extension safety, and latency gates (0.65 ms indexed-decision p95; 1.64 ms five-source-consensus p95). The current clean-room authenticated campaign is 3/20 snake and 16/20 salary-cap, separate from the retained historical post-sleeper 19/20 and 15/20 ledgers. Companion v0.2.11 retains exact pre-click revalidation, own-turn authorization, Autopick detection, duplicate-specialist exclusion, and exact app-origin authorization; it also refuses every action while ESPN sound is on and briefly rechecks the exact ordered shortlist after ESPN's virtualized grid rehydrates. Its package SHA-256 is `f03933bd0afad5f573bd9782fca78a7d5817de3a1fd2ca5a0ff80dd480cd418f`.
+- Last verified result: `npm run check` passes 168/168 tests, lint, typecheck, production build, 20 deterministic complete snake drafts, 20 deterministic complete salary-cap drafts, Monte Carlo replay/invariant checks, UI and extension safety, and latency gates. The clean-room authenticated campaign is complete at 20/20 snake and 20/20 salary-cap, separate from the retained historical post-sleeper ledger. Companion v0.2.16 retains exact pre-click revalidation, own-turn authorization, Autopick detection, muted-sound enforcement, duplicate-specialist exclusion, and exact app-origin authorization. Its package SHA-256 is `027d5abe34412717f6b70c9a21922eee4cc5a9e40ba84789848d6589003dacd2`.
+
+Superseding release-candidate verification on 2026-08-19: a final fresh authenticated snake room completed 16/16 with exact ESPN/app parity, zero hard/final violations, automatic shutdown, and exact clock-to-submit p95 1.140 seconds, p99 1.175 seconds, maximum 1.184 seconds. The final authenticated salary-cap room completed 14/14 with exact prices, $4 remaining, zero violations, automatic shutdown, and submit p95 0.720 seconds, p99 1.414 seconds, maximum 1.717 seconds. Seed `20260820` completed 10,000 drafts per format against the two current immutable authenticated snapshots with zero failed seeds, hard violations, or simulation errors; all 4,000 holdout trial records replayed exactly. See `docs/draft-day-release-candidate-20260819.md`.
 
 Superseding local verification on 2026-08-17: the command center now has one authoritative 445-line graphite/white/blue/violet stylesheet; the two legacy green themes were removed, preflight renders before the operations strip without sliding beneath the header, and the layout has explicit three-rail, two-rail, tablet, and mobile states. Desktop, two-rail, and mobile visual QA completed without material overlap or horizontal overflow. Typecheck, lint, production build, UI/rendered-HTML checks, `git diff --check`, 20 deterministic snake drafts, 20 deterministic salary-cap drafts, Monte Carlo/replay invariants, dependency audit, and latency gates pass. The remaining authenticated 5 salary-cap plus 1 snake certification rooms are still pending: Chrome, the enabled integration, and the native-host manifest all pass diagnostics, but after reinstall and an approved clean-window relaunch the external controller can list tabs yet stalls when claiming either an old or fresh tab. The attempted salary-cap room `2118185093` is invalid and must never be counted.
 

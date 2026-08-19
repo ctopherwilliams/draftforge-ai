@@ -1697,6 +1697,167 @@
       "Display the same source-backed salary fair value in the command card and player board."
     ]
   },
+  "releaseCandidate20260819": {
+    "status": "qualified-for-supervised-draft-day-use",
+    "scope": ["authenticated ESPN snake draft", "authenticated ESPN salary-cap draft"],
+    "privateIdentifiersStored": false,
+    "releaseRevision": "af06f0d64343f9a601c3ec803d913483e0f5a352",
+    "extension": {
+      "version": "0.2.16",
+      "packageSha256": "027d5abe34412717f6b70c9a21922eee4cc5a9e40ba84789848d6589003dacd2"
+    },
+    "authenticatedCampaign": {
+      "snake": {
+        "countable": 20,
+        "target": 20,
+        "allFinalAudited": true
+      },
+      "salaryCap": {
+        "countable": 20,
+        "target": 20,
+        "allFinalAudited": true
+      },
+      "exclusionPolicy": "Setup-delayed, Autopick-contaminated, ambiguous, incomplete, or unauditable rooms were excluded rather than counted."
+    },
+    "finalAuthenticatedLatency": {
+      "snake": {
+        "successfulSubmissions": 16,
+        "roster": "16/16",
+        "exactParity": true,
+        "hardViolations": 0,
+        "finalViolations": 0,
+        "submitMs": {
+          "p50": 311.5,
+          "p95": 1139.75,
+          "p99": 1175.15,
+          "max": 1184,
+          "over1500": 0
+        },
+        "automaticShutdown": true,
+        "soundMuted": true,
+        "espnAutopickOff": true
+      },
+      "salaryCap": {
+        "successfulSubmissions": 137,
+        "roster": "14/14",
+        "exactPriceParity": true,
+        "spent": 196,
+        "remainingBudget": 4,
+        "hardViolations": 0,
+        "finalViolations": 0,
+        "submitMs": {
+          "p50": 31,
+          "p95": 719.8,
+          "p99": 1414.2,
+          "max": 1717
+        },
+        "bidSubmitMs": {
+          "p50": 30,
+          "p95": 491.65,
+          "p99": 944.13,
+          "max": 947
+        },
+        "automaticShutdown": true,
+        "soundMuted": true,
+        "espnAutopickOff": true
+      }
+    },
+    "acceptedLatencyChanges": [
+      "Record an exact authenticated clock-to-submit timestamp while retaining the conservative app-to-roster-confirmation round trip.",
+      "Remove only players ESPN already confirms as drafted from the ordered snake shortlist.",
+      "After ten confirmed snake roster slots, bound ordinary virtualized-grid resolution to 1.24 seconds while preserving model order, exact player identity, the ten-second clock floor, confirmation-before-advance, and fail-closed behavior.",
+      "Leave early snake, salary-cap, and mandatory kicker/defense timing unchanged."
+    ],
+    "finalMonteCarlo": {
+      "seed": 20260820,
+      "splitPerFormat": {
+        "discovery": 6000,
+        "validation": 2000,
+        "holdout": 2000
+      },
+      "savedAuthenticatedSettingsShare": 0.8,
+      "adversarialEspnCompatibleShare": 0.2,
+      "snake": {
+        "snapshotDigest": "38604a70ba64ff02c7b019a1b736885d9521236203e9daca473b80d709db944f",
+        "drafts": 10000,
+        "failedSeeds": 0,
+        "hardViolations": 0,
+        "simulationErrors": 0,
+        "determinismDigest": "eab04080b0d3161343066bf1523719baabc1aeb1a1fad74acf57dd2b86888b6b",
+        "startingLineupProjectionMean": 1911.2307657403321,
+        "startingLineupProjectionCi95": [1909.0813856306863, 1913.380145849978],
+        "totalProjectionP25": 2850.9474742265575,
+        "vorpMean": 702.5506206594443,
+        "seasonWinProbabilityMean": 0.929409375,
+        "decisionRegretMean": 621.3784517461816,
+        "rosterFragilityMean": 21.361950864994466
+      },
+      "salaryCap": {
+        "snapshotDigest": "7c1d974b8f92339a4f68ef904bed97cc3467b9309f8815f879cbaf706a193b5e",
+        "drafts": 10000,
+        "failedSeeds": 0,
+        "hardViolations": 0,
+        "simulationErrors": 0,
+        "determinismDigest": "f90011bc531d7092409aef5a1d1137e75099e0b2d68d97ccede44f0d1fc5ff78",
+        "startingLineupProjectionMean": 2002.7719075233047,
+        "startingLineupProjectionCi95": [1999.9068383993038, 2005.6369766473056],
+        "totalProjectionP25": 2794.0349453682516,
+        "vorpMean": 1123.4433094491333,
+        "seasonWinProbabilityMean": 0.6245734375,
+        "decisionRegretMean": 1550.1843164129705,
+        "rosterFragilityMean": 23.551936106585128,
+        "remainingBudgetEfficiencyMean": 0.8686499444171503,
+        "remainingBudgetEfficiencyP25": 0.7903225806451613
+      },
+      "hardViolationTotals": {
+        "duplicatePlayers": 0,
+        "incompleteRosters": 0,
+        "unnecessarySecondSpecialist": 0,
+        "positionCap": 0,
+        "salaryCap": 0,
+        "reserve": 0,
+        "maxBid": 0,
+        "missingMandatoryStarter": 0
+      },
+      "deterministicReplay": {
+        "snakeHoldouts": 2000,
+        "salaryCapHoldouts": 2000,
+        "serializedTrialMismatches": 0,
+        "allExact": true
+      }
+    },
+    "sourceEvidence": {
+      "sourceSet": ["espn", "ffc", "gng", "mfl", "tradyr"],
+      "weightsChanged": false,
+      "freshnessChanged": false,
+      "sleeperThresholdsChanged": false,
+      "snakeCoverageAtLeastFour": 0.50625,
+      "snakeFullFiveCoverage": 0.43125,
+      "salaryCapCoverageAtLeastFour": 0.6011904761904762,
+      "salaryCapFullFiveCoverage": 0.47619047619047616,
+      "qualifiedLateSleepers": 0,
+      "decision": "Preserve corroboration and timing protections. Incomplete late-player and specialist coverage remains an explicit release limitation rather than a reason to add a sixth source or lower thresholds."
+    },
+    "releaseChecks": {
+      "npmTest": "168/168 passed",
+      "lint": "passed",
+      "typecheck": "passed",
+      "productionBuild": "passed",
+      "deterministicSnakeDrafts": 20,
+      "deterministicSalaryCapDrafts": 20,
+      "authenticatedTerminalDoctor": "passed",
+      "exactTwoChromeTabs": true,
+      "oneProductionServer": true,
+      "gitHeadMatchedRemoteAtLiveCertification": true
+    },
+    "limitations": [
+      "ESPN draft-room markup and undocumented endpoints can change; unknown state fails closed.",
+      "Late-player, kicker, and defense coverage is incomplete in the public ranking feeds.",
+      "Opponent archetypes are synthetic and cannot model every human room.",
+      "Static-roster evaluation excludes waivers, trades, lineup management, and later injuries.",
+      "No current immutable snapshot contains enough qualified sleeper acquisitions to claim measured sleeper upside."
+    ]
+  },
   "observationsForBatchReview": [
     "ESPN late-room opponent price coverage can fall below 100% while DraftForge's own roster and prices remain exact; every room still requires final ESPN/app price parity.",
     "Batch 1 confirmed that implausible live ranks came from name-only nominee resolution in the presence of duplicate same-name records. Exact ESPN nominee ids are now authoritative; a supplied but unknown id fails closed instead of falling back by name.",

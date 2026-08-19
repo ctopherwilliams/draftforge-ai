@@ -12,7 +12,7 @@ Post-draft league management is intentionally out of scope.
 - ESPN scoring, roster, team, keeper, draft-type, timer, pick-order, player, and live draft-room context import
 - Snake recommendations and salary-cap nominations/max bids
 - Guided mode (recommend in conversation, execute after the user's approval) and explicitly armed Auto mode
-- A timing-first action gate: recommendations are staged before the turn, and DraftForge rechecks ESPN's imported browser tab, league, pick, visible player, and five-second safety window immediately before submission
+- A timing-first action gate: recommendations are staged before the turn, and DraftForge rechecks ESPN's imported browser tab, league, pick, visible player, and format-specific safety window immediately before submission
 - Deterministic, inspectable consensus using ESPN, Fantasy Football Calculator, MyFantasyLeague, Tradyr, and The GNG
 - Corroborated value, sleeper, and deep-stash signals derived from model-versus-market disagreement within those same five sources
 - Source health, weights, timestamps, and player-level provenance in the UI
@@ -20,7 +20,7 @@ Post-draft league management is intentionally out of scope.
 
 ## Run locally
 
-Requirements: Node.js 22.13 or newer and Google Chrome with the DraftForge companion loaded from this repository.
+Requirements: Node.js 22.18 or newer and Google Chrome with the DraftForge companion loaded from this repository.
 
 ```bash
 npm install
@@ -40,7 +40,7 @@ For a second league, choose **Import another ESPN league**, open that league on 
 Use the Codex conversation as the active draft cockpit.
 
 - **Guided mode (default):** Codex reads the live ESPN context, applies the deterministic model, explains its recommended move, and waits for a clear instruction such as `draft it`, `bid`, `pass`, or `hold` before driving ESPN.
-- **Armed auto mode:** Codex may act without per-move approval only after the user explicitly arms it for the named ESPN league and live draft. It remains bounded by the imported roster, current draft state, strategy, computed max bid, one-dollar reserve, and a verified five-second-or-greater ESPN clock window. It shuts off on reload, league switch, missing or short clock, selector drift, or a `hold`/`stop` instruction.
+- **Armed auto mode:** Codex may act without per-move approval only after the user explicitly arms it for the named ESPN league and live draft. It remains bounded by the imported roster, current draft state, strategy, computed max bid, one-dollar reserve, and a verified clock window (at least ten seconds for snake selections and five seconds for other actions). It shuts off on reload, league switch, missing or short clock, selector drift, or a `hold`/`stop` instruction.
 
 The local app must never become an unbounded autonomous actor. It is an inspectable live surface. The Chrome companion is the narrow enforcement layer. The optional single-tab browser runtime temporarily installs the same selector, clock, bid, reserve, and roster-verification implementation, then removes it when that draft tab closes.
 
@@ -95,10 +95,10 @@ The test suite builds the production app and checks consensus calculation, deter
 For bounded, seeded strategy stress testing without opening ESPN, run:
 
 ```bash
-npm run simulate:monte-carlo -- --drafts 10000 --seed 20260814
+npm run simulate:monte-carlo -- --drafts 10000 --seed 20260820
 ```
 
-The command runs the requested number of trials per format, keeps the production decision engine as the single strategy implementation, streams per-trial summaries, and writes machine-readable and Markdown output under `outputs/monte-carlo/`. See [docs/monte-carlo-report.md](docs/monte-carlo-report.md) for the accepted baseline/final evidence, replay commands, and limitations.
+The command runs the requested number of trials per format, keeps the production decision engine as the single strategy implementation, streams per-trial summaries, and writes machine-readable and Markdown output under `outputs/monte-carlo/`. See [the draft-day release-candidate report](docs/draft-day-release-candidate-20260819.md) for current authenticated, holdout, latency, reproduction, and limitation evidence; [docs/monte-carlo-report.md](docs/monte-carlo-report.md) retains the earlier tuning-cycle history.
 
 For current player-specific evidence, first capture an immutable five-source snapshot from a sanitized authenticated ESPN profile, then replay that exact digest across independent seed families:
 
