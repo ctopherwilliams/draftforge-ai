@@ -8,7 +8,7 @@
     "batchSize": 5
   },
   "newCountableDrafts": {
-    "snake": 10,
+    "snake": 11,
     "salaryCap": 16
   },
   "invariants": {
@@ -837,6 +837,41 @@
         ["Texans D/ST", 0],
         ["Brandon Aubrey", 0],
         ["Alvin Kamara", 0]
+      ]
+    },
+    {
+      "leagueId": "765954947",
+      "format": "snake",
+      "teamId": 6,
+      "requestedDraftSlot": 7,
+      "draftSlot": 6,
+      "audit": "DRAFT_AUDIT_READY",
+      "doctor": "DRAFT_DAY_DOCTOR_READY",
+      "finalReady": true,
+      "parity": true,
+      "spent": 0,
+      "remainingBudget": 0,
+      "maxRoundTripMs": 2191,
+      "hardViolations": [],
+      "finalViolations": [],
+      "exercisedSignals": ["authoritative-live-order", "exact-roster-confirmation", "mandatory-specialist-completion", "temporary-room-doctor", "automatic-shutdown"],
+      "roster": [
+        ["Bijan Robinson", 0],
+        ["Ashton Jeanty", 0],
+        ["Saquon Barkley", 0],
+        ["Omarion Hampton", 0],
+        ["Kyren Williams", 0],
+        ["Bucky Irving", 0],
+        ["Sam LaPorta", 0],
+        ["Baker Mayfield", 0],
+        ["Marvin Harrison Jr.", 0],
+        ["Brian Thomas Jr.", 0],
+        ["Chuba Hubbard", 0],
+        ["Bryce Young", 0],
+        ["RJ Harvey", 0],
+        ["Texans D/ST", 0],
+        ["Cameron Dicker", 0],
+        ["Calvin Ridley", 0]
       ]
     }
   ],
