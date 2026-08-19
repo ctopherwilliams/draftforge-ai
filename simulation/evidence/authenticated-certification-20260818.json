@@ -1161,6 +1161,35 @@
         "build": "passed",
         "diffCheck": "passed"
       }
+    },
+    {
+      "format": "snake",
+      "batch": 3,
+      "countableDrafts": 5,
+      "leagueIds": ["765954947", "1668809422", "965231266", "1675112925", "1684854025"],
+      "terminalResults": {
+        "complete": 5,
+        "finalReady": 5,
+        "exactParity": 5,
+        "zeroViolations": 5,
+        "automaticShutdown": 5
+      },
+      "repeatedFailurePattern": "No repeated DraftForge decision, action, timing, roster, source, or presentation defect appeared. ESPN assigned authoritative live slot 6 in all five rooms despite requests for slots 7, 8, 9, 10, and 1.",
+      "reproductionEvidence": [
+        "All five rooms completed 16/16 with one K, one D/ST, no ESPN Autopick, exact ESPN/app parity, and automatic shutdown.",
+        "Maximum action round trips were 2.191, 3.056, 2.198, 2.717, and 2.478 seconds against the 30-second room clock.",
+        "Every room retained exactly one DraftForge tab, one exact ESPN room tab, one production server, muted sound, and the fixed ESPN/FFC/GNG/MFL/Tradyr source set."
+      ],
+      "change": "No engine change. Preserve live-order authority, fail-closed exact-room binding, and the current selection strategy.",
+      "safetyRisks": "Broad strategy tuning without a repeated failure pattern would weaken the paired-evidence rule and could regress already clean tail outcomes.",
+      "verification": {
+        "fullReleaseGate": "162/162 passed",
+        "terminalDoctors": "5/5 passed",
+        "typecheck": "passed",
+        "lint": "passed",
+        "build": "passed",
+        "diffCheck": "passed"
+      }
     }
   ],
   "sourceCoverageEvidence": {
