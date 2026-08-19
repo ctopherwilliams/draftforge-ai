@@ -6,6 +6,45 @@ export const SOURCE_SNAPSHOT_SCHEMA_VERSION = 1;
 export const PUBLIC_SOURCE_IDS = ["ffc", "mfl", "tradyr", "gng"];
 const POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"];
 
+function coverageMetrics(players) {
+  const total = players.length;
+  const atLeastFourCount = players.filter((player) => Number(player.sourceCount) >= 4).length;
+  const fullFiveCount = players.filter((player) => Number(player.sourceCount) === 5).length;
+  return {
+    total,
+    atLeastFourCount,
+    atLeastFourRate: total ? atLeastFourCount / total : 0,
+    fullFiveCount,
+    fullFiveRate: total ? fullFiveCount / total : 0,
+  };
+}
+
+export function buildCoverageBreakdown(consensus, rosterable) {
+  const board = [...consensus]
+    .sort((left, right) => Number(left.consensusRank) - Number(right.consensusRank))
+    .slice(0, Math.max(0, Number(rosterable || 0)));
+  const ranges = [
+    { id: "early", first: 1, last: Math.min(48, board.length) },
+    { id: "middle", first: 49, last: Math.min(96, board.length) },
+    { id: "late", first: 97, last: board.length },
+  ].filter((range) => range.first <= range.last);
+  return {
+    overall: coverageMetrics(board),
+    byPosition: Object.fromEntries(POSITIONS.map((position) => [
+      position,
+      coverageMetrics(board.filter((player) => player.pos === position)),
+    ])),
+    byDraftRange: Object.fromEntries(ranges.map((range) => [
+      range.id,
+      {
+        first: range.first,
+        last: range.last,
+        ...coverageMetrics(board.slice(range.first - 1, range.last)),
+      },
+    ])),
+  };
+}
+
 function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize);
   if (!value || typeof value !== "object") return value;
@@ -145,6 +184,7 @@ export function validateSourceSnapshot(snapshot) {
       sourceCount: Number(player.sourceCount || 0),
     }));
     const sourceReach = Object.fromEntries(summaries.map((source) => [source.id, source.players]));
+    const coverageBreakdown = buildCoverageBreakdown(consensus, rosterable);
     if (coverage < .5) warnings.push(`Only ${(coverage * 100).toFixed(1)}% of the rosterable board has at least four-source coverage.`);
     if (!completeMarketModelCoverageCount) {
       warnings.push("No player has complete market/model corroboration for sleeper classification.");
@@ -160,6 +200,7 @@ export function validateSourceSnapshot(snapshot) {
       rosterablePlayers: rosterable,
       coverageAtLeastFour: coverage,
       fullFiveSourceCoverage: fullCoverage,
+      coverageBreakdown,
       completeMarketModelCoverageCount,
       corroboratedSleeperCandidateCount: sleeperSignals.length,
       sleeperEvidenceFunnel: {
@@ -184,6 +225,7 @@ export function validateSourceSnapshot(snapshot) {
     rosterablePlayers: rosterable,
     coverageAtLeastFour: 0,
     fullFiveSourceCoverage: 0,
+    coverageBreakdown: buildCoverageBreakdown([], rosterable),
     completeMarketModelCoverageCount: 0,
     corroboratedSleeperCandidateCount: 0,
     sleeperEvidenceFunnel: {

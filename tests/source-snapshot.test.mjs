@@ -78,6 +78,29 @@ test("five-source snapshots are sanitized, content-addressed, and deterministica
   assert.equal(first.length, 30);
   assert.ok(first.every((player) => player.sourceCount === 5));
   assert.deepEqual(snapshot.validation.sourceReach, { ffc: 30, mfl: 30, tradyr: 30, gng: 30 });
+  assert.deepEqual(snapshot.validation.coverageBreakdown.overall, {
+    total: 24,
+    atLeastFourCount: 24,
+    atLeastFourRate: 1,
+    fullFiveCount: 24,
+    fullFiveRate: 1,
+  });
+  assert.deepEqual(snapshot.validation.coverageBreakdown.byDraftRange, {
+    early: {
+      first: 1,
+      last: 24,
+      total: 24,
+      atLeastFourCount: 24,
+      atLeastFourRate: 1,
+      fullFiveCount: 24,
+      fullFiveRate: 1,
+    },
+  });
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(snapshot.validation.coverageBreakdown.byPosition)
+      .map(([position, coverage]) => [position, coverage.total])),
+    { QB: 4, RB: 4, WR: 4, TE: 4, K: 4, DST: 4 },
+  );
   assert.equal(snapshot.validation.completeMarketModelCoverageCount, 30);
   assert.equal(snapshot.validation.corroboratedSleeperCandidateCount, 0);
   assert.deepEqual(snapshot.validation.sleeperEvidenceFunnel, {

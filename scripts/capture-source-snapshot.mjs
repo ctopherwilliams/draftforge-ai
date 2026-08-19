@@ -45,6 +45,7 @@ function printValidation(snapshot, validation) {
     sourceReach: validation.sourceReach,
     coverageAtLeastFour: validation.coverageAtLeastFour,
     fullFiveSourceCoverage: validation.fullFiveSourceCoverage,
+    coverageBreakdown: validation.coverageBreakdown,
     completeMarketModelCoverageCount: validation.completeMarketModelCoverageCount,
     corroboratedSleeperCandidateCount: validation.corroboratedSleeperCandidateCount,
     sleeperEvidenceFunnel: validation.sleeperEvidenceFunnel,
