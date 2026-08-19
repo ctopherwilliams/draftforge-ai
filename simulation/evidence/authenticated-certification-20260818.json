@@ -752,6 +752,36 @@
         "build": "passed",
         "diffCheck": "passed"
       }
+    },
+    {
+      "format": "snake",
+      "batch": 1,
+      "countableDrafts": 5,
+      "leagueIds": ["1031241356", "1214429767", "1664929220", "1594208142", "1137583102"],
+      "terminalResults": {
+        "complete": 5,
+        "finalReady": 5,
+        "exactParity": 5,
+        "zeroViolations": 5,
+        "automaticShutdown": 5
+      },
+      "repeatedFailurePattern": "No repeated snake selection or submission defect appeared. The release doctor could certify saved leagues but could not address ESPN's temporary practice-room id and 30-second timer, and its pre-room import-age SLO incorrectly expired after a completed draft.",
+      "reproductionEvidence": [
+        "Room 1594208142 completed 16/16 with zero violations, while the original doctor queried saved league 1603083723 instead of the exact temporary room.",
+        "The corrected room-id check then isolated the explicit 30-second practice timer from the saved league's 60-second timer.",
+        "Rooms 1594208142 and 1137583102 both passed exact final audit and the corrected terminal doctor; maximum action round trips were 1.833 and 2.403 seconds."
+      ],
+      "change": "Allow explicit numeric practice-room league, team, and timer overrides while preserving every other saved authenticated rule. Apply the five-minute import-age SLO before arming, but retain the exact originating import as valid terminal evidence after a completed draft.",
+      "safetyRisks": "Overrides are explicit and numeric, cannot change scoring, roster, position caps, keeper count, draft type, budget, or source invariants, and still require exact live audit parity.",
+      "verification": {
+        "focusedTests": "5/5 passed",
+        "fullReleaseGate": "162/162 passed",
+        "terminalDoctors": "2/2 passed",
+        "typecheck": "passed",
+        "lint": "passed",
+        "build": "passed",
+        "diffCheck": "passed"
+      }
     }
   ],
   "sourceCoverageEvidence": {
