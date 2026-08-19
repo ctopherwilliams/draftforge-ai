@@ -136,15 +136,23 @@ const TRADYR_MAX_PLAYERS = 1000;
 
 export async function fetchTradyrRedraftPages(
   request: (url: string) => Promise<TradyrPayload> = (url) => fetchJson(url, undefined, 15000),
+  retryDelayMs = 250,
 ) {
   const players: Record<string, unknown>[] = [];
   let generatedAt: string | null = null;
   let expectedTotal = TRADYR_PAGE_SIZE;
 
   for (let offset = 0; offset < Math.min(expectedTotal, TRADYR_MAX_PLAYERS); offset += TRADYR_PAGE_SIZE) {
-    const payload = await request(
-      `https://api.tradyr.app/v1/players?format=redraft&numQbs=1&limit=${TRADYR_PAGE_SIZE}&offset=${offset}`,
-    );
+    const url = `https://api.tradyr.app/v1/players?format=redraft&numQbs=1&limit=${TRADYR_PAGE_SIZE}&offset=${offset}`;
+    let payload: TradyrPayload;
+    try {
+      payload = await request(url);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/(abort|timeout|timed out|fetch failed|ECONNRESET|ETIMEDOUT)/i.test(message)) throw error;
+      if (retryDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      payload = await request(url);
+    }
     const page = Array.isArray(payload.data) ? payload.data : [];
     if (!generatedAt && payload.meta?.generatedAt) generatedAt = payload.meta.generatedAt;
     expectedTotal = Math.max(0, Math.min(TRADYR_MAX_PLAYERS, Number(payload.meta?.total || page.length)));

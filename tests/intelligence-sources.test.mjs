@@ -131,3 +131,28 @@ test("Tradyr redraft pagination expands the same source deterministically and st
   assert.deepEqual(urls.map((url) => Number(new URL(url).searchParams.get("offset"))), [0, 50, 100]);
   assert.ok(urls.every((url) => new URL(url).searchParams.get("numQbs") === "1"));
 });
+
+test("Tradyr retries one transient page timeout without changing pagination order", async () => {
+  const offsets = [];
+  let firstAttempt = true;
+  const result = await fetchTradyrRedraftPages(async (url) => {
+    const offset = Number(new URL(url).searchParams.get("offset"));
+    offsets.push(offset);
+    if (offset === 0 && firstAttempt) {
+      firstAttempt = false;
+      throw new Error("This operation was aborted");
+    }
+    return {
+      data: Array.from({ length: 10 }, (_, index) => ({
+        slug: `player-${index}`,
+        name: `Player ${index}`,
+        position: "WR",
+        rank: index + 1,
+      })),
+      meta: { total: 10, generatedAt: "2026-08-19T00:00:00.000Z" },
+    };
+  }, 0);
+
+  assert.deepEqual(offsets, [0, 0]);
+  assert.equal(result.players.length, 10);
+});
