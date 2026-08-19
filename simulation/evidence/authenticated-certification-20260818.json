@@ -957,6 +957,35 @@
         "build": "passed",
         "diffCheck": "passed"
       }
+    },
+    {
+      "format": "snake",
+      "batch": 2,
+      "countableDrafts": 5,
+      "leagueIds": ["309936690", "2100223010", "412474101", "78322966", "1590719295"],
+      "terminalResults": {
+        "complete": 5,
+        "finalReady": 5,
+        "exactParity": 5,
+        "zeroViolations": 5,
+        "automaticShutdown": 5
+      },
+      "repeatedFailurePattern": "No repeated DraftForge decision or action defect appeared. ESPN repeatedly assigned live slot 6 despite requested slots 2 through 5; DraftForge ignored the request and followed the imported authoritative live order. One ESPN room remained on its loading screen until a bounded reload.",
+      "reproductionEvidence": [
+        "Rooms 309936690, 2100223010, 412474101, and 78322966 all exposed ESPN's live slot 6 after requests for slots 2, 3, 4, and 5.",
+        "Every room imported the live order and completed 16/16 with exact parity, proving no requested-slot assumption entered the engine or action path.",
+        "Room 412474101 sent zero actions while ESPN was stuck loading, then required an exact re-import and re-arm after one same-tab reload before completing cleanly."
+      ],
+      "change": "No engine change. Preserve authoritative live-order import and the existing fail-closed loading/recovery behavior.",
+      "safetyRisks": "Treating the requested practice slot as authoritative would be unsafe; only the exact live ESPN order remains accepted.",
+      "verification": {
+        "fullReleaseGate": "162/162 passed",
+        "terminalDoctors": "5/5 passed",
+        "typecheck": "passed",
+        "lint": "passed",
+        "build": "passed",
+        "diffCheck": "passed"
+      }
     }
   ],
   "sourceCoverageEvidence": {
