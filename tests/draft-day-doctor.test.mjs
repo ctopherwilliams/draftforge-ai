@@ -93,10 +93,18 @@ test("live doctor enforces the five-second recheck SLO and live safety gate", ()
 });
 
 test("doctor can bind a temporary ESPN practice-room identity without changing saved rules", () => {
-  const room = resolveDraftDayDoctorLeague(expected, "1594208142", 6);
+  const room = resolveDraftDayDoctorLeague(expected, "1594208142", 6, 30);
   assert.equal(room.id, "1594208142");
   assert.equal(room.teamId, 6);
+  assert.equal(room.secondsPerPick, 30);
   assert.equal(room.draftType, expected.draftType);
   assert.equal(room.rosterSize, expected.rosterSize);
   assert.throws(() => resolveDraftDayDoctorLeague(expected, "not-an-espn-id", 6), /DRAFT_DAY_ROOM_IDENTITY_INVALID/);
+  assert.throws(() => resolveDraftDayDoctorLeague(expected, "1594208142", 6, 0), /DRAFT_DAY_ROOM_IDENTITY_INVALID/);
+});
+
+test("terminal doctor does not expire the import that started the completed draft", () => {
+  const completed = snapshot({ binding: { ...snapshot().binding, authenticatedImportAt: "2026-08-19T11:45:00.000Z" } });
+  const result = evaluateDraftDayDoctor({ snapshot: completed, expected, phase: "complete", system: system(), now });
+  assert.equal(result.checks.authenticatedImportFresh, true);
 });

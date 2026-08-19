@@ -18,7 +18,7 @@ const startServer = !args.includes("--no-start-server");
 const startedAt = Date.now();
 
 if (!new Set(["snake", "salary-cap"]).has(format) || !new Set(["pre-room", "live", "complete"]).has(phase)) {
-  console.error(JSON.stringify({ ok: false, code: "USAGE", usage: "npm run draft-day:doctor -- --format snake|salary-cap [--phase pre-room|live|complete] [--league PRACTICE_ROOM_ID --team TEAM_ID] [--no-start-server]" }));
+  console.error(JSON.stringify({ ok: false, code: "USAGE", usage: "npm run draft-day:doctor -- --format snake|salary-cap [--phase pre-room|live|complete] [--league PRACTICE_ROOM_ID --team TEAM_ID --timer SECONDS] [--no-start-server]" }));
   process.exit(2);
 }
 
@@ -32,10 +32,12 @@ if (!profile) {
 let expected;
 try {
   const roomTeam = valueFor("--team");
+  const roomTimer = valueFor("--timer");
   expected = resolveDraftDayDoctorLeague(
     profile,
     valueFor("--league") || undefined,
     roomTeam ? Number(roomTeam) : undefined,
+    roomTimer ? Number(roomTimer) : undefined,
   );
 } catch (error) {
   console.error(JSON.stringify({ ok: false, code: error instanceof Error ? error.message : "DRAFT_DAY_ROOM_IDENTITY_INVALID" }));

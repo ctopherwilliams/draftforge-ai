@@ -40,13 +40,15 @@ export function resolveDraftDayDoctorLeague(
   profile: DraftDayExpectedLeague,
   roomLeagueId?: string,
   roomTeamId?: number,
+  roomSecondsPerPick?: number,
 ): DraftDayExpectedLeague {
   const id = String(roomLeagueId || profile.id).trim();
   const teamId = roomTeamId ?? profile.teamId;
-  if (!/^\d+$/.test(id) || !Number.isInteger(teamId) || teamId <= 0) {
+  const secondsPerPick = roomSecondsPerPick ?? profile.secondsPerPick;
+  if (!/^\d+$/.test(id) || !Number.isInteger(teamId) || teamId <= 0 || !Number.isInteger(secondsPerPick) || secondsPerPick <= 0) {
     throw new Error("DRAFT_DAY_ROOM_IDENTITY_INVALID");
   }
-  return { ...profile, id, teamId };
+  return { ...profile, id, teamId, secondsPerPick };
 }
 
 export function evaluateDraftDayDoctor(input: {
@@ -72,7 +74,7 @@ export function evaluateDraftDayDoctor(input: {
     sourceWarmWithinSlo: Number.isFinite(system.sourceWarmMs) && system.sourceWarmMs <= DRAFT_DAY_DOCTOR_SLOS.sourceWarmMs,
     liveRecheckWithinSlo: phase !== "live" || (Number.isFinite(system.totalCheckMs) && system.totalCheckMs <= DRAFT_DAY_DOCTOR_SLOS.liveRecheckMs),
     runtimeFresh: Number.isFinite(runtimeAgeMs) && runtimeAgeMs >= -5_000 && runtimeAgeMs <= DRAFT_DAY_DOCTOR_SLOS.runtimeFreshMs,
-    authenticatedImportFresh: Number.isFinite(authenticatedImportAgeMs) && authenticatedImportAgeMs >= -5_000 && authenticatedImportAgeMs <= DRAFT_DAY_DOCTOR_SLOS.authenticatedImportFreshMs,
+    authenticatedImportFresh: phase === "complete" || (Number.isFinite(authenticatedImportAgeMs) && authenticatedImportAgeMs >= -5_000 && authenticatedImportAgeMs <= DRAFT_DAY_DOCTOR_SLOS.authenticatedImportFreshMs),
     exactTwoChromeTabs: runtime.browserTabCount === 2,
     oneDraftForgeTab: runtime.draftForgeTabCount === 1,
     oneEspnTab: runtime.espnTabCount === 1,
