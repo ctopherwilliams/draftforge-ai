@@ -1,4 +1,4 @@
-import { evaluateDraftAuditSnapshot, type DraftAuditSnapshot } from "./draft-audit.ts";
+import { evaluateDraftAuditSnapshot, MAX_DRAFT_ACTION_TELEMETRY_EVENTS, type DraftAuditSnapshot } from "./draft-audit.ts";
 
 export type DraftDayReadinessPhase = "pre-room" | "live" | "complete";
 
@@ -58,7 +58,7 @@ export function evaluateDraftDayReadiness(input: {
     autoDraftOff: snapshot.safety.autoDraft === false,
     espnAutopickOff: snapshot.safety.autopickActive === false,
     actionHealthy: !/stopped|excluded|autopick|fatal/i.test(snapshot.safety.actionState),
-    telemetryValid: snapshot.telemetry.actions.length <= 25,
+    telemetryValid: snapshot.telemetry.actions.length <= MAX_DRAFT_ACTION_TELEMETRY_EVENTS,
     sleeperEvidenceValid: snapshot.sleeperEvidence.candidateCount === snapshot.sleeperEvidence.candidates.length,
   };
   if (phase === "live" || phase === "complete") {

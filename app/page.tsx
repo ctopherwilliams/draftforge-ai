@@ -31,6 +31,7 @@ import { draftUiReducer, INITIAL_DRAFT_UI_STATE } from "./lib/draft-ui-state";
 import { buildDraftPresentation, resolveActionSurfaceStatus, resolveLiveOperatorStatus } from "./lib/draft-presentation";
 import {
   draftAuditChecklistBindingKey,
+  MAX_DRAFT_ACTION_TELEMETRY_EVENTS,
   resolveDraftAuditChecklistReady,
   type DraftActionTelemetryEvent,
   type DraftAuditRosterEntry,
@@ -476,7 +477,7 @@ export default function Home() {
             roundTripMs: Math.max(0, Math.round(Date.now() - pendingTelemetry.sentAt)),
             clockSeconds: pendingTelemetry.clockSeconds,
             automatic: pendingTelemetry.automatic,
-          }].slice(-25);
+          }].slice(-MAX_DRAFT_ACTION_TELEMETRY_EVENTS);
           setTelemetryVersion((version) => version + 1);
         }
         if (!payload.ok && payload.action?.operation === "NOMINATE") {
@@ -940,7 +941,7 @@ export default function Home() {
       clockSeconds: Number.isFinite(remainingSeconds) ? remainingSeconds : null,
       automatic,
     });
-    while (pendingActionTelemetryRef.current.size > 25) {
+    while (pendingActionTelemetryRef.current.size > MAX_DRAFT_ACTION_TELEMETRY_EVENTS) {
       const oldestRequestId = pendingActionTelemetryRef.current.keys().next().value;
       if (oldestRequestId === undefined) break;
       pendingActionTelemetryRef.current.delete(oldestRequestId);
@@ -1093,6 +1094,7 @@ export default function Home() {
     extensionConnected: extension === "connected",
     autopickActive: context.autopickActive === true,
     inDraftRoom: context.inDraftRoom === true,
+    rosterComplete: myPickCount >= league.rosterSize,
   });
 
   useEffect(() => {
@@ -1313,11 +1315,18 @@ export default function Home() {
 
     <section className="workspace">
       <aside className="coach-column">
-        {focusPlayer && <section className="recommendation panel" aria-labelledby="decision-title">
+        {(focusPlayer || myPickCount >= league.rosterSize) && <section className="recommendation panel" aria-labelledby="decision-title">
           <div className="decision-head">
             <div><p className="eyebrow">DO THIS NOW · {league.draftType === "AUCTION" ? "SALARY CAP" : "SNAKE"}</p><h1 id="decision-title">{displayCommandLabel}</h1></div>
             <span className={`decision-state ${presentation.stateTone}`}>{presentation.stateLabel}</span>
           </div>
+          {myPickCount >= league.rosterSize ? <>
+            <div className="decision-hero completion-hero">
+              <div className="rec-player"><div className="avatar">✓</div><div><h2>ESPN roster confirmed</h2><p>{myPickCount} of {league.rosterSize} slots complete · exact room {league.id}</p></div></div>
+              <div className="command-number"><span>FINAL ROSTER</span><strong>{myPickCount}/{league.rosterSize}</strong><small>{league.draftType === "AUCTION" ? `$${remainingBudget} remaining` : "Every pick reconciled"}</small></div>
+            </div>
+            <div className="decision-safety" role="status" aria-live="polite"><span aria-hidden="true">✓</span><b>{safetyLabel}</b></div>
+          </> : focusPlayer ? <>
           {nominated && <p className="auction-live">LIVE NOMINATION · {context.currentBid ? `$${context.currentBid}` : "Opening bid"}{ownNominationIntent ? ` · ${ownNominationIntent}` : ""}</p>}
           {!nominated && league.draftType === "AUCTION" && auctionNomination && <p className="auction-live">{auctionNomination.intent} NOMINATION · OPEN ${auctionNomination.openingBid}</p>}
           <div className="decision-hero">
@@ -1341,6 +1350,7 @@ export default function Home() {
           {league.draftType === "SNAKE" ? <button className="draft-button full" onClick={() => submit(focusPlayer, false, "SELECT")} disabled={!settingsConfirmed || extension !== "connected" || !actionWindowOpen}>Draft {focusPlayer.name} in ESPN<small>{Number.isFinite(remainingSeconds) ? `${remainingSeconds}s remaining` : "Waiting for verified clock"}</small></button> : <div className="pick-actions"><button className="draft-button" onClick={() => auctionNomination && submit(auctionNomination.player, false, "NOMINATE", auctionNomination.openingBid, auctionNomination.intent)} disabled={!settingsConfirmed || extension !== "connected" || !actionWindowOpen || Boolean(nominated || context.nominatedPlayer || Number(context.currentBid || 0) > 0) || !auctionNomination}>Nominate {auctionNomination?.intent === "DRAIN" ? "budget drain" : "target"}<small>Open ${auctionNomination?.openingBid || 1}</small></button><button className="bid-button" onClick={() => submit(focusPlayer, false, "BID", nextBid)} disabled={!settingsConfirmed || extension !== "connected" || !nominated || context.leadingBid || ownNominationIntent === "DRAIN" || nextBid > focusPlayer.maxBid || !bidWindowOpen}>{ownNominationIntent === "DRAIN" ? "Pass — no price enforcing" : context.leadingBid ? "Hold — already leading" : nextBid > focusPlayer.maxBid ? "Pass — ceiling reached" : `Bid $${nextBid}`}<small>{ownNominationIntent === "DRAIN" ? "Decoy nomination" : `Hard stop $${focusPlayer.maxBid}`}</small></button></div>}
           {!settingsConfirmed && <small className="locked-note">Confirm imported league rules to unlock ESPN actions.</small>}
           <details className="decision-details"><summary>Decision intelligence <span>{focusPlayer.confidence}% confidence</span></summary><div className="confidence"><div><span>Source agreement · {focusPlayer.sourceCount || 1}/5 sources</span><b>{focusPlayer.confidence}%</b></div><div className="confidence-track"><i style={{ width: `${focusPlayer.confidence}%` }} /></div></div><p className="reason">{describeRecommendation(focusPlayer, league, strategy)}</p>{league.draftType === "AUCTION" && focusPlayer.sourceAuctions && <div className="source-values">{Object.entries(focusPlayer.sourceAuctions).map(([source, amount]) => <span key={source}>{source.toUpperCase()} <b>${Math.round(amount)}</b></span>)}</div>}<ul className="reason-list">{focusPlayer.reasons.slice(0, 4).map((reason) => <li key={reason}>{reason}</li>)}</ul></details>
+          </> : null}
         </section>}
         <section className="on-clock-card panel"><span className={actionWindowOpen ? "pulse" : ""} aria-hidden="true">●</span><div><b>{actionSurfaceStatus.detail}</b><small>{autoDraft ? "Auto-Draft is armed only for this verified league and tab." : "Guided mode: you approve every pick, nomination, and bid."}</small></div></section>
       </aside>

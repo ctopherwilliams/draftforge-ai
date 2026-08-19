@@ -5,6 +5,7 @@ import {
   draftAuditChecklistBindingKey,
   evaluateDraftAuditSnapshot,
   isDraftAuditSnapshot,
+  MAX_DRAFT_ACTION_TELEMETRY_EVENTS,
   resolveDraftAuditChecklistReady,
 } from "../app/lib/draft-audit.ts";
 
@@ -114,6 +115,12 @@ test("completed exact ESPN/app audit is final-ready", () => {
     hardViolations: [],
     finalViolations: [],
   });
+});
+
+test("action telemetry retains a bounded full-draft latency sample", () => {
+  const event = snapshot().telemetry.actions[0];
+  assert.equal(isDraftAuditSnapshot(snapshot({ telemetry: { actions: Array.from({ length: MAX_DRAFT_ACTION_TELEMETRY_EVENTS }, () => ({ ...event })) } })), true);
+  assert.equal(isDraftAuditSnapshot(snapshot({ telemetry: { actions: Array.from({ length: MAX_DRAFT_ACTION_TELEMETRY_EVENTS + 1 }, () => ({ ...event })) } })), false);
 });
 
 test("completed audit preserves prior checklist evidence only for the same exact room", () => {

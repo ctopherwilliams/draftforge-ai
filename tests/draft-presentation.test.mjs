@@ -45,6 +45,14 @@ test("presentation reports the fail-closed reason before general waiting state",
   assert.equal(buildDraftPresentation({ ...base, actionWindowOpen: true, autopickActive: true }).stateTone, "blocked");
 });
 
+test("completed rosters replace stale recommendations with a terminal state", () => {
+  const complete = buildDraftPresentation({ ...base, rosterComplete: true, actionWindowOpen: true });
+  assert.equal(complete.commandLabel, "DRAFT COMPLETE");
+  assert.equal(complete.stateLabel, "COMPLETE");
+  assert.equal(complete.stateTone, "waiting");
+  assert.match(complete.safetyLabel, /no further action will be sent/i);
+});
+
 test("live auction status follows the current command instead of a stale submit message", () => {
   assert.equal(resolveLiveOperatorStatus({
     actionState: "Auto-Draft is submitting Kyren Williams in ESPN…",

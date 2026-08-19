@@ -14,12 +14,13 @@ export type DraftPresentationInput = {
   extensionConnected: boolean;
   autopickActive: boolean;
   inDraftRoom: boolean;
+  rosterComplete?: boolean;
 };
 
 export type DraftPresentation = {
   commandLabel: string;
   safetyLabel: string;
-  stateLabel: "ACTION READY" | "LOCKED" | "PREPARED";
+  stateLabel: "ACTION READY" | "LOCKED" | "PREPARED" | "COMPLETE";
   stateTone: "ready" | "blocked" | "waiting";
 };
 
@@ -71,7 +72,9 @@ export function resolveLiveOperatorStatus(input: LiveOperatorStatusInput) {
 
 export function buildDraftPresentation(input: DraftPresentationInput): DraftPresentation {
   const recommendationLocked = !input.settingsConfirmed || !input.extensionConnected;
-  const commandLabel = input.autopickActive
+  const commandLabel = input.rosterComplete
+    ? "DRAFT COMPLETE"
+    : input.autopickActive
     ? "STOPPED — ESPN AUTOPICK ACTIVE"
     : !input.sourceCoverageReady
       ? "LOCKED — REFRESH FIVE SOURCES"
@@ -99,7 +102,9 @@ export function buildDraftPresentation(input: DraftPresentationInput): DraftPres
                         ? `TRACK ${input.focusPlayer.name}`
                         : "WAIT FOR NOMINATION";
 
-  const safetyLabel = input.autopickActive
+  const safetyLabel = input.rosterComplete
+    ? "ESPN confirmed every roster spot — no further action will be sent"
+    : input.autopickActive
     ? "ESPN Autopick detected — actions stopped"
     : !input.sourceCoverageReady
       ? "Five-source coverage incomplete — actions locked"
@@ -108,6 +113,15 @@ export function buildDraftPresentation(input: DraftPresentationInput): DraftPres
         : input.inDraftRoom
           ? "Connected — waiting for a safe action window"
           : "Open the exact ESPN draft room";
+
+  if (input.rosterComplete) {
+    return {
+      commandLabel,
+      safetyLabel,
+      stateLabel: "COMPLETE",
+      stateTone: "waiting",
+    };
+  }
 
   const blocked = input.autopickActive || !input.sourceCoverageReady || recommendationLocked;
   const actionReady = !blocked && (input.actionWindowOpen || input.auctionCanBid);

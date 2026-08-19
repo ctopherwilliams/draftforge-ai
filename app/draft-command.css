@@ -248,6 +248,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .avatar.dst, .pos.dst { color: #aab6ff; background: #191e37; }
 .avatar.k, .pos.k { color: #f8d17e; background: #2c2516; }
 .rec-player h2 { margin: 0 0 6px; overflow: hidden; color: #fff; font-size: clamp(1.5rem, 2.3vw, 2.25rem); letter-spacing: -.045em; text-overflow: ellipsis; white-space: nowrap; }
+.completion-hero .rec-player h2 { overflow: visible; font-size: clamp(1.35rem, 2vw, 2rem); line-height: 1.05; text-overflow: clip; white-space: normal; }
+.completion-hero .avatar { border-color: var(--blue); color: var(--blue-strong); }
 .rec-player p { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--text-soft); font: 800 .75rem/1.35 var(--mono); }
 .rec-player p span { padding: 4px 7px; border: 1px solid var(--line); background: var(--surface-raised); color: var(--text-soft); }
 .rec-player p .sleeper-chip { border-color: #6659a4; background: var(--violet-soft); color: #c4b5fd; }

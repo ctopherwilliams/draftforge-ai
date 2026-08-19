@@ -36,6 +36,8 @@ test("live decision precedes secondary player-board detail", () => {
   assert.doesNotMatch(page, /displayAuctionValue\(player\.id, league\.id, player\.auction\)/);
   assert.match(page, /draftAuditPendingRef/);
   assert.match(page, /DRAFT_AUDIT_RECORDED/);
+  assert.match(page, /ESPN roster confirmed/);
+  assert.match(page, /rosterComplete: myPickCount >= league\.rosterSize/);
   assert.match(page, /attempt < 3/);
   assert.equal((page.match(/className="on-clock-card panel"/g) || []).length, 1, "connection status must render once");
 });
@@ -47,6 +49,7 @@ test("command-center styles preserve readable and responsive controls", () => {
   assert.match(css, /grid-template-areas:\s*"coach roster"\s*"players roster"/);
   assert.match(css, /grid-template-areas: "coach" "roster" "players"/);
   assert.match(css, /\.player-list \{[^}]*max-height:\s*390px/s);
+  assert.match(css, /\.completion-hero \.rec-player h2 \{[^}]*white-space:\s*normal/s);
   assert.match(css, /\.workspace \{[^}]*max-width:\s*none/s);
   assert.match(css, /prefers-reduced-motion: reduce/);
   assert.match(css, /\.settings-button::after, \.auto-toggle::after \{ content: none/);

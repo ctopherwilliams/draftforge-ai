@@ -1,5 +1,7 @@
 import { openStarterSlots, type LeagueSettings, type Position } from "./draft-engine.ts";
 
+export const MAX_DRAFT_ACTION_TELEMETRY_EVENTS = 256;
+
 export type DraftAuditRosterEntry = {
   playerId: number;
   playerName: string;
@@ -195,7 +197,7 @@ export function isDraftAuditSnapshot(value: unknown): value is DraftAuditSnapsho
   if (!Array.isArray(safety.sourceIds) || safety.sourceIds.some((id) => typeof id !== "string")) return false;
   if (!Array.isArray(draft.appRoster) || !Array.isArray(draft.espnRoster)) return false;
   if (!snapshot.telemetry) return false;
-  if (!Array.isArray(snapshot.telemetry.actions) || snapshot.telemetry.actions.length > 25) return false;
+  if (!Array.isArray(snapshot.telemetry.actions) || snapshot.telemetry.actions.length > MAX_DRAFT_ACTION_TELEMETRY_EVENTS) return false;
   if (!snapshot.telemetry.actions.every((event) => (
     Number.isFinite(Date.parse(String(event?.occurredAt || "")))
     && ["SELECT", "BID", "NOMINATE"].includes(String(event?.operation))
