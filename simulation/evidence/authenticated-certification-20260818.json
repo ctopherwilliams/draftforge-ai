@@ -8,7 +8,7 @@
     "batchSize": 5
   },
   "newCountableDrafts": {
-    "snake": 5,
+    "snake": 6,
     "salaryCap": 16
   },
   "invariants": {
@@ -659,6 +659,41 @@
         ["Chuba Hubbard", 0],
         ["Isaiah Likely", 0],
         ["J.K. Dobbins", 0],
+        ["Texans D/ST", 0],
+        ["Brandon Aubrey", 0],
+        ["Alvin Kamara", 0]
+      ]
+    },
+    {
+      "leagueId": "309936690",
+      "format": "snake",
+      "teamId": 6,
+      "requestedDraftSlot": 2,
+      "draftSlot": 6,
+      "audit": "DRAFT_AUDIT_READY",
+      "doctor": "DRAFT_DAY_DOCTOR_READY",
+      "finalReady": true,
+      "parity": true,
+      "spent": 0,
+      "remainingBudget": 0,
+      "maxRoundTripMs": 2385,
+      "hardViolations": [],
+      "finalViolations": [],
+      "exercisedSignals": ["authoritative-live-order", "exact-roster-confirmation", "mandatory-specialist-completion", "automatic-shutdown"],
+      "roster": [
+        ["Jalen Hurts", 0],
+        ["De'Von Achane", 0],
+        ["Saquon Barkley", 0],
+        ["Omarion Hampton", 0],
+        ["Kyren Williams", 0],
+        ["Malik Nabers", 0],
+        ["Kyler Murray", 0],
+        ["Marvin Harrison Jr.", 0],
+        ["Jaylen Warren", 0],
+        ["Brian Thomas Jr.", 0],
+        ["Mark Andrews", 0],
+        ["J.K. Dobbins", 0],
+        ["RJ Harvey", 0],
         ["Texans D/ST", 0],
         ["Brandon Aubrey", 0],
         ["Alvin Kamara", 0]
