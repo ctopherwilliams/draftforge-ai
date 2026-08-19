@@ -211,7 +211,7 @@ async function loadDraftContext({ text, clockTeam, clockOwnMarker = false, ownTe
     CSS: { escape: (value) => String(value) },
     Event: class Event {},
   };
-  vm.runInNewContext(`${source.slice(0, runtimeStart)}\nglobalThis.readDraftContext = getContext; globalThis.hasSafeWindow = hasSafeActionWindow; globalThis.snakePoolStable = snakePlayerPoolIsStable; globalThis.nominationStarted = nominationHasStarted; globalThis.updateSales = updateAuctionSales; globalThis.executeDraftAction = executeAction; globalThis.disableDraftAutopick = disableEspnAutopick; globalThis.planCandidateSearch = buildCandidateSearchPlan; globalThis.planMandatoryPosition = buildMandatoryPositionPlan;`, sandbox);
+  vm.runInNewContext(`${source.slice(0, runtimeStart)}\nglobalThis.readDraftContext = getContext; globalThis.hasSafeWindow = hasSafeActionWindow; globalThis.snakePoolStable = snakePlayerPoolIsStable; globalThis.nominationStarted = nominationHasStarted; globalThis.updateSales = updateAuctionSales; globalThis.executeDraftAction = executeAction; globalThis.disableDraftAutopick = disableEspnAutopick; globalThis.planCandidateSearch = buildCandidateSearchPlan; globalThis.planMandatoryPosition = buildMandatoryPositionPlan; globalThis.pruneSnakeCandidates = availableSnakeCandidates;`, sandbox);
   let context = sandbox.readDraftContext();
   if (context.onClock && !context.actionSurfaceReady) {
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -227,6 +227,7 @@ async function loadDraftContext({ text, clockTeam, clockOwnMarker = false, ownTe
     disableAutopick: sandbox.disableDraftAutopick,
     candidateSearchPlan: sandbox.planCandidateSearch,
     mandatoryPositionPlan: sandbox.planMandatoryPosition,
+    availableSnakeCandidates: sandbox.pruneSnakeCandidates,
     actionState,
   };
 }
@@ -779,6 +780,28 @@ test("final mandatory slots search a wider exact shortlist inside the same actio
   assert.ok(mandatoryPlan.every((entry) => entry.waitMs === 120));
   assert.equal(ordinaryPlan.length, 7);
   assert.deepEqual(Array.from(ordinaryPlan, (entry) => entry.waitMs), [900, 250, 250, 250, 250, 250, 250]);
+});
+
+test("late snake resolution skips only players ESPN already confirms as drafted", async () => {
+  const room = await loadDraftContext({
+    text: "RND 12 OF 16\n00:20\nON THE CLOCK: PICK 115",
+    clockTeam: "Us",
+    ownTeam: "Us",
+    snakeHistory: [
+      { playerName: "Stale First Choice", teamName: "Other", round: 11, roundPick: 4 },
+      { playerName: "Roster Player", teamName: "Us", round: 10, roundPick: 5 },
+    ],
+  });
+  const candidates = [
+    { playerId: 1, playerName: "Stale First Choice" },
+    { playerId: 2, playerName: "Best Legal Choice" },
+    { playerId: 3, playerName: "Next Legal Choice" },
+  ];
+
+  assert.deepEqual(
+    Array.from(room.availableSnakeCandidates(candidates, room.context), (candidate) => candidate.playerName),
+    ["Best Legal Choice", "Next Legal Choice"],
+  );
 });
 
 test("final kicker and defense slots filter ESPN once before exact candidate resolution", async () => {

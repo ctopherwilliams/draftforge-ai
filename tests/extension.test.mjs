@@ -87,6 +87,8 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(content, /MANDATORY_CANDIDATE_SEARCH_WINDOW_MS = 120/);
   assert.match(content, /MANDATORY_POSITION_FILTER_WINDOW_MS = 1800/);
   assert.match(content, /function buildMandatoryPositionPlan\(candidates\)/);
+  assert.match(content, /function availableSnakeCandidates\(candidates, context\)/);
+  assert.match(content, /availableSnakeCandidates\(requestedCandidates, context\)/);
   assert.match(content, /setNativeSelectValue\(positionFilter, mandatoryPositionPlan\.slotId\)/);
   assert.match(content, /!visibleCandidate && !usedPositionFilter && playerSearch instanceof HTMLInputElement/);
   assert.match(content, /const rehydrateDeadline = Math\.min/);

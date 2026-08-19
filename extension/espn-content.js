@@ -401,6 +401,23 @@ function retryBidAction(action, context) {
   return { ...action, bidRetryCount: retryCount + 1 };
 }
 
+function availableSnakeCandidates(candidates, context) {
+  const roster = Array.isArray(context?.ownRoster) ? context.ownRoster : [];
+  const draftedNames = (Array.isArray(context?.snakePicks) ? context.snakePicks : [])
+    .map((pick) => String(pick?.playerName || "").trim())
+    .filter(Boolean);
+  return candidates.filter((candidate) => {
+    const playerId = Number(candidate?.playerId || 0);
+    const playerName = String(candidate?.playerName || "").trim();
+    if (!playerName) return false;
+    if (roster.some((entry) => (
+      (playerId !== 0 && Number(entry?.playerId) === playerId)
+      || playerNamesMatch(entry?.name, playerName)
+    ))) return false;
+    return !draftedNames.some((draftedName) => playerNamesMatch(draftedName, playerName));
+  });
+}
+
 function buildCandidateSearchPlan(candidates) {
   const mandatorySearch = candidates.some((candidate) => candidate.fillsMandatoryStarter === true);
   const limit = mandatorySearch ? MAX_MANDATORY_SEARCH_CANDIDATES : MAX_SEARCH_CANDIDATES;
@@ -546,9 +563,20 @@ async function executeActionAttempt(action) {
   let usedPlayerSearch = null;
   let usedPositionFilter = null;
   if (action.operation === "SELECT" || action.operation === "NOMINATE") {
-    const candidates = Array.isArray(action.candidates) && action.candidates.length
+    const requestedCandidates = Array.isArray(action.candidates) && action.candidates.length
       ? action.candidates
       : [{ playerId: action.playerId, playerName: action.playerName }];
+    // The pick message rail updates before the virtualized player pool. Remove
+    // exact players ESPN already proves were drafted so late-round resolution
+    // never spends sequential search windows on stale recommendations. This
+    // only prunes authoritative history; model order among legal candidates is
+    // unchanged and exact DOM identity is still required before every click.
+    const candidates = action.operation === "SELECT"
+      ? availableSnakeCandidates(requestedCandidates, context)
+      : requestedCandidates;
+    if (!candidates.length) {
+      return { ok: false, code: "PLAYER_NOT_FOUND", message: "Every recommended player is already confirmed in ESPN's draft history." };
+    }
     const primaryCandidate = candidates[0];
     let visibleCandidate = primaryCandidate && visiblePlayerControl(primaryCandidate.playerId, primaryCandidate.playerName)
       ? primaryCandidate
