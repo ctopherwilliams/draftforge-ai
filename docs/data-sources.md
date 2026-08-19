@@ -7,7 +7,7 @@ DraftForge uses five complementary signals. ESPN remains the source of league tr
 | ESPN Fantasy | League-specific projections, platform rank/ADP, auction value, injuries | Authenticated Chrome companion calls ESPN Fantasy's league/player JSON endpoints | Import and during draft | 30% |
 | Fantasy Football Calculator | Recent redraft ADP, dispersion, and draft sample size | `GET /api/v1/adp/{format}?teams={n}&year={yyyy}` | Daily; DraftForge caches six hours | 15% |
 | MyFantasyLeague | Cross-platform ADP and average auction value from completed leagues | Public MFL export API: `TYPE=players`, `TYPE=adp`, and `TYPE=aav` | Six-hour cache | 15% |
-| Tradyr | Independent redraft-PPR composite | `GET https://api.tradyr.app/v1/rankings/redraft-ppr` | Daily | 20% |
+| Tradyr | Independent redraft-PPR composite | Bounded pages from `GET https://api.tradyr.app/v1/players?format=redraft&numQbs=1&limit=50&offset={n}` | Daily | 20% |
 | The GNG Pigskin Rankings | Model ranking, tiers, movement, and projected PPG | `GET https://www.thegng.us/api/rankings.json?profile={standard|half_ppr|ppr}` | Source-generated timestamp; six-hour cache | 20% |
 
 ## Combination method
@@ -20,6 +20,8 @@ DraftForge uses five complementary signals. ESPN remains the source of league tr
 6. Feed consensus, ESPN league-specific projected points, value over replacement, tier scarcity, roster construction, and selected strategy into the deterministic draft score.
 
 The model never treats the five ranks as five equal expert opinions. ESPN projections answer “how valuable is this player in this league?”, while FFC/MFL answer “when or for how much will the room draft him?” Tradyr and The GNG add independent player-quality priors.
+
+Tradyr pagination is sequential, capped at 1,000 rows, and remains one 20% source. The documented single-QB redraft page was verified field-for-field against the former `redraft-ppr` top 50 before adoption; offsets expand player reach without creating extra votes or changing consensus weights. A failed page fails the Tradyr source closed rather than silently retaining partial coverage.
 
 ## Immutable simulation snapshots
 
@@ -38,6 +40,8 @@ Sleepers are derived from these same five sources; no editorial list or sixth we
 - the combined edge, VORP, tier scarcity, coverage, and model agreement score reaches 50/100.
 
 An ADP in rounds 1–5 is an ordinary `VALUE`, rounds 6–9 are a `SLEEPER`, and round 10 or later is a `DEEP STASH`. Snake drafts do not receive a sleeper timing bonus more than one league round before market ADP. Salary-cap drafts keep sleepers out of early target/drain nominations, add priority only as the room loses budget leverage, and never raise the source-backed max bid, position portfolio limit, pacing cap, or one-dollar-per-open-slot reserve.
+
+Snapshot validation reports source reach, four-source and full-five-source coverage, complete market/model matches, and the production sleeper-evidence funnel. The 2026-08-19 expanded snapshot matched 181 Tradyr rows and improved the rosterable board from 41.07% to 60.12% at four or more sources and from 24.40% to 47.62% at all five. It still produced zero production-qualified sleeper signals: five players had positive model evidence, one cleared the eight-point model edge, and none reached the unchanged 50-point evidence threshold. This is an evidence gap, not permission to weaken corroboration.
 
 ## Attribution and usage
 

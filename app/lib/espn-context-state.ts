@@ -32,6 +32,37 @@ export type EspnContext = {
   auctionSales?: EspnAuctionSale[];
 };
 
+function normalizedPlayerName(value: string | null | undefined) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+export function resolveEspnNominatedPlayer<T extends { id: number; name: string }>(
+  players: T[],
+  context: Pick<EspnContext, "nominatedPlayer" | "nominatedPlayerId">,
+) {
+  const nominatedPlayerId = Number(context.nominatedPlayerId);
+  if (Number.isInteger(nominatedPlayerId) && nominatedPlayerId > 0) {
+    return players.find((player) => player.id === nominatedPlayerId);
+  }
+  const nominatedPlayerName = normalizedPlayerName(context.nominatedPlayer);
+  return nominatedPlayerName
+    ? players.find((player) => normalizedPlayerName(player.name) === nominatedPlayerName)
+    : undefined;
+}
+
+export function resolveLiveBoardDisplayRank<
+  T extends { name: string; pos?: string },
+>(player: T | undefined, players: T[]) {
+  if (!player) return undefined;
+  const name = normalizedPlayerName(player.name);
+  const position = String(player.pos || "").trim().toUpperCase();
+  const index = players.findIndex((candidate) => (
+    normalizedPlayerName(candidate.name) === name
+    && String(candidate.pos || "").trim().toUpperCase() === position
+  ));
+  return index >= 0 ? index + 1 : undefined;
+}
+
 function reuseArray<T>(current: T[] | undefined, next: T[] | undefined, equal: (left: T, right: T) => boolean) {
   if (!current || !next || current.length !== next.length) return next;
   return current.every((item, index) => equal(item, next[index])) ? current : next;

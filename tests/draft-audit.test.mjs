@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { GET, POST } from "../app/api/draft-day/route.ts";
 import {
+  draftAuditChecklistBindingKey,
   evaluateDraftAuditSnapshot,
   isDraftAuditSnapshot,
+  resolveDraftAuditChecklistReady,
 } from "../app/lib/draft-audit.ts";
 
 const roster = [
@@ -23,10 +25,13 @@ const roster = [
   [14, "Kicker One", "K", 1],
 ].map(([playerId, playerName, position, amount]) => ({ playerId, playerName, position, amount }));
 
+const testAuditEpoch = Date.now() - 60_000;
+const testCapturedAt = (offsetSeconds = 0) => new Date(testAuditEpoch + offsetSeconds * 1000).toISOString();
+
 function snapshot(overrides = {}) {
   return {
     schemaVersion: 1,
-    capturedAt: "2026-08-17T20:00:00.000Z",
+    capturedAt: testCapturedAt(),
     league: {
       id: "audit-verified-1",
       teamId: 7,
@@ -71,6 +76,34 @@ test("completed exact ESPN/app audit is final-ready", () => {
     hardViolations: [],
     finalViolations: [],
   });
+});
+
+test("completed audit preserves prior checklist evidence only for the same exact room", () => {
+  const exactRoom = draftAuditChecklistBindingKey("1743483683", 7, 2097429901);
+  assert.equal(resolveDraftAuditChecklistReady({
+    currentReady: false,
+    rosterComplete: true,
+    currentBindingKey: exactRoom,
+    lastValidatedBindingKey: exactRoom,
+  }), true);
+  assert.equal(resolveDraftAuditChecklistReady({
+    currentReady: false,
+    rosterComplete: false,
+    currentBindingKey: exactRoom,
+    lastValidatedBindingKey: exactRoom,
+  }), false);
+  assert.equal(resolveDraftAuditChecklistReady({
+    currentReady: false,
+    rosterComplete: true,
+    currentBindingKey: draftAuditChecklistBindingKey("1743483683", 7, 2097429902),
+    lastValidatedBindingKey: exactRoom,
+  }), false);
+  assert.equal(resolveDraftAuditChecklistReady({
+    currentReady: true,
+    rosterComplete: false,
+    currentBindingKey: exactRoom,
+    lastValidatedBindingKey: "",
+  }), true);
 });
 
 test("audit rejects duplicate specialists, position caps, and reserve violations", () => {
@@ -124,7 +157,7 @@ test("audit rejects a complete roster that cannot fill every ESPN starter slot",
 });
 
 test("loopback dashboard can record an audit that terminal reads back", async () => {
-  const candidate = snapshot({ capturedAt: "2026-08-17T20:00:01.000Z" });
+  const candidate = snapshot({ capturedAt: testCapturedAt(1) });
   const recorded = await POST(new Request("http://localhost:3000/api/draft-day", {
     method: "POST",
     headers: { "content-type": "application/json", origin: "http://localhost:3000" },
@@ -143,7 +176,7 @@ test("loopback dashboard can record an audit that terminal reads back", async ()
 test("newest command center owns audit publishing for an ESPN room", async () => {
   const league = { ...snapshot().league, id: "audit-publisher-ownership" };
   const older = snapshot({
-    capturedAt: "2026-08-17T20:00:10.000Z",
+    capturedAt: testCapturedAt(10),
     league,
     binding: {
       tabId: 4321,
@@ -152,7 +185,7 @@ test("newest command center owns audit publishing for an ESPN room", async () =>
     },
   });
   const newer = snapshot({
-    capturedAt: "2026-08-17T20:01:10.000Z",
+    capturedAt: testCapturedAt(70),
     league,
     binding: {
       tabId: 4321,
@@ -169,18 +202,18 @@ test("newest command center owns audit publishing for an ESPN room", async () =>
   assert.equal((await post(older)).status, 200);
   assert.equal((await post(newer)).status, 200);
 
-  const staleLegacy = { ...snapshot({ capturedAt: "2026-08-17T20:02:00.000Z", league }), binding: { tabId: 4321 } };
+  const staleLegacy = { ...snapshot({ capturedAt: testCapturedAt(120), league }), binding: { tabId: 4321 } };
   const staleLegacyResponse = await post(staleLegacy);
   assert.equal(staleLegacyResponse.status, 409);
   assert.equal((await staleLegacyResponse.json()).code, "DRAFT_AUDIT_STALE_PUBLISHER");
 
-  const staleOlderResponse = await post({ ...older, capturedAt: "2026-08-17T20:03:00.000Z" });
+  const staleOlderResponse = await post({ ...older, capturedAt: testCapturedAt(180) });
   assert.equal(staleOlderResponse.status, 409);
   assert.equal((await staleOlderResponse.json()).code, "DRAFT_AUDIT_STALE_PUBLISHER");
 
   const currentUpdate = {
     ...newer,
-    capturedAt: "2026-08-17T20:04:00.000Z",
+    capturedAt: testCapturedAt(240),
     safety: { ...newer.safety, actionState: "Current command center still owns this room." },
   };
   assert.equal((await post(currentUpdate)).status, 200);

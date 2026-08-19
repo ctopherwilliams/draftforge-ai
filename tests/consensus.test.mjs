@@ -49,6 +49,25 @@ test("source payload metadata cannot alter the fixed five-source weights", () =>
   assert.deepEqual(tampered, canonical);
 });
 
+test("duplicate ESPN rows cannot inflate a real player's consensus rank", () => {
+  const duplicated = [
+    { id: 101, name: "Joe Burrow", team: "CIN", pos: "QB", rank: 1, adp: 1, auction: 20, projected: 300 },
+    { id: 202, name: "Joe Burrow Jr.", team: "CIN", pos: "QB", rank: 1, adp: 1, auction: 20, projected: 300 },
+    { id: 303, name: "Josh Allen", team: "BUF", pos: "QB", rank: 2, adp: 2, auction: 18, projected: 295 },
+    { id: 404, name: "Joe Burrow", team: "CIN", pos: "WR", rank: 3, adp: 3, auction: 1, projected: 100 },
+  ];
+
+  const merged = mergeConsensus(duplicated, []);
+  const burrowQuarterbacks = merged.filter((player) => player.name.startsWith("Joe Burrow") && player.pos === "QB");
+  const allen = merged.find((player) => player.id === 303);
+  const separatePosition = merged.find((player) => player.id === 404);
+
+  assert.deepEqual(burrowQuarterbacks.map((player) => player.consensusRank), [1, 1]);
+  assert.equal(allen.consensusRank, 2);
+  assert.equal(separatePosition.consensusRank, 3);
+  assert.deepEqual(merged, mergeConsensus(duplicated, []));
+});
+
 test("every healthy ranking source produces a deterministic league-normalized auction value", () => {
   const league = { size: 8, rosterSize: 16, auctionBudget: 200 };
   const merged = mergeConsensus(espn, sources, league);

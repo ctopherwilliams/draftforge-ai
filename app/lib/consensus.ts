@@ -176,6 +176,10 @@ function sourceSignalKey(position: string, name: string) {
   return `${position}:${name}`;
 }
 
+function consensusIdentityKey(player: Pick<DraftPlayer, "name" | "pos">) {
+  return sourceSignalKey(player.pos, normalizePlayerName(player.name));
+}
+
 function buildSourcePlayerIndex(source: IntelligenceSource): SourcePlayerIndex {
   const exact = new Map<string, IntelligencePlayer>();
   const candidates = source.players.map((player) => ({ player, key: normalizePlayerName(player.name) }));
@@ -293,7 +297,21 @@ export function mergeConsensus(
     };
   });
 
-  const order = [...enriched].sort((a, b) => b.consensusScore - a.consensusScore);
-  const ranks = new Map(order.map((player, index) => [player.id, index + 1]));
-  return enriched.map((player) => ({ ...player, consensusRank: ranks.get(player.id) || 999 }));
+  // ESPN can repeat the same real player in its raw draft payload. Ranking every
+  // row makes the exact live record look artificially worse and causes the last
+  // duplicate to overwrite earlier ranks. Keep strategy scores untouched, but
+  // rank one stable football identity per normalized name and position.
+  const uniqueScores = new Map<string, number>();
+  for (const player of enriched) {
+    const key = consensusIdentityKey(player);
+    uniqueScores.set(key, Math.max(uniqueScores.get(key) ?? -Infinity, player.consensusScore));
+  }
+  const order = [...uniqueScores.entries()].sort(([leftKey, leftScore], [rightKey, rightScore]) => (
+    rightScore - leftScore || leftKey.localeCompare(rightKey)
+  ));
+  const ranks = new Map(order.map(([key], index) => [key, index + 1]));
+  return enriched.map((player) => ({
+    ...player,
+    consensusRank: ranks.get(consensusIdentityKey(player)) || 999,
+  }));
 }

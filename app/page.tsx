@@ -24,12 +24,17 @@ import {
   type IntelligenceSource,
 } from "./lib/consensus";
 import { contextCanRebindDraftTab, contextMatchesActiveDraftTab } from "./lib/espn-context";
-import { stabilizeEspnContext, type EspnContext } from "./lib/espn-context-state";
+import { resolveEspnNominatedPlayer, resolveLiveBoardDisplayRank, stabilizeEspnContext, type EspnContext } from "./lib/espn-context-state";
 import { canArmAutoDraft } from "./lib/auto-draft-safety";
 import { liveEspnRecommendations, reconcileEspnPicks, resolveAuctionSales, resolveOwnRoster } from "./lib/espn-reconciliation";
 import { draftUiReducer, INITIAL_DRAFT_UI_STATE } from "./lib/draft-ui-state";
-import { buildDraftPresentation } from "./lib/draft-presentation";
-import type { DraftAuditRosterEntry, DraftAuditSnapshot } from "./lib/draft-audit";
+import { buildDraftPresentation, resolveActionSurfaceStatus, resolveLiveOperatorStatus } from "./lib/draft-presentation";
+import {
+  draftAuditChecklistBindingKey,
+  resolveDraftAuditChecklistReady,
+  type DraftAuditRosterEntry,
+  type DraftAuditSnapshot,
+} from "./lib/draft-audit";
 import { compactDraftProfiles, persistDraftProfiles, upsertDraftProfile, type DraftProfile } from "./lib/profiles";
 
 const DEMO_PLAYERS: DraftPlayer[] = [
@@ -202,6 +207,7 @@ export default function Home() {
   } | null>(null);
   const draftAuditDigestRef = useRef("");
   const draftAuditPendingRef = useRef("");
+  const lastValidatedLiveChecklistBindingRef = useRef("");
   const authoritativeRosterContext = useMemo(() => ({
     inDraftRoom: context.inDraftRoom,
     ownRoster: context.ownRoster,
@@ -714,7 +720,7 @@ export default function Home() {
     [liveRecommendations, league, auctionPlan],
   );
   const selected = liveRecommendations.find((player) => player.id === selectedId) || liveRecommendations[0];
-  const nominated = context.nominatedPlayer ? recommendations.find((player) => normalizeName(context.nominatedPlayer) === normalizeName(player.name)) : undefined;
+  const nominated = context.nominatedPlayer ? resolveEspnNominatedPlayer(recommendations, context) : undefined;
   const ownNominationIntent = nominated
     && pendingAuctionNomination
     && normalizeName(pendingAuctionNomination.playerName) === normalizeName(nominated.name)
@@ -722,7 +728,7 @@ export default function Home() {
       : null;
   const focusPlayer = league.draftType === "AUCTION" && nominated
     ? nominated
-    : league.draftType === "AUCTION" && context.onClock && auctionNomination
+    : league.draftType === "AUCTION" && auctionNomination
       ? auctionNomination.player
       : selected;
   const nextBid = focusPlayer ? Math.max(1, Number(context.currentBid || 0) + 1) : 1;
@@ -764,7 +770,6 @@ export default function Home() {
     { label: "No-click dry run resolves the top legal recommendation", ok: context.inDraftRoom === true && Boolean(context.availablePlayerIds?.length) && Boolean(liveRecommendations[0]) },
   ];
   const liveChecklistReady = settingsConfirmed && preflightReady && liveChecks.every((check) => check.ok);
-
   useEffect(() => {
     if (!autoArmVerification) return;
     const requestIsCurrent = autoArmVerification.requestId === pendingAutoArmRequestRef.current;
@@ -1007,6 +1012,20 @@ export default function Home() {
   useEffect(() => {
     const exactTabId = activeEspnTabRef.current;
     if (league.id === "demo" || !Number.isInteger(exactTabId) || Number(exactTabId) <= 0) return;
+    const currentLiveChecklistBindingKey = draftAuditChecklistBindingKey(
+      league.id,
+      Number(league.teamId),
+      Number(exactTabId),
+    );
+    if (liveChecklistReady && currentLiveChecklistBindingKey) {
+      lastValidatedLiveChecklistBindingRef.current = currentLiveChecklistBindingKey;
+    }
+    const auditLiveChecklistReady = resolveDraftAuditChecklistReady({
+      currentReady: liveChecklistReady,
+      rosterComplete: myPickCount >= league.rosterSize,
+      currentBindingKey: currentLiveChecklistBindingKey,
+      lastValidatedBindingKey: lastValidatedLiveChecklistBindingRef.current,
+    });
     const toAuditEntry = (playerId: number, amount: number): DraftAuditRosterEntry | null => {
       const player = playerPool.playerById.get(playerId);
       return player ? {
@@ -1027,7 +1046,7 @@ export default function Home() {
       team: league.teamId,
       tab: exactTabId,
       settingsConfirmed,
-      liveChecklistReady,
+      liveChecklistReady: auditLiveChecklistReady,
       extension,
       inDraftRoom: context.inDraftRoom === true,
       soundMuted: context.soundMuted === true,
@@ -1061,7 +1080,7 @@ export default function Home() {
       },
       safety: {
         settingsConfirmed,
-        liveChecklistReady,
+        liveChecklistReady: auditLiveChecklistReady,
         extensionConnected: extension === "connected",
         inDraftRoom: context.inDraftRoom === true,
         soundMuted: context.soundMuted === true,
@@ -1099,18 +1118,33 @@ export default function Home() {
       }
       if (draftAuditPendingRef.current === digest) draftAuditPendingRef.current = "";
     })();
-  }, [actionState, autoDraft, authoritativePicks.length, context, espnPlayers, extension, healthySources.length, league, liveChecklistReady, myPicks, playerPool.playerById, settingsConfirmed]);
+  }, [actionState, autoDraft, authoritativePicks.length, context, espnPlayers, extension, healthySources.length, league, liveChecklistReady, myPickCount, myPicks, playerPool.playerById, settingsConfirmed]);
 
   const { commandLabel, safetyLabel } = presentation;
   const displayCommandLabel = presentation.stateTone === "blocked" && context.autopickActive !== true && focusPlayer
     ? `${league.draftType === "SNAKE" ? "PREPARE" : "TRACK"} ${focusPlayer.name}`
     : commandLabel;
+  const displayLiveBoardRank = resolveLiveBoardDisplayRank(focusPlayer, liveRecommendations);
+  const actionSurfaceStatus = resolveActionSurfaceStatus({
+    actionWindowOpen,
+    onClock: context.onClock === true,
+    inDraftRoom: context.inDraftRoom === true,
+    remainingSeconds,
+    minimumActionWindow,
+  });
+  const displayActionState = resolveLiveOperatorStatus({
+    actionState,
+    draftType: league.draftType,
+    commandLabel: displayCommandLabel,
+    nominatedPlayerName: nominated?.name,
+    currentBid: context.currentBid,
+  });
   const alternatives = liveRecommendations.filter((player) => player.id !== focusPlayer?.id).slice(0, 3);
 
   return <main className="app-shell">
     <header className="topbar">
       <div className="brand"><span className="brand-mark">DF</span><span>DraftForge <b>AI</b></span></div>
-      <div className={`draft-status ${actionWindowOpen ? "on-clock" : ""}`}><span className="live-dot" />{actionWindowOpen ? "YOU'RE ON THE CLOCK" : context.onClock ? "CLOCK TOO SHORT" : extension === "connected" ? "ESPN LIVE" : "DRAFT CONTROL ROOM"}<strong>{league.draftType === "SNAKE" ? `Round ${currentRound} · Pick ${currentPick}${Number.isFinite(remainingSeconds) ? ` · ${remainingSeconds}s` : ""}` : `$${league.auctionBudget - spent} remaining`}</strong></div>
+      <div className={`draft-status ${actionWindowOpen ? "on-clock" : ""}`}><span className="live-dot" />{extension === "connected" ? actionSurfaceStatus.header : "DRAFT CONTROL ROOM"}<strong>{league.draftType === "SNAKE" ? `Round ${currentRound} · Pick ${currentPick}${Number.isFinite(remainingSeconds) ? ` · ${remainingSeconds}s` : ""}` : `$${league.auctionBudget - spent} remaining`}</strong></div>
       <div className="header-actions">
         <button className={`auto-toggle ${autoDraft ? "enabled" : ""}`} onClick={enableAutoDraft} disabled={autoDraft ? false : !liveChecklistReady} aria-label={`Auto-Draft ${autoDraft ? "ON" : "OFF"}`}><i /><span className="desktop-label">Auto-Draft {autoDraft ? "ON" : "OFF"}</span><span className="mobile-label">Auto {autoDraft ? "ON" : "OFF"}</span></button>
         <button className="settings-button" onClick={() => dispatchUi({ type: "set", key: "settingsOpen", value: true })}><span className="desktop-label">League rules</span><span className="mobile-label">Rules</span></button>
@@ -1124,7 +1158,7 @@ export default function Home() {
         <button className="ops-control" onClick={() => dispatchUi({ type: "toggle", key: "strategyOpen" })} aria-expanded={strategyOpen}><span>Strategy</span><b>{strategyInfo.label}</b><small>{strategyInfo.description}</small></button>
         <button className={`ops-control intelligence-control ${sourceCoverageReady ? "healthy" : "blocked"}`} onClick={() => dispatchUi({ type: "toggle", key: "sourcesOpen" })} aria-expanded={sourcesOpen}><span>Decision data</span><b>{intelligenceLoading ? "Refreshing…" : `${1 + healthySources.length}/5 sources live`}</b><small>Deterministic weighted consensus</small></button>
       </div>
-      <div className={`ops-status ${actionState.includes("stopped") || presentation.stateTone === "blocked" ? "blocked" : ""}`} role="status" aria-live="polite"><span>{extension === "connected" ? "LIVE STATUS" : "CONNECTION"}</span><b>{actionState}</b><small><i aria-hidden="true">●</i>{extension === "connected" ? `Exact ESPN league ${league.id}` : extension === "missing" ? "Companion not detected" : extension === "connecting" ? "Connecting to ESPN…" : "ESPN companion ready"}</small></div>
+      <div className={`ops-status ${displayActionState.includes("stopped") || presentation.stateTone === "blocked" ? "blocked" : ""}`} role="status" aria-live="polite"><span>{extension === "connected" ? "LIVE STATUS" : "CONNECTION"}</span><b>{displayActionState}</b><small><i aria-hidden="true">●</i>{extension === "connected" ? `Exact ESPN league ${league.id}` : extension === "missing" ? "Companion not detected" : extension === "connecting" ? "Connecting to ESPN…" : "ESPN companion ready"}</small></div>
       {strategyOpen && <div className="strategy-menu">{STRATEGIES.map((item) => <button key={item.id} className={strategy === item.id ? "active" : ""} onClick={() => { setStrategy(item.id); dispatchUi({ type: "set", key: "strategyOpen", value: false }); }}><b>{item.label}</b><small>{item.description}</small></button>)}</div>}
       {sourcesOpen && <div className="sources-menu"><div><b>Decision intelligence</b><button onClick={() => dispatchUi({ type: "set", key: "sourcesOpen", value: false })} aria-label="Close source details">×</button></div><p>ESPN anchors league projections and salary values at 30%. Every healthy ranking feed is converted into a league-normalized theoretical dollar curve; MFL AAV and ESPN dollars remain live market anchors.</p><ul><li><span className="source-ok">●</span><b>ESPN Fantasy</b><small>30% · projection, ADP, salary value</small></li>{sources.map((source) => { const fresh = isIntelligenceSourceFresh(source); return <li key={source.id}><span className={fresh ? "source-ok" : "source-error"}>●</span><b>{source.name}</b><small>{Math.round(source.weight * 100)}% · {source.kind}{source.sampleSize ? ` · ${source.sampleSize.toLocaleString()} drafts` : ""}{source.updatedAt ? ` · ${new Date(source.updatedAt).toLocaleString()}` : ""} · <a href={source.url} target="_blank" rel="noreferrer">source</a></small></li>; })}</ul><small>Failed or stale sources are removed, weights renormalize, and no generated projection replaces missing data.</small></div>}
     </section>
@@ -1171,7 +1205,7 @@ export default function Home() {
           {nominated && <p className="auction-live">LIVE NOMINATION · {context.currentBid ? `$${context.currentBid}` : "Opening bid"}{ownNominationIntent ? ` · ${ownNominationIntent}` : ""}</p>}
           {!nominated && league.draftType === "AUCTION" && auctionNomination && <p className="auction-live">{auctionNomination.intent} NOMINATION · OPEN ${auctionNomination.openingBid}</p>}
           <div className="decision-hero">
-            <div className="rec-player"><div className={`avatar ${focusPlayer.pos.toLowerCase()}`}>{focusPlayer.name.split(" ").map((part) => part[0]).join("").slice(0, 2)}</div><div><h2>{focusPlayer.name}</h2><p>{focusPlayer.pos} · {focusPlayer.team} <span>Consensus #{focusPlayer.consensusRank || "—"}</span>{focusPlayer.sleeperLabel !== "NONE" && <span className="sleeper-chip">{focusPlayer.sleeperLabel.replace("_", " ")} {focusPlayer.sleeperScore}/100</span>}</p></div></div>
+            <div className="rec-player"><div className={`avatar ${focusPlayer.pos.toLowerCase()}`}>{focusPlayer.name.split(" ").map((part) => part[0]).join("").slice(0, 2)}</div><div><h2>{focusPlayer.name}</h2><p>{focusPlayer.pos} · {focusPlayer.team} <span>Live board #{displayLiveBoardRank || "—"}</span>{focusPlayer.sleeperLabel !== "NONE" && <span className="sleeper-chip">{focusPlayer.sleeperLabel.replace("_", " ")} {focusPlayer.sleeperScore}/100</span>}</p></div></div>
             <div className="command-number"><span>{league.draftType === "AUCTION" ? nominated ? "NEXT LEGAL BID" : "OPENING BID" : "ESPN CLOCK"}</span><strong>{league.draftType === "AUCTION" ? `$${nominated ? nextBid : auctionNomination?.openingBid || 1}` : Number.isFinite(remainingSeconds) ? `${remainingSeconds}s` : "—"}</strong><small>{league.draftType === "AUCTION" ? `Walk at $${focusPlayer.maxBid}` : `Round ${currentRound} · Pick ${currentPick}`}</small></div>
           </div>
           <div className={`decision-safety ${presentation.stateTone === "blocked" ? "blocked" : ""}`} role="status" aria-live="polite"><span aria-hidden="true">{presentation.stateTone === "blocked" ? "!" : "✓"}</span><b>{safetyLabel}</b></div>
@@ -1192,7 +1226,7 @@ export default function Home() {
           {!settingsConfirmed && <small className="locked-note">Confirm imported league rules to unlock ESPN actions.</small>}
           <details className="decision-details"><summary>Decision intelligence <span>{focusPlayer.confidence}% confidence</span></summary><div className="confidence"><div><span>Source agreement · {focusPlayer.sourceCount || 1}/5 sources</span><b>{focusPlayer.confidence}%</b></div><div className="confidence-track"><i style={{ width: `${focusPlayer.confidence}%` }} /></div></div><p className="reason">{describeRecommendation(focusPlayer, league, strategy)}</p>{league.draftType === "AUCTION" && focusPlayer.sourceAuctions && <div className="source-values">{Object.entries(focusPlayer.sourceAuctions).map(([source, amount]) => <span key={source}>{source.toUpperCase()} <b>${Math.round(amount)}</b></span>)}</div>}<ul className="reason-list">{focusPlayer.reasons.slice(0, 4).map((reason) => <li key={reason}>{reason}</li>)}</ul></details>
         </section>}
-        <section className="on-clock-card panel"><span className={actionWindowOpen ? "pulse" : ""} aria-hidden="true">●</span><div><b>{actionWindowOpen ? `Verified ESPN action window · ${remainingSeconds}s` : context.onClock ? "ESPN clock too short — nothing will be sent" : context.inDraftRoom ? "Exact ESPN draft room connected" : "Open the exact ESPN draft room"}</b><small>{autoDraft ? "Auto-Draft is armed only for this verified league and tab." : "Guided mode: you approve every pick, nomination, and bid."}</small></div></section>
+        <section className="on-clock-card panel"><span className={actionWindowOpen ? "pulse" : ""} aria-hidden="true">●</span><div><b>{actionSurfaceStatus.detail}</b><small>{autoDraft ? "Auto-Draft is armed only for this verified league and tab." : "Guided mode: you approve every pick, nomination, and bid."}</small></div></section>
       </aside>
 
       <aside className="roster-panel panel">

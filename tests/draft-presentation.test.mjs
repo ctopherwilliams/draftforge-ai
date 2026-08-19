@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildDraftPresentation } from "../app/lib/draft-presentation.ts";
+import { buildDraftPresentation, resolveActionSurfaceStatus, resolveLiveOperatorStatus } from "../app/lib/draft-presentation.ts";
 
 const base = {
   draftType: "SNAKE",
@@ -43,4 +43,39 @@ test("presentation reports the fail-closed reason before general waiting state",
   assert.equal(buildDraftPresentation({ ...base, settingsConfirmed: false }).stateTone, "blocked");
   assert.equal(buildDraftPresentation({ ...base, actionWindowOpen: true, sourceCoverageReady: false }).stateLabel, "LOCKED");
   assert.equal(buildDraftPresentation({ ...base, actionWindowOpen: true, autopickActive: true }).stateTone, "blocked");
+});
+
+test("live auction status follows the current command instead of a stale submit message", () => {
+  assert.equal(resolveLiveOperatorStatus({
+    actionState: "Auto-Draft is submitting Kyren Williams in ESPN…",
+    draftType: "AUCTION",
+    commandLabel: "PASS — CEILING $5",
+    nominatedPlayerName: "Kyren Williams",
+    currentBid: 8,
+  }), "PASS — CEILING $5 · Kyren Williams at $8");
+  assert.equal(resolveLiveOperatorStatus({
+    actionState: "ESPN confirmed the previous player.",
+    draftType: "SNAKE",
+    commandLabel: "DRAFT Ja'Marr Chase",
+  }), "ESPN confirmed the previous player.");
+});
+
+test("a live surface recheck is not mislabeled as a short clock", () => {
+  assert.deepEqual(resolveActionSurfaceStatus({
+    actionWindowOpen: false,
+    onClock: true,
+    inDraftRoom: true,
+    remainingSeconds: 29,
+    minimumActionWindow: 10,
+  }), {
+    header: "REVALIDATING CLOCK",
+    detail: "Revalidating ESPN action surface — nothing sent yet",
+  });
+  assert.equal(resolveActionSurfaceStatus({
+    actionWindowOpen: false,
+    onClock: true,
+    inDraftRoom: true,
+    remainingSeconds: 7,
+    minimumActionWindow: 10,
+  }).header, "CLOCK TOO SHORT");
 });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { stabilizeEspnContext } from "../app/lib/espn-context-state.ts";
+import { resolveEspnNominatedPlayer, resolveLiveBoardDisplayRank, stabilizeEspnContext } from "../app/lib/espn-context-state.ts";
 
 const base = {
   leagueId: "701",
@@ -34,4 +34,35 @@ test("a real budget change advances decision-array identity", () => {
     auctionBudgets: [{ teamName: "Us", remaining: 187, maxOffer: 173 }],
   });
   assert.notEqual(result.auctionBudgets, base.auctionBudgets);
+});
+
+test("live auction nominees resolve by exact ESPN player id before duplicate names", () => {
+  const duplicateNamePlayers = [
+    { id: 101, name: "Baker Mayfield", consensusRank: 412, maxBid: 8 },
+    { id: 202, name: "Baker Mayfield", consensusRank: 37, maxBid: 5 },
+  ];
+  assert.equal(
+    resolveEspnNominatedPlayer(duplicateNamePlayers, {
+      nominatedPlayer: "Baker Mayfield",
+      nominatedPlayerId: 202,
+    }),
+    duplicateNamePlayers[1],
+  );
+});
+
+test("live auction nominee name fallback is used only without a usable ESPN id", () => {
+  const players = [{ id: 202, name: "A.J. Brown" }];
+  assert.equal(resolveEspnNominatedPlayer(players, { nominatedPlayer: "AJ Brown" }), players[0]);
+  assert.equal(resolveEspnNominatedPlayer(players, { nominatedPlayer: "AJ Brown", nominatedPlayerId: 999 }), undefined);
+});
+
+test("exact live nominee keeps its action object but displays its canonical live-board position", () => {
+  const exactNominee = { id: 202, name: "Kyler Murray", pos: "QB", consensusRank: 337, maxBid: 9 };
+  const canonicalIdentity = { id: 101, name: "Kyler Murray", pos: "QB", consensusRank: 35, maxBid: 4 };
+  const sameNameOtherPosition = { id: 303, name: "Kyler Murray", pos: "WR", consensusRank: 2, maxBid: 30 };
+  const players = [canonicalIdentity, exactNominee, sameNameOtherPosition];
+  const resolved = resolveEspnNominatedPlayer(players, { nominatedPlayer: "Kyler Murray", nominatedPlayerId: 202 });
+  assert.equal(resolved, exactNominee);
+  assert.equal(resolved.maxBid, 9);
+  assert.equal(resolveLiveBoardDisplayRank(resolved, players), 1);
 });

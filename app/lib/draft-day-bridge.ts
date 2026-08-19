@@ -12,10 +12,9 @@ import {
 import {
   isCompleteFreshIntelligenceSnapshot,
   mergeConsensus,
-  normalizePlayerName,
   type IntelligenceSource,
 } from "./consensus.ts";
-import type { EspnContext } from "./espn-context-state.ts";
+import { resolveEspnNominatedPlayer, type EspnContext } from "./espn-context-state.ts";
 
 export type DraftDayBridgeInput = {
   league: LeagueSettings;
@@ -78,16 +77,6 @@ export function prepareDraftDayBridge(
 ): DraftDayPreparedState {
   const players = mergeConsensus(espnPlayers, sources, league, { evaluatedAt });
   return { players, playerPool: buildPlayerPoolIndex(players, league) };
-}
-
-function roomPlayerMatches(player: Recommendation, room: EspnContext) {
-  const nominatedPlayerId = Number(room.nominatedPlayerId);
-  if (Number.isInteger(nominatedPlayerId) && nominatedPlayerId > 0) {
-    return nominatedPlayerId === player.id;
-  }
-  const nominee = normalizePlayerName(String(room.nominatedPlayer || ""));
-  const playerName = normalizePlayerName(player.name);
-  return Boolean(nominee && playerName && nominee === playerName);
 }
 
 function duplicatePickIds(picks: DraftPick[]) {
@@ -195,7 +184,7 @@ export function buildDraftDayBridgeResult(input: DraftDayBridgeInput): DraftDayB
   }
 
   if (room.nominatedPlayer && Number(room.currentBid) > 0) {
-    const nominated = recommendations.find((player) => roomPlayerMatches(player, room));
+    const nominated = resolveEspnNominatedPlayer(recommendations, room);
     if (!nominated) return { ok: true, code: "PASS_UNRANKED_NOMINEE", blockers: [], action: null, actionReason: "The nominee is unavailable, already rostered, or outside the legal player pool.", ...base };
     if (room.leadingBid) return { ok: true, code: "HOLD_LEADING_BID", blockers: [], action: null, actionReason: "Already leading; never raise our own offer.", ...base };
     if (!actionWindowReady(room)) return { ok: false, code: "CLOCK_TOO_SHORT", blockers: ["CLOCK_TOO_SHORT"], action: null, actionReason: "The safe action window has closed.", ...base };

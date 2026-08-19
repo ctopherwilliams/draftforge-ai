@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createRateLimitedSourceFetcher, fetchSourcePayloadsSequentially } from "../app/lib/intelligence-sources.ts";
+import {
+  createRateLimitedSourceFetcher,
+  fetchSourcePayloadsSequentially,
+  fetchTradyrRedraftPages,
+} from "../app/lib/intelligence-sources.ts";
 import {
   intelligenceSnapshotCacheKey,
   isCompleteFreshIntelligenceSnapshot,
@@ -106,4 +110,24 @@ test("the shared source queue serializes concurrent profiles and retries one HTT
   assert.equal(maximumActive, 1);
   assert.deepEqual(attempts, ["first", "first", "second"]);
   assert.deepEqual(results, ["first", "second"]);
+});
+
+test("Tradyr redraft pagination expands the same source deterministically and stays bounded", async () => {
+  const urls = [];
+  const pages = new Map([
+    [0, Array.from({ length: 50 }, (_, index) => ({ slug: `player-${index}`, name: `Player ${index}`, position: "WR", rank: index + 1 }))],
+    [50, Array.from({ length: 50 }, (_, index) => ({ slug: `player-${index + 50}`, name: `Player ${index + 50}`, position: "RB", rank: index + 51 }))],
+    [100, Array.from({ length: 20 }, (_, index) => ({ slug: `player-${index + 100}`, name: `Player ${index + 100}`, position: "TE", rank: index + 101 }))],
+  ]);
+  const result = await fetchTradyrRedraftPages(async (url) => {
+    urls.push(url);
+    const offset = Number(new URL(url).searchParams.get("offset"));
+    return { data: pages.get(offset) || [], meta: { total: 120, generatedAt: "2026-08-19T00:00:00.000Z" } };
+  });
+
+  assert.equal(result.players.length, 120);
+  assert.equal(result.expectedTotal, 120);
+  assert.equal(result.generatedAt, "2026-08-19T00:00:00.000Z");
+  assert.deepEqual(urls.map((url) => Number(new URL(url).searchParams.get("offset"))), [0, 50, 100]);
+  assert.ok(urls.every((url) => new URL(url).searchParams.get("numQbs") === "1"));
 });

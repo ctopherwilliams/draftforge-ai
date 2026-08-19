@@ -31,19 +31,20 @@ Keep Codex open in the desktop app and exactly two controlled Chrome tabs: `http
 
 ## Certification ledger
 
-Last updated: 2026-08-18.
+Last updated: 2026-08-18 21:30 CT.
 
 | Gate | State |
 | --- | --- |
-| Local release gate | 144/144 tests, lint, typecheck, production build, UI, extension safety, replay, and latency passing |
+| Local release gate | 152/152 tests, lint, typecheck, production build, UI, extension safety, replay, and latency passing |
 | Deterministic drafts | 20/20 snake and 20/20 salary-cap complete and legal |
 | Live-snapshot Monte Carlo | 10,000 snake + 10,000 salary-cap; zero hard violations and zero simulation errors |
 | Overnight battle qualification | Four 5-draft batches per format: 20/20 snake + 20/20 salary cap, exact holdout replay, zero hard violations |
-| Post-sleeper authenticated snake | 19/20 countable |
-| Post-sleeper authenticated salary cap | 15/20 countable |
-| Remaining certification | 1 snake and 5 salary-cap rooms |
+| Historical post-sleeper authenticated ledger | 19/20 snake and 15/20 salary-cap; retained as historical evidence |
+| Current clean-room authenticated campaign | 2/20 snake and 15/20 salary-cap, every room final-audited |
+| Cold-start and recovery | Pre-room cold start passed; full dashboard-reload fail-closed recovery passed in room `1214429767` |
+| Remaining clean-room certification | 18 snake and 5 salary-cap rooms; not required to repeat the already-passed release or recovery gates |
 
-Do not advance an authenticated count without a complete final-ready loopback audit. Room `1957835193` is excluded: every live check passed, but Chrome control disconnected at arming and the audit recorded `autoDraft: false` with no DraftForge bids.
+Do not advance an authenticated count without a complete final-ready loopback audit. Current evidence is machine-readable in `simulation/evidence/authenticated-certification-20260818.json`; older excluded rooms remain historical and must not be retroactively counted.
 
 ## T-24-hour preparation
 
@@ -166,9 +167,9 @@ Record the room ID, format, roster, prices/budget when applicable, audit result,
 
 ## Known launch risks
 
-- The remaining authenticated certification is blocked by intermittent Chrome-control disconnection at the final arming action. Engine, UI, extension, and loopback audits fail closed, but draft-day readiness requires clean authenticated completion across the remaining 5+1 rooms.
-- Player-level live-source corroboration is uneven even when all five feeds are healthy. The latest immutable snapshot had 37.5% coverage from at least four sources and 23.21% full five-source player coverage. Treat confidence and sleeper labels accordingly.
-- The latest immutable snapshot produced no measurable sleeper acquisitions. Do not claim sleeper performance has been authenticated until a fresh corroborated snapshot and countable rooms exercise it.
+- Chrome-control recovery is no longer an untested blocker: a clean two-tab cold start and a deliberate in-room dashboard reload both passed, including Auto-Draft resetting off, exact-room re-import, full revalidation, safe re-arming, 16/16 parity, and automatic shutdown. ESPN/Chrome drift can still recur, so every real draft must run both READY gates.
+- The expanded 2026-08-19 snapshot improved player-level coverage to 60.12% at four or more sources and 47.62% at all five, but GNG remains the shortest model board at 150 rows and not every late player can be corroborated. Treat confidence and sleeper labels accordingly.
+- The expanded snapshot produced zero production-qualified sleeper signals: five players had positive model evidence, one cleared the eight-point edge, and none reached the unchanged 50-point threshold. Do not claim sleeper performance has been authenticated until a fresh snapshot produces qualifying candidates and countable rooms exercise them.
 - ESPN practice rooms may disappear after completion; the loopback audit must be captured before the tab is closed or ESPN deletes the state.
 
 ## Maintenance rule

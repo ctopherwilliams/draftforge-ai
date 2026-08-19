@@ -54,6 +54,25 @@ export type DraftAuditEvaluation = {
   finalViolations: string[];
 };
 
+export function draftAuditChecklistBindingKey(leagueId: string, teamId: number, tabId: number) {
+  const normalizedLeagueId = String(leagueId || "").trim();
+  if (!normalizedLeagueId || !Number.isInteger(teamId) || teamId <= 0 || !Number.isInteger(tabId) || tabId <= 0) return "";
+  return `${normalizedLeagueId}:${teamId}:${tabId}`;
+}
+
+export function resolveDraftAuditChecklistReady(input: {
+  currentReady: boolean;
+  rosterComplete: boolean;
+  currentBindingKey: string;
+  lastValidatedBindingKey: string;
+}) {
+  return input.currentReady || (
+    input.rosterComplete
+    && Boolean(input.currentBindingKey)
+    && input.currentBindingKey === input.lastValidatedBindingKey
+  );
+}
+
 const POSITIONS = new Set(["QB", "RB", "WR", "TE", "K", "DST"]);
 const POSITION_LIMIT_KEYS: Record<string, string[]> = {
   QB: ["QB", "1"],

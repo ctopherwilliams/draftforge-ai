@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { isIntelligenceSourceFresh, mergeConsensus } from "../app/lib/consensus.ts";
+import { recommendPlayers } from "../app/lib/draft-engine.ts";
 
 export const SOURCE_SNAPSHOT_SCHEMA_VERSION = 1;
 export const PUBLIC_SOURCE_IDS = ["ffc", "mfl", "tradyr", "gng"];
@@ -119,19 +120,44 @@ export function validateSourceSnapshot(snapshot) {
     const top = [...consensus].sort((left, right) => Number(left.consensusRank) - Number(right.consensusRank)).slice(0, rosterable);
     const coverage = top.length ? top.filter((player) => player.sourceCount >= 4).length / top.length : 0;
     const fullCoverage = top.length ? top.filter((player) => player.sourceCount === 5).length / top.length : 0;
+    const completeMarketModelCoverageCount = consensus.filter((player) => (
+      player.modelSourceCount === 2 && player.marketSourceCount === 3
+    )).length;
+    const recommendations = recommendPlayers(consensus, [], league, "BALANCED");
+    const sleeperSignals = recommendations.filter((player) => player.sleeperLabel !== "NONE");
+    const positiveSleeperEvidence = recommendations.filter((player) => player.sleeperScore > 0);
+    const strongSleeperEdges = positiveSleeperEvidence.filter((player) => player.modelMarketEdge >= 8);
+    const scoredSleeperEvidence = strongSleeperEdges.filter((player) => player.sleeperScore >= 50);
+    const sleeperSignalCounts = Object.fromEntries(["VALUE", "SLEEPER", "DEEP_STASH"].map((label) => [
+      label,
+      sleeperSignals.filter((player) => player.sleeperLabel === label).length,
+    ]));
+    const sourceReach = Object.fromEntries(summaries.map((source) => [source.id, source.players]));
     if (coverage < .5) warnings.push(`Only ${(coverage * 100).toFixed(1)}% of the rosterable board has at least four-source coverage.`);
-    if (!top.some((player) => player.modelSourceCount === 2 && player.marketSourceCount === 3)) {
-      warnings.push("No rosterable player has complete market/model corroboration for sleeper classification.");
+    if (!completeMarketModelCoverageCount) {
+      warnings.push("No player has complete market/model corroboration for sleeper classification.");
     }
+    if (!sleeperSignals.length) warnings.push("No player currently qualifies for a production sleeper signal.");
     return {
       valid: true,
       errors,
       warnings,
       sourceSummaries: summaries,
+      sourceReach,
       espnPlayers: espnPlayers.length,
       rosterablePlayers: rosterable,
       coverageAtLeastFour: coverage,
       fullFiveSourceCoverage: fullCoverage,
+      completeMarketModelCoverageCount,
+      corroboratedSleeperCandidateCount: sleeperSignals.length,
+      sleeperEvidenceFunnel: {
+        completeMarketModelCoverage: completeMarketModelCoverageCount,
+        positiveModelEvidence: positiveSleeperEvidence.length,
+        modelEdgeAtLeastEight: strongSleeperEdges.length,
+        sleeperScoreAtLeastFifty: scoredSleeperEvidence.length,
+        productionSignals: sleeperSignals.length,
+      },
+      sleeperSignalCounts,
       consensusDigest: createHash("sha256").update(stableSnapshotJson(consensus)).digest("hex"),
     };
   }
@@ -140,10 +166,21 @@ export function validateSourceSnapshot(snapshot) {
     errors,
     warnings,
     sourceSummaries: summaries,
+    sourceReach: Object.fromEntries(summaries.map((source) => [source.id, source.players])),
     espnPlayers: espnPlayers.length,
     rosterablePlayers: rosterable,
     coverageAtLeastFour: 0,
     fullFiveSourceCoverage: 0,
+    completeMarketModelCoverageCount: 0,
+    corroboratedSleeperCandidateCount: 0,
+    sleeperEvidenceFunnel: {
+      completeMarketModelCoverage: 0,
+      positiveModelEvidence: 0,
+      modelEdgeAtLeastEight: 0,
+      sleeperScoreAtLeastFifty: 0,
+      productionSignals: 0,
+    },
+    sleeperSignalCounts: { VALUE: 0, SLEEPER: 0, DEEP_STASH: 0 },
     consensusDigest: null,
   };
 }

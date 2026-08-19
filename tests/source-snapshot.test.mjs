@@ -77,6 +77,17 @@ test("five-source snapshots are sanitized, content-addressed, and deterministica
   assert.deepEqual(second, first);
   assert.equal(first.length, 30);
   assert.ok(first.every((player) => player.sourceCount === 5));
+  assert.deepEqual(snapshot.validation.sourceReach, { ffc: 30, mfl: 30, tradyr: 30, gng: 30 });
+  assert.equal(snapshot.validation.completeMarketModelCoverageCount, 30);
+  assert.equal(snapshot.validation.corroboratedSleeperCandidateCount, 0);
+  assert.deepEqual(snapshot.validation.sleeperEvidenceFunnel, {
+    completeMarketModelCoverage: 30,
+    positiveModelEvidence: 0,
+    modelEdgeAtLeastEight: 0,
+    sleeperScoreAtLeastFifty: 0,
+    productionSignals: 0,
+  });
+  assert.deepEqual(snapshot.validation.sleeperSignalCounts, { VALUE: 0, SLEEPER: 0, DEEP_STASH: 0 });
 });
 
 test("snapshot replay fails closed on tampering or stale captured sources", () => {

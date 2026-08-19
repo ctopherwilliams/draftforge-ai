@@ -25,6 +25,12 @@ test("live decision precedes secondary player-board detail", () => {
   assert.match(page, /untouchable reserve/);
   assert.match(page, /PREFLIGHT 1 OF 2/);
   assert.match(page, /displayCommandLabel/);
+  assert.match(page, /Live board #\{displayLiveBoardRank \|\| "—"\}/);
+  assert.match(page, /resolveActionSurfaceStatus/);
+  assert.doesNotMatch(page, /Consensus #\{displayConsensusRank/);
+  assert.doesNotMatch(page, /context\.onClock \? "ESPN clock too short/);
+  assert.match(page, /resolveEspnNominatedPlayer\(recommendations, context\)/);
+  assert.doesNotMatch(page, /league\.draftType === "AUCTION" && context\.onClock && auctionNomination/);
   assert.match(page, /function displayAuctionValue/);
   assert.match(page, /draftAuditPendingRef/);
   assert.match(page, /DRAFT_AUDIT_RECORDED/);

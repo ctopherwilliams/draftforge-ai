@@ -23,6 +23,52 @@ export type DraftPresentation = {
   stateTone: "ready" | "blocked" | "waiting";
 };
 
+export type LiveOperatorStatusInput = {
+  actionState: string;
+  draftType: "SNAKE" | "AUCTION";
+  commandLabel: string;
+  nominatedPlayerName?: string;
+  currentBid?: number;
+};
+
+export type ActionSurfaceStatusInput = {
+  actionWindowOpen: boolean;
+  onClock: boolean;
+  inDraftRoom: boolean;
+  remainingSeconds?: number;
+  minimumActionWindow: number;
+};
+
+export function resolveActionSurfaceStatus(input: ActionSurfaceStatusInput) {
+  if (input.actionWindowOpen) {
+    return {
+      header: "YOU'RE ON THE CLOCK",
+      detail: `Verified ESPN action window · ${input.remainingSeconds}s`,
+    };
+  }
+  if (input.onClock) {
+    if (Number.isFinite(input.remainingSeconds) && Number(input.remainingSeconds) < input.minimumActionWindow) {
+      return {
+        header: "CLOCK TOO SHORT",
+        detail: "ESPN clock below the safe action threshold — nothing will be sent",
+      };
+    }
+    return {
+      header: "REVALIDATING CLOCK",
+      detail: "Revalidating ESPN action surface — nothing sent yet",
+    };
+  }
+  return input.inDraftRoom
+    ? { header: "ESPN LIVE", detail: "Exact ESPN draft room connected" }
+    : { header: "DRAFT CONTROL ROOM", detail: "Open the exact ESPN draft room" };
+}
+
+export function resolveLiveOperatorStatus(input: LiveOperatorStatusInput) {
+  if (input.draftType !== "AUCTION" || !input.nominatedPlayerName) return input.actionState;
+  const offer = Number(input.currentBid);
+  return `${input.commandLabel} · ${input.nominatedPlayerName}${offer > 0 ? ` at $${offer}` : ""}`;
+}
+
 export function buildDraftPresentation(input: DraftPresentationInput): DraftPresentation {
   const recommendationLocked = !input.settingsConfirmed || !input.extensionConnected;
   const commandLabel = input.autopickActive

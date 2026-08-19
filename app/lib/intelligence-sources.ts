@@ -123,17 +123,54 @@ async function fetchFfc(scoring: string, teams: number, season: number): Promise
   }
 }
 
+type TradyrPayload = {
+  data?: Record<string, unknown>[];
+  meta?: {
+    generatedAt?: string;
+    total?: number;
+  };
+};
+
+const TRADYR_PAGE_SIZE = 50;
+const TRADYR_MAX_PLAYERS = 1000;
+
+export async function fetchTradyrRedraftPages(
+  request: (url: string) => Promise<TradyrPayload> = (url) => fetchJson(url, undefined, 15000),
+) {
+  const players: Record<string, unknown>[] = [];
+  let generatedAt: string | null = null;
+  let expectedTotal = TRADYR_PAGE_SIZE;
+
+  for (let offset = 0; offset < Math.min(expectedTotal, TRADYR_MAX_PLAYERS); offset += TRADYR_PAGE_SIZE) {
+    const payload = await request(
+      `https://api.tradyr.app/v1/players?format=redraft&numQbs=1&limit=${TRADYR_PAGE_SIZE}&offset=${offset}`,
+    );
+    const page = Array.isArray(payload.data) ? payload.data : [];
+    if (!generatedAt && payload.meta?.generatedAt) generatedAt = payload.meta.generatedAt;
+    expectedTotal = Math.max(0, Math.min(TRADYR_MAX_PLAYERS, Number(payload.meta?.total || page.length)));
+    players.push(...page);
+    if (page.length < TRADYR_PAGE_SIZE) break;
+  }
+
+  const unique = new Map<string, Record<string, unknown>>();
+  for (const player of players) {
+    const key = `${String(player.slug || player.name || "").trim().toLowerCase()}|${String(player.position || "")}`;
+    if (key !== "|" && !unique.has(key)) unique.set(key, player);
+  }
+  return { players: [...unique.values()], generatedAt, expectedTotal };
+}
+
 async function fetchTradyr(): Promise<IntelligenceSource> {
   const retrievedAt = new Date().toISOString();
   try {
-    const payload = await fetchJson("https://api.tradyr.app/v1/rankings/redraft-ppr", undefined, 15000);
+    const payload = await fetchTradyrRedraftPages();
     return {
       id: "tradyr",
       ...SOURCE_INFO.tradyr,
       status: "ok",
-      updatedAt: payload.meta?.generatedAt || null,
+      updatedAt: payload.generatedAt,
       retrievedAt,
-      players: (payload.data || []).map((player: Record<string, unknown>) => ({
+      players: payload.players.map((player: Record<string, unknown>) => ({
         name: String(player.name || ""), team: String(player.team || ""), pos: String(player.position || ""),
         rank: Number(player.rank || 999), sourceScore: Number(player.composite || 0),
       })),
