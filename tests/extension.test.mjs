@@ -84,6 +84,7 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(content, /SELECT_ACTION_BUDGET_MS = 4500/);
   assert.match(content, /NOMINATION_CONFIRMATION_WINDOW_MS = 4000/);
   assert.match(content, /MAX_MANDATORY_SEARCH_CANDIDATES = 18/);
+  assert.match(content, /MAX_AUCTION_SETTLEMENT_RECOVERY_POLLS = 5/);
   assert.match(content, /MANDATORY_CANDIDATE_SEARCH_WINDOW_MS = 120/);
   assert.match(content, /MANDATORY_POSITION_FILTER_WINDOW_MS = 1800/);
   assert.match(content, /function buildMandatoryPositionPlan\(candidates\)/);
@@ -134,6 +135,8 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(importHandler, /setAutoDraft\(false\)/);
   assert.match(importHandler, /pendingActionTelemetryRef\.current\.clear\(\)/);
   assert.match(importHandler, /actionTelemetryRef\.current = \[\]/);
+  assert.equal(page.match(/salaryCapDecisionObservationsRef\.current\.clear\(\)/g)?.length, 4);
+  assert.equal(page.match(/sleeperEvidenceLedgerRef\.current = \{ leagueId: [^,]+, candidates: \[\] \}/g)?.length, 5);
   assert.match(page, /sendToExtension\("GET_RUNTIME_DIAGNOSTICS"\)/);
   assert.match(page, /authenticatedImportAt/);
   assert.match(page, /ESPN confirmed roster \$\{myPickCount\}\/\$\{league\.rosterSize\}/);

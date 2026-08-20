@@ -4,6 +4,7 @@ import {
   createRateLimitedSourceFetcher,
   fetchSourcePayloadsSequentially,
   fetchTradyrRedraftPages,
+  normalizeIntelligenceRequest,
 } from "../app/lib/intelligence-sources.ts";
 import {
   intelligenceSnapshotCacheKey,
@@ -53,14 +54,25 @@ test("complete source snapshots bridge only identical fresh league settings", ()
   const cache = new Map();
   const ppr12 = intelligenceSnapshotCacheKey("PPR", 12, 2026);
   const ppr10 = intelligenceSnapshotCacheKey("PPR", 10, 2026);
+  const ppr12Superflex = intelligenceSnapshotCacheKey("PPR", 12, 2026, 2);
   assert.equal(rememberCompleteFreshIntelligenceSnapshot(cache, ppr12, completeSnapshot, evaluatedAt), true);
   assert.equal(readCompleteFreshIntelligenceSnapshot(cache, ppr12, evaluatedAt), completeSnapshot);
   assert.equal(readCompleteFreshIntelligenceSnapshot(cache, ppr10, evaluatedAt), null);
+  assert.equal(readCompleteFreshIntelligenceSnapshot(cache, ppr12Superflex, evaluatedAt), null);
 
   const staleAt = "2026-09-15T08:00:00.000Z";
   assert.equal(readCompleteFreshIntelligenceSnapshot(cache, ppr12, staleAt), null);
   assert.equal(cache.has(ppr12), false);
   assert.equal(rememberCompleteFreshIntelligenceSnapshot(cache, ppr12, completeSnapshot.slice(0, 3), evaluatedAt), false);
+});
+
+test("intelligence profiles keep one-QB and OP source snapshots isolated", () => {
+  assert.equal(normalizeIntelligenceRequest({ scoring: "PPR", teams: 12, season: 2026 }).qbs, 1);
+  assert.equal(normalizeIntelligenceRequest({ scoring: "PPR", teams: 12, season: 2026, qbs: 2 }).qbs, 2);
+  assert.notEqual(
+    intelligenceSnapshotCacheKey("PPR", 12, 2026, 1),
+    intelligenceSnapshotCacheKey("PPR", 12, 2026, 2),
+  );
 });
 
 test("rate-limited source payloads never overlap and preserve request order", async () => {
@@ -155,4 +167,15 @@ test("Tradyr retries one transient page timeout without changing pagination orde
 
   assert.deepEqual(offsets, [0, 0]);
   assert.equal(result.players.length, 10);
+});
+
+test("Tradyr requests a two-QB board for ESPN QB-plus-OP leagues", async () => {
+  const urls = [];
+  await fetchTradyrRedraftPages(async (url) => {
+    urls.push(url);
+    return { data: [], meta: { total: 0, generatedAt: "2026-08-20T00:00:00.000Z" } };
+  }, 0, 2);
+
+  assert.equal(urls.length, 1);
+  assert.equal(new URL(urls[0]).searchParams.get("numQbs"), "2");
 });

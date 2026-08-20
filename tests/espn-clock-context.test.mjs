@@ -603,6 +603,55 @@ test("salary-cap tracking records the exact winner, price, and sequence from bud
   assert.equal(settled.auctionSales[0].sequence, 1);
 });
 
+test("salary-cap tracking survives a transient blank budget surface between nominations", async () => {
+  const { updateSales } = await loadDraftContext({ text: "PK 11 OF 128\n00:14" });
+  updateSales({
+    nominatedPlayer: "Jahmyr Gibbs",
+    nominatedPlayerId: 4360078,
+    currentBid: 45,
+    auctionBudgets: [
+      { teamName: "Us", remaining: 200, maxOffer: 185 },
+      { teamName: "Rival", remaining: 200, maxOffer: 185 },
+    ],
+  });
+
+  const transient = updateSales({
+    nominatedPlayer: "CeeDee Lamb",
+    nominatedPlayerId: 4241389,
+    currentBid: 38,
+    auctionBudgets: [],
+  });
+  assert.equal(transient.auctionSales.length, 0);
+
+  const recovered = updateSales({
+    nominatedPlayer: "CeeDee Lamb",
+    nominatedPlayerId: 4241389,
+    currentBid: 38,
+    auctionBudgets: [
+      { teamName: "Us", remaining: 155, maxOffer: 141 },
+      { teamName: "Rival", remaining: 200, maxOffer: 185 },
+    ],
+  });
+  assert.equal(recovered.auctionSales.length, 1);
+  assert.equal(recovered.auctionSales[0].playerName, "Jahmyr Gibbs");
+  assert.equal(recovered.auctionSales[0].teamName, "Us");
+  assert.equal(recovered.auctionSales[0].amount, 45);
+
+  const secondSettlement = updateSales({
+    nominatedPlayer: null,
+    currentBid: 0,
+    auctionBudgets: [
+      { teamName: "Us", remaining: 155, maxOffer: 141 },
+      { teamName: "Rival", remaining: 162, maxOffer: 148 },
+    ],
+  });
+  assert.equal(secondSettlement.auctionSales.length, 2);
+  assert.equal(secondSettlement.auctionSales[1].playerName, "CeeDee Lamb");
+  assert.equal(secondSettlement.auctionSales[1].teamName, "Rival");
+  assert.equal(secondSettlement.auctionSales[1].amount, 38);
+  assert.equal(secondSettlement.auctionSales[1].sequence, 2);
+});
+
 test("draft actions fail closed before resolving or clicking a player control", async () => {
   const wrongLeague = await loadDraftContext({
     text: "RND 5 OF 16\n00:20\nON THE CLOCK: PICK 47",

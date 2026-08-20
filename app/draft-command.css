@@ -126,7 +126,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .connect-error { grid-area: error; margin: 0 !important; color: var(--red) !important; }
 .preview-formats { grid-area: preview; justify-self: end; display: flex; align-items: center; gap: 8px; }
 .preview-formats span { margin-right: 4px; color: var(--muted); font: 800 .75rem/1 var(--mono); letter-spacing: .07em; text-transform: uppercase; }
-.preview-formats button { min-height: 42px; padding: 8px 13px; border: 1px solid var(--line-strong); border-radius: 3px; background: var(--surface-quiet); color: var(--muted); font-weight: 850; cursor: pointer; }
+.preview-formats button { min-height: 44px; padding: 8px 13px; border: 1px solid var(--line-strong); border-radius: 3px; background: var(--surface-quiet); color: var(--muted); font-weight: 850; cursor: pointer; }
 .preview-formats button:hover, .preview-formats button.active { border-color: var(--blue); background: var(--blue-soft); color: var(--blue-strong); }
 
 .rules-card { padding: 22px 24px; }
@@ -168,7 +168,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .ops-league, .ops-progress, .ops-status { min-height: 76px; padding: 12px 17px; }
 .ops-league { display: flex; align-items: center; gap: 12px; }
 .platform-chip { width: 40px; height: 40px; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid #415064; border-radius: 3px; background: #0b0e13; color: var(--blue); font: 900 .875rem/1 var(--mono); }
-.league-switcher { min-width: 0; }
+.league-switcher { min-width: 0; min-height: 44px; }
 .league-switcher b, .league-switcher small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .league-switcher b { font-size: .875rem; }
 .league-switcher small { margin-top: 4px; color: var(--muted); font-size: .75rem; }
@@ -332,7 +332,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 
 .panel-head { display: flex; justify-content: space-between; align-items: end; gap: 16px; padding: 20px 20px 14px; }
 .panel-head h2 { margin: 0; font-size: 1.75rem; letter-spacing: -.04em; }
-.search-box { width: min(300px, 48%); height: 42px; display: flex; align-items: center; gap: 8px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 3px; background: #07090d; color: var(--muted); }
+.search-box { width: min(300px, 48%); min-height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 3px; background: #07090d; color: var(--muted); }
 .search-box input { min-width: 0; width: 100%; border: 0; outline: 0; background: transparent; color: var(--text); }
 .alternatives { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; padding: 0 20px 14px; }
 .alternatives button { min-width: 0; min-height: 82px; display: grid; gap: 4px; padding: 10px; border: 1px solid var(--line); border-radius: 3px; background: var(--surface-quiet); text-align: left; cursor: pointer; }
@@ -340,7 +340,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .alternatives span, .alternatives small { overflow: hidden; color: var(--muted); font: .75rem/1.2 var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .alternatives b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .filters { display: flex; gap: 5px; overflow-x: auto; padding: 0 20px 13px; border-bottom: 1px solid var(--line); }
-.filters button { min-height: 40px; padding: 7px 11px; border: 1px solid transparent; border-radius: 3px; background: transparent; color: var(--muted); font-weight: 850; cursor: pointer; }
+.filters button { min-height: 44px; min-width: 44px; padding: 7px 11px; border: 1px solid transparent; border-radius: 3px; background: transparent; color: var(--muted); font-weight: 850; cursor: pointer; }
 .filters button.active { border-color: var(--blue); background: var(--blue-soft); color: var(--blue-strong); }
 .table-head, .player-row { display: grid; grid-template-columns: 34px minmax(160px, 1fr) 44px 58px 62px 58px; align-items: center; column-gap: 8px; }
 .table-head { height: 38px; padding: 0 16px; border-bottom: 1px solid var(--line); background: #07090d; color: var(--muted); font: 900 .7rem/1 var(--mono); letter-spacing: .08em; }

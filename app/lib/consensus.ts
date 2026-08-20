@@ -77,8 +77,15 @@ export function preserveCompleteFreshIntelligenceSnapshot(
   return isCompleteFreshIntelligenceSnapshot(incoming, evaluatedAt) ? incoming : current;
 }
 
-export function intelligenceSnapshotCacheKey(scoring: string, teams: number, season: number) {
-  return `${String(scoring || "").trim().toUpperCase()}|${Number(teams)}|${Number(season)}`;
+export function intelligenceSnapshotCacheKey(scoring: string, teams: number, season: number, qbs: 1 | 2 = 1) {
+  return `${String(scoring || "").trim().toUpperCase()}|${Number(teams)}|${Number(season)}|${qbs}QB`;
+}
+
+export function intelligenceQuarterbackMode(lineupSlotCounts?: Record<string, unknown>): 1 | 2 {
+  const startingCapacity = Number(lineupSlotCounts?.["0"] || 0)
+    + Number(lineupSlotCounts?.["1"] || 0)
+    + Number(lineupSlotCounts?.["7"] || 0);
+  return startingCapacity >= 2 ? 2 : 1;
 }
 
 export function readCompleteFreshIntelligenceSnapshot(

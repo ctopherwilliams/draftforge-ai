@@ -17,6 +17,7 @@ const SELECT_CONFIRMATION_WINDOW_MS = 700;
 const NOMINATION_CONFIRMATION_WINDOW_MS = 4000;
 const MAX_SELECT_RETRIES = 1;
 const MAX_BID_CONTROL_RETRIES = 4;
+const MAX_AUCTION_SETTLEMENT_RECOVERY_POLLS = 5;
 const SELECT_ACTION_BUDGET_MS = 4500;
 const SNAKE_PLAYER_POOL_STABILITY_MS = 180;
 const auctionSales = [];
@@ -372,6 +373,12 @@ function updateAuctionSales(context) {
         sequence: auctionSales.length + 1,
       });
     }
+    if (!winner || !winnerBudget) {
+      trackedAuctionOffer.settlementRecoveryPolls = Number(trackedAuctionOffer.settlementRecoveryPolls || 0) + 1;
+      if (trackedAuctionOffer.settlementRecoveryPolls <= MAX_AUCTION_SETTLEMENT_RECOVERY_POLLS) {
+        return { ...context, auctionSales: [...auctionSales] };
+      }
+    }
     trackedAuctionOffer = null;
   }
 
@@ -382,6 +389,7 @@ function updateAuctionSales(context) {
         playerName: liveName,
         amount: liveBid,
         beforeBudgets: currentBudgets,
+        settlementRecoveryPolls: 0,
       };
     } else {
       trackedAuctionOffer.playerId = context.nominatedPlayerId || trackedAuctionOffer.playerId;

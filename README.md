@@ -56,7 +56,7 @@ Draft day is a cold-start workflow, not a continuation of whatever tabs or serve
    npm run draft-day:warm -- --scoring Standard --teams 10 --season 2026
    ```
 
-   Change scoring and team count to the imported league values. The command exits nonzero unless ESPN plus FFC, MFL, Tradyr, and GNG are all ready.
+   Change scoring and team count to the imported league values. Add `--qbs 2` when the authenticated ESPN starter slots contain QB plus OP; the dashboard and one-command READY path derive this automatically from the imported rules. The command exits nonzero unless ESPN plus FFC, MFL, Tradyr, and GNG are all ready.
    After importing and confirming the saved league, require the matching one-command pre-room gate:
 
    ```bash
@@ -85,12 +85,13 @@ Any failed check stops DraftForge from clicking. A cold source refresh may take 
 
 ```bash
 npm test
+npm run test:visual
 node --check extension/background.js
 node --check extension/espn-content.js
 node --check extension/app-bridge.js
 ```
 
-The test suite builds the production app and checks consensus calculation, deterministic recommendations, salary-cap reserve and pacing rules, extension safeguards, multi-league isolation, server rendering, and 20 complete deterministic drafts in each format.
+The test suite builds the production app and checks consensus calculation, deterministic recommendations, salary-cap reserve and pacing rules, extension safeguards, multi-league isolation, server rendering, and 20 complete deterministic drafts in each format. The separate visual gate uses one temporary muted browser and one temporary loopback server, checks pre-room plus both command centers from mobile through 2560px, writes ignored screenshots under `outputs/ui-regression/latest/`, and removes its temporary browser/server state on exit.
 
 For bounded, seeded strategy stress testing without opening ESPN, run:
 

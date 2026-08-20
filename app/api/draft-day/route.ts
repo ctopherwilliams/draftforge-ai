@@ -4,7 +4,7 @@ import {
   type DraftDayPreparedState,
 } from "../../lib/draft-day-bridge.ts";
 import { fetchIntelligenceSnapshot } from "../../lib/intelligence-sources.ts";
-import { isCompleteFreshIntelligenceSnapshot } from "../../lib/consensus.ts";
+import { intelligenceQuarterbackMode, isCompleteFreshIntelligenceSnapshot } from "../../lib/consensus.ts";
 import { reconcileEspnPicks, resolveAuctionSales } from "../../lib/espn-reconciliation.ts";
 import type { DraftPick, DraftPlayer, LeagueSettings, StrategyId } from "../../lib/draft-engine.ts";
 import type { EspnContext } from "../../lib/espn-context-state.ts";
@@ -23,7 +23,7 @@ const ALLOWED_STRATEGIES = new Set<StrategyId>(["BALANCED", "HERO_RB", "ZERO_RB"
 
 type DraftDayRequest = {
   operation?: "WARM" | "PREPARE" | "DECIDE" | "AUDIT";
-  profile?: { scoring?: string; teams?: number; season?: number };
+  profile?: { scoring?: string; teams?: number; season?: number; qbs?: number };
   sessionId?: string;
   leaguePayload?: Record<string, unknown>;
   playerPayload?: Record<string, unknown>;
@@ -193,7 +193,8 @@ export async function POST(request: Request) {
     if (!scoring || !Number.isInteger(teams) || teams < 8 || teams > 16 || !Number.isInteger(season) || season < 2026) {
       return response(origin, { ok: false, code: "DRAFT_DAY_PROFILE_INVALID" }, 400);
     }
-    const intelligence = await fetchIntelligenceSnapshot({ scoring, teams, season });
+    const qbs = Number(body.profile.qbs) >= 2 ? 2 : 1;
+    const intelligence = await fetchIntelligenceSnapshot({ scoring, teams, season, qbs });
     const ready = isCompleteFreshIntelligenceSnapshot(intelligence.sources, Date.now());
     return response(origin, {
       ok: ready,
@@ -201,7 +202,7 @@ export async function POST(request: Request) {
       sourceCoverage: ready ? 5 : 1,
       sourceIds: ["espn", ...intelligence.sources.map((source) => source.id)],
       sourceGeneratedAt: intelligence.generatedAt,
-      profile: { scoring, teams, season },
+      profile: { scoring, teams, season, qbs },
       sources: intelligence.sources.map((source) => ({
         id: source.id,
         status: source.status,
@@ -285,6 +286,7 @@ export async function POST(request: Request) {
       scoring: league.scoringLabel,
       teams: league.size,
       season: league.season,
+      qbs: intelligenceQuarterbackMode(league.lineupSlotCounts),
     });
     const ready = isCompleteFreshIntelligenceSnapshot(intelligence.sources, intelligence.generatedAt);
     return response(origin, {
@@ -330,6 +332,7 @@ export async function POST(request: Request) {
     scoring: league.scoringLabel,
     teams: league.size,
     season: league.season,
+    qbs: intelligenceQuarterbackMode(league.lineupSlotCounts),
   });
   const prepared = prepareDraftDayBridge(league, espnPlayers, intelligence.sources, intelligence.generatedAt);
   const result = buildDraftDayBridgeResult({

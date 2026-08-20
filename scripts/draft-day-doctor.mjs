@@ -5,6 +5,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { evaluateDraftDayDoctor, resolveDraftDayDoctorLeague } from "../app/lib/draft-day-doctor.ts";
+import { intelligenceQuarterbackMode } from "../app/lib/consensus.ts";
 
 const args = process.argv.slice(2);
 const valueFor = (name, fallback = "") => {
@@ -100,11 +101,12 @@ if (!scriptPaths.length) {
 
 const warmStartedAt = Date.now();
 let warm;
+const qbs = intelligenceQuarterbackMode(expected.lineupSlotCounts);
 try {
   const response = await fetch(`${origin}/api/draft-day`, {
     method: "POST",
     headers: { Accept: "application/json", "Content-Type": "application/json" },
-    body: JSON.stringify({ operation: "WARM", profile: { scoring: expected.scoringLabel, teams: expected.size, season: expected.season } }),
+    body: JSON.stringify({ operation: "WARM", profile: { scoring: expected.scoringLabel, teams: expected.size, season: expected.season, qbs } }),
     signal: AbortSignal.timeout(45_000),
   });
   warm = await response.json();
@@ -168,6 +170,7 @@ console.log(JSON.stringify({
   teamId: expected.teamId,
   revision: head,
   sourceCoverage: warm.sourceCoverage,
+  qbs,
   timing: { serverReadyMs, sourceWarmMs, totalCheckMs: Date.now() - startedAt },
   runtime: audit.snapshot.runtime,
   blockers: result.blockers,

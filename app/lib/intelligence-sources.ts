@@ -4,6 +4,7 @@ export type IntelligenceRequest = {
   scoring: string;
   teams: number;
   season: number;
+  qbs: 1 | 2;
 };
 
 export type IntelligenceResponse = IntelligenceRequest & {
@@ -137,13 +138,14 @@ const TRADYR_MAX_PLAYERS = 1000;
 export async function fetchTradyrRedraftPages(
   request: (url: string) => Promise<TradyrPayload> = (url) => fetchJson(url, undefined, 15000),
   retryDelayMs = 250,
+  numQbs: 1 | 2 = 1,
 ) {
   const players: Record<string, unknown>[] = [];
   let generatedAt: string | null = null;
   let expectedTotal = TRADYR_PAGE_SIZE;
 
   for (let offset = 0; offset < Math.min(expectedTotal, TRADYR_MAX_PLAYERS); offset += TRADYR_PAGE_SIZE) {
-    const url = `https://api.tradyr.app/v1/players?format=redraft&numQbs=1&limit=${TRADYR_PAGE_SIZE}&offset=${offset}`;
+    const url = `https://api.tradyr.app/v1/players?format=redraft&numQbs=${numQbs}&limit=${TRADYR_PAGE_SIZE}&offset=${offset}`;
     let payload: TradyrPayload;
     try {
       payload = await request(url);
@@ -168,10 +170,10 @@ export async function fetchTradyrRedraftPages(
   return { players: [...unique.values()], generatedAt, expectedTotal };
 }
 
-async function fetchTradyr(): Promise<IntelligenceSource> {
+async function fetchTradyr(numQbs: 1 | 2): Promise<IntelligenceSource> {
   const retrievedAt = new Date().toISOString();
   try {
-    const payload = await fetchTradyrRedraftPages();
+    const payload = await fetchTradyrRedraftPages(undefined, 250, numQbs);
     return {
       id: "tradyr",
       ...SOURCE_INFO.tradyr,
@@ -255,6 +257,7 @@ export function normalizeIntelligenceRequest(input: Partial<IntelligenceRequest>
     scoring,
     teams: Math.max(8, Math.min(16, Number(input.teams || 12))),
     season: Math.max(2026, Math.min(2027, Number(input.season || 2026))),
+    qbs: Number(input.qbs) >= 2 ? 2 : 1,
   };
 }
 
@@ -268,7 +271,7 @@ export function clearIntelligenceSnapshotCache() {
 
 export async function fetchIntelligenceSnapshot(input: Partial<IntelligenceRequest> = {}): Promise<IntelligenceResponse> {
   const request = normalizeIntelligenceRequest(input);
-  const cacheKey = `${request.season}:${request.teams}:${request.scoring}`;
+  const cacheKey = `${request.season}:${request.teams}:${request.scoring}:${request.qbs}qb`;
   const cached = intelligenceSnapshotCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.promise;
 
@@ -280,7 +283,7 @@ export async function fetchIntelligenceSnapshot(input: Partial<IntelligenceReque
     const sources = await Promise.all([
       fetchFfc(request.scoring, request.teams, request.season),
       fetchMfl(request.teams, request.scoring, request.season),
-      fetchTradyr(),
+      fetchTradyr(request.qbs),
       fetchGng(request.scoring),
     ]);
     entry.expiresAt = Date.now() + (sources.every((source) => source.status === "ok")

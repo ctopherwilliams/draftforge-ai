@@ -124,6 +124,30 @@ test("action telemetry retains a bounded full-draft latency sample", () => {
   assert.equal(isDraftAuditSnapshot(snapshot({ telemetry: { actions: Array.from({ length: MAX_DRAFT_ACTION_TELEMETRY_EVENTS + 1 }, () => ({ ...event })) } })), false);
 });
 
+test("salary-cap evidence accepts sanitized sale outcomes and rejects private or malformed data", () => {
+  const sale = {
+    sequence: 1,
+    playerId: 99,
+    position: "WR",
+    closingPrice: 31,
+    sourceAuction: 28.5,
+    fairValue: 29.2,
+    targetBid: 27,
+    maxApprovedBid: 30,
+    highestObservedBid: 31,
+    nominationIntent: null,
+    outcome: "BID_LOST",
+    submittedBidCount: 2,
+    highestSubmittedBid: 30,
+  };
+  assert.equal(isDraftAuditSnapshot(snapshot({ salaryCapEvidence: { sales: [sale] } })), true);
+  assert.equal(isDraftAuditSnapshot(snapshot({ salaryCapEvidence: { sales: [{ ...sale, closingPrice: 0 }] } })), false);
+  assert.equal(isDraftAuditSnapshot(snapshot({
+    league: { ...snapshot().league, draftType: "SNAKE" },
+    salaryCapEvidence: { sales: [sale] },
+  })), false);
+});
+
 test("completed audit preserves prior checklist evidence only for the same exact room", () => {
   const exactRoom = draftAuditChecklistBindingKey("1743483683", 7, 2097429901);
   assert.equal(resolveDraftAuditChecklistReady({

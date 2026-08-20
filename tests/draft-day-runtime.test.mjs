@@ -82,9 +82,15 @@ test("terminal warmup targets the same draft-day route used for decisions", asyn
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.match(source, /\/api\/draft-day/);
   assert.match(source, /operation: "WARM"/);
-  assert.match(source, /profile: \{ scoring, teams, season \}/);
+  assert.match(source, /profile: \{ scoring, teams, season, qbs \}/);
   assert.match(source, /DASHBOARD_RUNTIME_NOT_READY/);
   assert.match(source, /_next\/static\/chunks/);
   assert.doesNotMatch(source, /\/api\/intelligence\?/);
   assert.match(packageJson.scripts.start, /--hostname 127\.0\.0\.1/);
+});
+
+test("the one-command doctor warms the exact ESPN quarterback profile", async () => {
+  const source = await readFile(new URL("../scripts/draft-day-doctor.mjs", import.meta.url), "utf8");
+  assert.match(source, /intelligenceQuarterbackMode\(expected\.lineupSlotCounts\)/);
+  assert.match(source, /profile: \{ scoring: expected\.scoringLabel, teams: expected\.size, season: expected\.season, qbs \}/);
 });

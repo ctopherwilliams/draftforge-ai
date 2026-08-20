@@ -16,6 +16,7 @@ import {
 import {
   isCompleteFreshIntelligenceSnapshot,
   isIntelligenceSourceFresh,
+  intelligenceQuarterbackMode,
   intelligenceSnapshotCacheKey,
   mergeConsensus,
   preserveCompleteFreshIntelligenceSnapshot,
@@ -39,6 +40,12 @@ import {
   type DraftRuntimeDiagnostics,
 } from "./lib/draft-audit";
 import { compactDraftProfiles, persistDraftProfiles, upsertDraftProfile, type DraftProfile } from "./lib/profiles";
+import {
+  buildSalaryCapEvidence,
+  observeSalaryCapDecision,
+  type SalaryCapDecisionObservation,
+} from "./lib/salary-cap-evidence";
+import { mergeAuthenticatedSleeperEvidence } from "./lib/sleeper-evidence";
 
 const DEMO_PLAYERS: DraftPlayer[] = [
   { id: 1, name: "Ja'Marr Chase", team: "CIN", pos: "WR", rank: 1, adp: 1.4, auction: 61, projected: 312 },
@@ -222,7 +229,16 @@ export default function Home() {
     operation: "SELECT" | "BID" | "NOMINATE";
     clockSeconds: number | null;
     automatic: boolean;
+    playerId: number;
+    amount: number;
+    maxApprovedBid: number;
+    nominationIntent: "TARGET" | "DRAIN" | null;
   }>());
+  const salaryCapDecisionObservationsRef = useRef(new Map<number, SalaryCapDecisionObservation>());
+  const sleeperEvidenceLedgerRef = useRef<{ leagueId: string; candidates: DraftAuditSnapshot["sleeperEvidence"]["candidates"] }>({
+    leagueId: "",
+    candidates: [],
+  });
   const lastRosterStatusKeyRef = useRef("");
   const lastValidatedLiveChecklistBindingRef = useRef("");
   const authoritativeRosterContext = useMemo(() => ({
@@ -254,6 +270,11 @@ export default function Home() {
     pendingAuctionBidRef.current = null;
     setPendingAuctionNomination(null);
     setRejectedSnakePlayerIds([]);
+    pendingActionTelemetryRef.current.clear();
+    actionTelemetryRef.current = [];
+    salaryCapDecisionObservationsRef.current.clear();
+    sleeperEvidenceLedgerRef.current = { leagueId: profile.league.id, candidates: [] };
+    setTelemetryVersion((version) => version + 1);
     setLeague(profile.league);
     setEspnPlayers(profile.espnPlayers);
     setPicks(profile.picks);
@@ -285,6 +306,11 @@ export default function Home() {
     pendingAuctionBidRef.current = null;
     setPendingAuctionNomination(null);
     setRejectedSnakePlayerIds([]);
+    pendingActionTelemetryRef.current.clear();
+    actionTelemetryRef.current = [];
+    salaryCapDecisionObservationsRef.current.clear();
+    sleeperEvidenceLedgerRef.current = { leagueId: "demo", candidates: [] };
+    setTelemetryVersion((version) => version + 1);
     setLeague(DEMO_LEAGUE);
     setEspnPlayers(DEMO_PLAYERS);
     setPicks([]);
@@ -316,6 +342,11 @@ export default function Home() {
     pendingAutoArmRequestRef.current = null;
     setPendingAuctionNomination(null);
     setRejectedSnakePlayerIds([]);
+    pendingActionTelemetryRef.current.clear();
+    actionTelemetryRef.current = [];
+    salaryCapDecisionObservationsRef.current.clear();
+    sleeperEvidenceLedgerRef.current = { leagueId: previewLeague.id, candidates: [] };
+    setTelemetryVersion((version) => version + 1);
     setAutoArmVerification(null);
     dispatchUi({ type: "set", key: "autoWarning", value: false });
     setLeague(previewLeague);
@@ -415,6 +446,8 @@ export default function Home() {
         setActionRetryNonce(0);
         pendingActionTelemetryRef.current.clear();
         actionTelemetryRef.current = [];
+        salaryCapDecisionObservationsRef.current.clear();
+        sleeperEvidenceLedgerRef.current = { leagueId: importedLeague.id, candidates: [] };
         setTelemetryVersion((version) => version + 1);
         pendingAutoArmRequestRef.current = null;
         setAutoArmVerification(null);
@@ -501,6 +534,10 @@ export default function Home() {
             roundTripMs: Math.max(0, Math.round(Date.now() - pendingTelemetry.sentAt)),
             clockSeconds: pendingTelemetry.clockSeconds,
             automatic: pendingTelemetry.automatic,
+            playerId: pendingTelemetry.playerId,
+            amount: pendingTelemetry.amount,
+            maxApprovedBid: pendingTelemetry.maxApprovedBid,
+            nominationIntent: pendingTelemetry.nominationIntent,
           }].slice(-MAX_DRAFT_ACTION_TELEMETRY_EVENTS);
           setTelemetryVersion((version) => version + 1);
         }
@@ -726,11 +763,12 @@ export default function Home() {
     }
   }, [autoDraft, context.autopickActive, league.id]);
 
+  const sourceQuarterbackMode = intelligenceQuarterbackMode(league.lineupSlotCounts);
   useEffect(() => {
     if (league.id === "demo") return;
-    const key = intelligenceSnapshotCacheKey(league.scoringLabel, league.size, league.season);
+    const key = intelligenceSnapshotCacheKey(league.scoringLabel, league.size, league.season, sourceQuarterbackMode);
     rememberCompleteFreshIntelligenceSnapshot(intelligenceSnapshotsRef.current, key, sources);
-  }, [league.id, league.scoringLabel, league.size, league.season, sources]);
+  }, [league.id, league.scoringLabel, league.size, league.season, sourceQuarterbackMode, sources]);
 
   useEffect(() => {
     if (league.id === "demo") {
@@ -741,10 +779,11 @@ export default function Home() {
       return () => window.clearTimeout(previewTimer);
     }
     let cancelled = false;
-    const intelligenceKey = intelligenceSnapshotCacheKey(league.scoringLabel, league.size, league.season);
+    const qbs = sourceQuarterbackMode;
+    const intelligenceKey = intelligenceSnapshotCacheKey(league.scoringLabel, league.size, league.season, qbs);
     const cachedSources = readCompleteFreshIntelligenceSnapshot(intelligenceSnapshotsRef.current, intelligenceKey);
     if (cachedSources) setSources(cachedSources);
-    const intelligenceUrl = `/api/intelligence?scoring=${encodeURIComponent(league.scoringLabel)}&teams=${league.size}&season=${league.season}`;
+    const intelligenceUrl = `/api/intelligence?scoring=${encodeURIComponent(league.scoringLabel)}&teams=${league.size}&season=${league.season}&qbs=${qbs}`;
     const refreshIntelligence = () => {
       fetch(intelligenceUrl, { cache: "no-store" })
         .then((response) => {
@@ -773,7 +812,7 @@ export default function Home() {
       cancelled = true;
       window.clearInterval(refreshTimer);
     };
-  }, [league.id, league.scoringLabel, league.size, league.season]);
+  }, [league.id, league.scoringLabel, league.size, league.season, sourceQuarterbackMode]);
 
   const players = useMemo(() => mergeConsensus(espnPlayers, sources, league), [espnPlayers, sources, league]);
   const playerPool = useMemo(() => buildPlayerPoolIndex(players, league), [players, league]);
@@ -784,7 +823,7 @@ export default function Home() {
     [players, authoritativePicks, league, strategy, recommendationPick, context.auctionBudgets, playerPool],
   );
   const recommendations = decision.recommendations;
-  const sleeperEvidence = useMemo(() => recommendations
+  const currentSleeperEvidence = useMemo(() => recommendations
     .filter((player) => player.sleeperLabel !== "NONE")
     .slice(0, 20)
     .map((player) => ({
@@ -815,6 +854,15 @@ export default function Home() {
     && normalizeName(pendingAuctionNomination.playerName) === normalizeName(nominated.name)
       ? pendingAuctionNomination.intent
       : null;
+  useEffect(() => {
+    if (league.draftType !== "AUCTION" || !nominated) return;
+    salaryCapDecisionObservationsRef.current.set(nominated.id, observeSalaryCapDecision(
+      salaryCapDecisionObservationsRef.current.get(nominated.id),
+      nominated,
+      Number(context.currentBid || 0),
+      ownNominationIntent,
+    ));
+  }, [context.currentBid, league.draftType, nominated, ownNominationIntent]);
   const focusPlayer = league.draftType === "AUCTION" && nominated
     ? nominated
     : league.draftType === "AUCTION" && auctionNomination
@@ -965,6 +1013,10 @@ export default function Home() {
       operation: resolvedOperation,
       clockSeconds: Number.isFinite(remainingSeconds) ? remainingSeconds : null,
       automatic,
+      playerId: player.id,
+      amount: Math.max(0, Math.trunc(Number(amount ?? (resolvedOperation === "BID" ? player.maxBid : resolvedOperation === "NOMINATE" ? 1 : 0)))),
+      maxApprovedBid: resolvedOperation === "BID" ? Math.max(0, Math.trunc(Number(player.maxBid || 0))) : 0,
+      nominationIntent: resolvedOperation === "NOMINATE" ? nominationIntent : null,
     });
     while (pendingActionTelemetryRef.current.size > MAX_DRAFT_ACTION_TELEMETRY_EVENTS) {
       const oldestRequestId = pendingActionTelemetryRef.current.keys().next().value;
@@ -1163,6 +1215,25 @@ export default function Home() {
     const espnRoster = (context.inDraftRoom === true ? resolveOwnRoster(context, espnPlayers) : [])
       .map((entry) => toAuditEntry(entry.playerId, entry.amount))
       .filter((entry): entry is DraftAuditRosterEntry => Boolean(entry));
+    if (sleeperEvidenceLedgerRef.current.leagueId !== league.id) {
+      sleeperEvidenceLedgerRef.current = { leagueId: league.id, candidates: [] };
+    }
+    const sleeperEvidence = mergeAuthenticatedSleeperEvidence({
+      current: sleeperEvidenceLedgerRef.current.candidates,
+      observed: currentSleeperEvidence,
+      ownPicks: myPicks,
+      currentPick: recommendationPick,
+    });
+    sleeperEvidenceLedgerRef.current = { leagueId: league.id, candidates: sleeperEvidence };
+    const salaryCapEvidence = league.draftType === "AUCTION"
+      ? buildSalaryCapEvidence({
+        sales: context.auctionSales || [],
+        playerById: playerPool.playerById,
+        ownPlayerIds: new Set(myPicks.map((pick) => pick.playerId)),
+        actions: actionTelemetryRef.current,
+        observations: salaryCapDecisionObservationsRef.current,
+      })
+      : [];
     const stable = {
       league: league.id,
       team: league.teamId,
@@ -1185,6 +1256,7 @@ export default function Home() {
       telemetryVersion,
       auditHeartbeat,
       sleeperEvidence,
+      salaryCapEvidence,
     };
     const digest = JSON.stringify(stable);
     if (draftAuditDigestRef.current === digest || draftAuditPendingRef.current === digest) return;
@@ -1233,6 +1305,7 @@ export default function Home() {
       telemetry: {
         actions: [...actionTelemetryRef.current],
       },
+      ...(league.draftType === "AUCTION" ? { salaryCapEvidence: { sales: salaryCapEvidence } } : {}),
       sleeperEvidence: {
         candidateCount: sleeperEvidence.length,
         candidates: sleeperEvidence,
@@ -1261,7 +1334,7 @@ export default function Home() {
       }
       if (draftAuditPendingRef.current === digest) draftAuditPendingRef.current = "";
     })();
-  }, [actionState, activeEspnTabId, auditHeartbeat, authenticatedImportAt, autoDraft, authoritativePicks.length, context, espnPlayers, extension, healthySources, league, liveChecklistReady, myPickCount, myPicks, playerPool.playerById, runtimeDiagnostics, settingsConfirmed, sleeperEvidence, telemetryVersion]);
+  }, [actionState, activeEspnTabId, auditHeartbeat, authenticatedImportAt, autoDraft, authoritativePicks.length, context, currentSleeperEvidence, espnPlayers, extension, healthySources, league, liveChecklistReady, myPickCount, myPicks, playerPool.playerById, recommendationPick, runtimeDiagnostics, settingsConfirmed, telemetryVersion]);
 
   const { commandLabel, safetyLabel } = presentation;
   const displayCommandLabel = presentation.stateTone === "blocked" && context.autopickActive !== true && focusPlayer
@@ -1306,7 +1379,7 @@ export default function Home() {
       {sourcesOpen && <div className="sources-menu"><div><b>Decision intelligence</b><button onClick={() => dispatchUi({ type: "set", key: "sourcesOpen", value: false })} aria-label="Close source details">×</button></div><p>ESPN anchors league projections and salary values at 30%. Every healthy ranking feed is converted into a league-normalized theoretical dollar curve; MFL AAV and ESPN dollars remain live market anchors.</p><ul><li><span className="source-ok">●</span><b>ESPN Fantasy</b><small>30% · projection, ADP, salary value</small></li>{sources.map((source) => { const fresh = isIntelligenceSourceFresh(source); return <li key={source.id}><span className={fresh ? "source-ok" : "source-error"}>●</span><b>{source.name}</b><small>{Math.round(source.weight * 100)}% · {source.kind}{source.sampleSize ? ` · ${source.sampleSize.toLocaleString()} drafts` : ""}{source.updatedAt ? ` · ${new Date(source.updatedAt).toLocaleString()}` : ""} · <a href={source.url} target="_blank" rel="noreferrer">source</a></small></li>; })}</ul><small>Failed or stale sources are removed, weights renormalize, and no generated projection replaces missing data.</small></div>}
     </section>
 
-    {(extension !== "connected" || settingsOpen) && <section className="setup-drawer">
+    {(settingsOpen || (extension !== "connected" && league.id !== "demo")) && <section className="setup-drawer">
       {extension !== "connected" ? <div className="connect-card">
         <div><p className="eyebrow">PREFLIGHT 1 OF 2 · CONNECT ESPN</p><h1>Import your real draft.</h1><p>Open your ESPN league in another Chrome tab. The companion reads your authenticated settings without exposing your password or cookies.</p></div>
         <label>League ID <input value={leagueId} onChange={(event) => setLeagueId(event.target.value.replace(/\D/g, ""))} placeholder="Auto-detect or enter ID" inputMode="numeric" /></label>

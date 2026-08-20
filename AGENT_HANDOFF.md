@@ -21,14 +21,18 @@ The user has two ESPN leagues on different draft days. Their settings, picks, pl
 
 ## Current checkpoint
 
-- Release branch: `main`
+- Active hardening branch: `agent/backlog-hardening-20260820` (based on certified `main`)
 - Release tag: `draft-day-rc-2026-08-19`
 - Release-candidate revision at authenticated certification: `af06f0d`
 - Production app: `https://draftforge-ai.workspace-231977.chatgpt.site`
 - Chrome extension package: `public/draftforge-espn-companion.zip`
-- Extension version: `0.2.16`
+- Extension version: `0.2.17` local hardening candidate; v0.2.16 remains the authenticated release
 - Test command: `npm run check`
-- Last verified result: `npm run check` passes 168/168 tests, lint, typecheck, production build, 20 deterministic complete snake drafts, 20 deterministic complete salary-cap drafts, Monte Carlo replay/invariant checks, UI and extension safety, and latency gates. The clean-room authenticated campaign is complete at 20/20 snake and 20/20 salary-cap, separate from the retained historical post-sleeper ledger. Companion v0.2.16 retains exact pre-click revalidation, own-turn authorization, Autopick detection, muted-sound enforcement, duplicate-specialist exclusion, and exact app-origin authorization. Its package SHA-256 is `027d5abe34412717f6b70c9a21922eee4cc5a9e40ba84789848d6589003dacd2`.
+- Last verified result: the backlog-hardening candidate passes 179/179 tests, lint, typecheck, production build, 20 deterministic complete snake drafts, 20 deterministic complete salary-cap drafts, Monte Carlo replay/invariant checks, UI and extension safety, and latency gates. Its ten-scenario visual gate covers pre-room plus both formats at 390, 1440, 1728, and 2560 widths. The clean-room authenticated campaign remains complete at 20/20 snake and 20/20 salary-cap on v0.2.16; those counts are not advanced by local tests. Companion v0.2.17 package SHA-256 is `9991640bb3bcf3b7c1977e4dd9031e732b0d7ce4e5d4d4f880a6dc8c4e30257e` and requires one supervised authenticated salary-cap transition/recovery rehearsal before release promotion.
+
+Backlog hardening on 2026-08-20 preserved the production scoring algorithm after a paired 1,600-draft snake QB-window candidate reduced mean lineup, total projection, and VORP; the candidate was rejected despite improved regret and fragility. The accepted non-strategy changes isolate one-QB and ESPN QB-plus-OP intelligence profiles, request Tradyr's matching board without changing its 20% weight, retain privacy-safe authenticated salary sale/bid/pass evidence, accumulate unchanged-threshold sleeper evidence through acquisition, preserve sale tracking across a transient ESPN budget-surface gap, and add a bounded visual/accessibility regression gate. See `docs/backlog-hardening-20260820.md`.
+
+Authenticated v0.2.17 pre-room evidence on 2026-08-20 used league `44050`, team `7`. ESPN imported QB × 1 plus OP × 1, a $200 salary cap, 12 teams, 14 draftable slots, 60-second timer, and two keepers. The dashboard reached 5/5 sources, confirmed settings, and returned `DRAFT_DAY_READY` with Auto-Draft off. The loopback audit independently reported extension v0.2.17, exactly two Chrome tabs, one DraftForge tab, one ESPN tab, the exact five-source set, and the expected QB+OP slots. The one-command doctor now derives the same centralized quarterback profile instead of defaulting this league to one-QB.
 
 Superseding release-candidate verification on 2026-08-19: a final fresh authenticated snake room completed 16/16 with exact ESPN/app parity, zero hard/final violations, automatic shutdown, and exact clock-to-submit p95 1.140 seconds, p99 1.175 seconds, maximum 1.184 seconds. The final authenticated salary-cap room completed 14/14 with exact prices, $4 remaining, zero violations, automatic shutdown, and submit p95 0.720 seconds, p99 1.414 seconds, maximum 1.717 seconds. Seed `20260820` completed 10,000 drafts per format against the two current immutable authenticated snapshots with zero failed seeds, hard violations, or simulation errors; all 4,000 holdout trial records replayed exactly. See `docs/draft-day-release-candidate-20260819.md`.
 

@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "evaluatedAt": "2026-08-20T12:30:54.000Z",
+  "branch": "agent/backlog-hardening-20260820",
+  "authenticatedCountsAdvanced": false,
+  "strategyCandidate": {
+    "status": "rejected",
+    "decisionClass": "mid-draft QB preference in ESPN QB-plus-OP snake leagues",
+    "seed": 32765104,
+    "pairedDrafts": 1600,
+    "deltas": {
+      "startingLineupProjection": -1.0905,
+      "totalProjection": -1.2703,
+      "vorp": -1.1907,
+      "seasonWinProbability": -0.000693,
+      "decisionRegret": -14.9346,
+      "rosterFragility": -0.05497,
+      "compositeObjective": 0.528
+    },
+    "reason": "Mean roster-strength metrics regressed and the composite confidence interval crossed zero."
+  },
+  "candidate": {
+    "extensionVersion": "0.2.17",
+    "extensionPackageSha256": "9991640bb3bcf3b7c1977e4dd9031e732b0d7ce4e5d4d4f880a6dc8c4e30257e",
+    "productionStrategyChanged": false,
+    "testCount": 179,
+    "deterministicSnakeDrafts": 20,
+    "deterministicSalaryCapDrafts": 20,
+    "visualScenarios": 10,
+    "hardViolations": 0,
+    "liveTwoQbWarmup": {
+      "code": "FIVE_SOURCE_READY",
+      "scoring": "PPR",
+      "teams": 12,
+      "season": 2026,
+      "qbs": 2,
+      "sourceCoverage": 5,
+      "elapsedMs": 20402,
+      "generatedAt": "2026-08-20T12:30:42.402Z"
+    },
+    "authenticatedTwoQbPreRoom": {
+      "leagueId": "44050",
+      "teamId": 7,
+      "draftType": "AUCTION",
+      "qbs": 2,
+      "sourceCoverage": 5,
+      "extensionVersion": "0.2.17",
+      "browserTabCount": 2,
+      "draftForgeTabCount": 1,
+      "espnTabCount": 1,
+      "settingsConfirmed": true,
+      "autoDraft": false,
+      "readyCode": "DRAFT_DAY_READY"
+    }
+  },
+  "remaining": [
+    "One supervised authenticated salary-cap transition and recovery rehearsal",
+    "Authenticated READY, live, recovery, endgame, and complete visual captures during that rehearsal"
+  ]
+}

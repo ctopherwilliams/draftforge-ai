@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mergeConsensus, normalizePlayerName } from "../app/lib/consensus.ts";
+import { intelligenceQuarterbackMode, mergeConsensus, normalizePlayerName } from "../app/lib/consensus.ts";
 
 const espn = [
   { id: 1, name: "Ja'Marr Chase", team: "CIN", pos: "WR", rank: 1, adp: 2, auction: 60, projected: 300 },
@@ -23,6 +23,12 @@ test("player names normalize across punctuation and suffixes", () => {
   assert.equal(normalizePlayerName("Bijan Robinson Jr"), normalizePlayerName("Bijan Robinson"));
   assert.equal(normalizePlayerName("Robert  Griffin III"), normalizePlayerName("Robert Griffin"));
   assert.equal(normalizePlayerName("Ja’Marr Chase"), normalizePlayerName("Ja'Marr Chase"));
+});
+
+test("ESPN QB plus OP lineups use an isolated two-QB intelligence profile", () => {
+  assert.equal(intelligenceQuarterbackMode({ "0": 1, "7": 1 }), 2);
+  assert.equal(intelligenceQuarterbackMode({ "0": 1, "7": 0 }), 1);
+  assert.equal(intelligenceQuarterbackMode({ "1": 2 }), 2);
 });
 
 test("consensus combines sources deterministically and exposes provenance", () => {

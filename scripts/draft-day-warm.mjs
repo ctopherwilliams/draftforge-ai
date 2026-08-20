@@ -8,6 +8,7 @@ function value(name, fallback) {
 const scoring = value("scoring", "PPR");
 const teams = Math.max(8, Math.min(16, Number(value("teams", "12"))));
 const season = Math.max(2026, Number(value("season", "2026")));
+const qbs = Number(value("qbs", "1")) >= 2 ? 2 : 1;
 const origin = value("origin", "http://127.0.0.1:3000");
 const url = `${origin}/api/draft-day`;
 const started = Date.now();
@@ -46,7 +47,7 @@ try {
   response = await fetch(url, {
     method: "POST",
     headers: { Accept: "application/json", "Content-Type": "application/json" },
-    body: JSON.stringify({ operation: "WARM", profile: { scoring, teams, season } }),
+    body: JSON.stringify({ operation: "WARM", profile: { scoring, teams, season, qbs } }),
     signal: AbortSignal.timeout(45_000),
   });
 } catch (error) {
@@ -72,6 +73,7 @@ const result = {
   scoring,
   teams,
   season,
+  qbs,
   elapsedMs: Date.now() - started,
   dashboardScripts,
   generatedAt: snapshot.sourceGeneratedAt || snapshot.generatedAt || null,

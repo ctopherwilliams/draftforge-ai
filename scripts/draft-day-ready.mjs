@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { evaluateDraftDayReadiness } from "../app/lib/draft-day-readiness.ts";
+import { intelligenceQuarterbackMode } from "../app/lib/consensus.ts";
 
 const args = process.argv.slice(2);
 const valueFor = (name, fallback = "") => {
@@ -29,7 +30,15 @@ try {
   const response = await fetch(`${origin}/api/draft-day`, {
     method: "POST",
     headers: { Accept: "application/json", "Content-Type": "application/json" },
-    body: JSON.stringify({ operation: "WARM", profile: { scoring: expected.scoringLabel, teams: expected.size, season: expected.season } }),
+    body: JSON.stringify({
+      operation: "WARM",
+      profile: {
+        scoring: expected.scoringLabel,
+        teams: expected.size,
+        season: expected.season,
+        qbs: intelligenceQuarterbackMode(expected.lineupSlotCounts),
+      },
+    }),
     signal: AbortSignal.timeout(45_000),
   });
   warm = await response.json();

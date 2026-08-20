@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "scenarios": {
+    "pre-room-desktop": {
+      "hash": "c07c414d4979698f"
+    },
+    "snake-desktop": {
+      "hash": "4cc9697929cf4fcf"
+    },
+    "salary-desktop": {
+      "hash": "4c49e959794d6dcf"
+    },
+    "snake-wide": {
+      "hash": "cc69e94f6f6fc500"
+    },
+    "salary-wide": {
+      "hash": "cc49e9514125c781"
+    },
+    "snake-ultrawide": {
+      "hash": "8cebdb47c3810000"
+    },
+    "salary-ultrawide": {
+      "hash": "8c4bdb5143810101"
+    },
+    "pre-room-mobile": {
+      "hash": "35576f69733f3767"
+    },
+    "snake-mobile": {
+      "hash": "3537776d6dcc3b66"
+    },
+    "salary-mobile": {
+      "hash": "3537776d6d4c7ba7"
+    }
+  }
+}

@@ -3,6 +3,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fetchIntelligenceSnapshot, normalizeIntelligenceRequest } from "../app/lib/intelligence-sources.ts";
+import { intelligenceQuarterbackMode } from "../app/lib/consensus.ts";
 import {
   createSourceSnapshot,
   replayConsensusSnapshot,
@@ -80,6 +81,7 @@ async function main() {
     scoring: options.scoring || league.scoringLabel,
     teams: Number(options.teams || league.size),
     season: Number(options.season || league.season),
+    qbs: intelligenceQuarterbackMode(league.lineupSlotCounts),
   });
   const intelligence = await fetchIntelligenceSnapshot(request);
   const snapshot = createSourceSnapshot({ league, espnPlayers, intelligence });

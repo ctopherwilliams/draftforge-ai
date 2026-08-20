@@ -18,6 +18,26 @@ export type DraftActionTelemetryEvent = {
   roundTripMs: number;
   clockSeconds: number | null;
   automatic: boolean;
+  playerId?: number;
+  amount?: number;
+  maxApprovedBid?: number;
+  nominationIntent?: "TARGET" | "DRAIN" | null;
+};
+
+export type DraftAuditSalaryCapEvidenceSale = {
+  sequence: number;
+  playerId: number;
+  position: string;
+  closingPrice: number;
+  sourceAuction: number;
+  fairValue: number;
+  targetBid: number;
+  maxApprovedBid: number;
+  highestObservedBid: number;
+  nominationIntent: "TARGET" | "DRAIN" | null;
+  outcome: "WON" | "BID_LOST" | "PASSED" | "DRAINED";
+  submittedBidCount: number;
+  highestSubmittedBid: number;
 };
 
 export type DraftAuditSleeperCandidate = {
@@ -30,6 +50,11 @@ export type DraftAuditSleeperCandidate = {
   modelMarketEdge: number;
   modelSpread: number;
   sourceCount: number;
+  firstSeenPick?: number;
+  lastSeenPick?: number;
+  acquired?: boolean;
+  acquisitionPick?: number | null;
+  acquisitionAmount?: number;
 };
 
 export type DraftRuntimeDiagnostics = {
@@ -84,6 +109,9 @@ export type DraftAuditSnapshot = {
   };
   telemetry: {
     actions: DraftActionTelemetryEvent[];
+  };
+  salaryCapEvidence?: {
+    sales: DraftAuditSalaryCapEvidenceSale[];
   };
   sleeperEvidence: {
     candidateCount: number;
@@ -209,9 +237,33 @@ export function isDraftAuditSnapshot(value: unknown): value is DraftAuditSnapsho
     && Number(event.roundTripMs) >= 0
     && (event.clockSeconds === null || (Number.isFinite(event.clockSeconds) && Number(event.clockSeconds) >= 0))
     && typeof event?.automatic === "boolean"
+    && (event.playerId === undefined || (Number.isInteger(event.playerId) && Number(event.playerId) !== 0))
+    && (event.amount === undefined || (Number.isInteger(event.amount) && Number(event.amount) >= 0))
+    && (event.maxApprovedBid === undefined || (Number.isInteger(event.maxApprovedBid) && Number(event.maxApprovedBid) >= 0))
+    && (event.nominationIntent === undefined || event.nominationIntent === null || ["TARGET", "DRAIN"].includes(event.nominationIntent))
   ))) return false;
+  if (snapshot.salaryCapEvidence) {
+    if (league.draftType !== "AUCTION" || !Array.isArray(snapshot.salaryCapEvidence.sales) || snapshot.salaryCapEvidence.sales.length > 256) return false;
+    if (!snapshot.salaryCapEvidence.sales.every((sale) => (
+      Number.isInteger(sale?.sequence)
+      && sale.sequence > 0
+      && Number.isInteger(sale?.playerId)
+      && sale.playerId !== 0
+      && POSITIONS.has(String(sale.position))
+      && Number.isInteger(sale.closingPrice)
+      && sale.closingPrice >= 1
+      && Number.isFinite(sale.sourceAuction)
+      && sale.sourceAuction >= 1
+      && Number.isFinite(sale.fairValue)
+      && sale.fairValue >= 0
+      && [sale.targetBid, sale.maxApprovedBid, sale.highestObservedBid, sale.submittedBidCount, sale.highestSubmittedBid]
+        .every((value) => Number.isInteger(value) && value >= 0)
+      && (sale.nominationIntent === null || ["TARGET", "DRAIN"].includes(sale.nominationIntent))
+      && ["WON", "BID_LOST", "PASSED", "DRAINED"].includes(sale.outcome)
+    ))) return false;
+  }
   if (!snapshot.sleeperEvidence || !Number.isInteger(snapshot.sleeperEvidence.candidateCount) || snapshot.sleeperEvidence.candidateCount < 0) return false;
-  if (!Array.isArray(snapshot.sleeperEvidence.candidates) || snapshot.sleeperEvidence.candidates.length > 20) return false;
+  if (!Array.isArray(snapshot.sleeperEvidence.candidates) || snapshot.sleeperEvidence.candidates.length > 64) return false;
   if (snapshot.sleeperEvidence.candidateCount !== snapshot.sleeperEvidence.candidates.length) return false;
   if (!snapshot.sleeperEvidence.candidates.every((candidate) => (
     Number.isInteger(candidate?.playerId)
@@ -228,6 +280,11 @@ export function isDraftAuditSnapshot(value: unknown): value is DraftAuditSnapsho
     && candidate.modelSpread <= 12
     && Number.isInteger(candidate.sourceCount)
     && candidate.sourceCount >= 4
+    && (candidate.firstSeenPick === undefined || (Number.isInteger(candidate.firstSeenPick) && candidate.firstSeenPick >= 1))
+    && (candidate.lastSeenPick === undefined || (Number.isInteger(candidate.lastSeenPick) && candidate.lastSeenPick >= Number(candidate.firstSeenPick || 1)))
+    && (candidate.acquired === undefined || typeof candidate.acquired === "boolean")
+    && (candidate.acquisitionPick === undefined || candidate.acquisitionPick === null || (Number.isInteger(candidate.acquisitionPick) && candidate.acquisitionPick >= 1))
+    && (candidate.acquisitionAmount === undefined || (Number.isInteger(candidate.acquisitionAmount) && candidate.acquisitionAmount >= 0))
   ))) return false;
   return [...draft.appRoster, ...draft.espnRoster].every((entry) => (
     Number.isInteger(entry?.playerId)

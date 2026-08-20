@@ -31,11 +31,11 @@ Keep Codex open in the desktop app and exactly two controlled Chrome tabs: `http
 
 ## Certification ledger
 
-Last updated: 2026-08-19 16:30 CT.
+Last updated: 2026-08-20.
 
 | Gate | State |
 | --- | --- |
-| Local release gate | 168/168 tests, lint, typecheck, production build, UI, extension safety, replay, and latency passing |
+| Local release gate | Backlog-hardening candidate: 179/179 tests, lint, typecheck, production build, UI, extension safety, replay, and latency passing; visual certification covers pre-room plus snake/salary command centers at 390, 1440, 1728, and 2560 widths |
 | Deterministic drafts | 20/20 snake and 20/20 salary-cap complete and legal |
 | Live-snapshot Monte Carlo | Fresh seed `20260820`: 10,000 snake + 10,000 salary-cap, including 4,000 exposed holdouts; zero failures, hard violations, or simulation errors |
 | Overnight battle qualification | Four 5-draft batches per format: 20/20 snake + 20/20 salary cap, exact holdout replay, zero hard violations |
@@ -44,6 +44,7 @@ Last updated: 2026-08-19 16:30 CT.
 | Final authenticated latency | Snake 16/16: submit p95 1.140s, p99 1.175s, max 1.184s; salary cap 14/14: submit p95 0.720s, p99 1.414s, max 1.717s |
 | Cold-start and recovery | Server, tab, extension, source, stale-action, and ESPN-Autopick recovery paths passed fail-closed checks; contaminated recovery room `1446060763` remains excluded |
 | One-command READY gates | Saved snake and salary-cap profiles both return `DRAFT_DAY_READY` with every exact setting/source/tab/safety check true |
+| v0.2.17 authenticated pre-room | League `44050`, team `7`: exact QB+OP salary-cap rules, two-QB intelligence profile, 5/5 sources, exactly two Chrome tabs, companion v0.2.17, settings confirmed, Auto-Draft off, and `DRAFT_DAY_READY` |
 | Deterministic holdout replay | 2,000 snake + 2,000 salary-cap records replayed byte-for-byte with zero mismatches |
 
 Do not advance an authenticated count without a complete final-ready loopback audit. Current evidence is machine-readable in `simulation/evidence/authenticated-certification-20260818.json`; older excluded rooms remain historical and must not be retroactively counted.
@@ -61,7 +62,7 @@ Do not advance an authenticated count without a complete final-ready loopback au
    npm run check
    ```
 
-3. Confirm the unpacked Chrome companion is version `0.2.16` and loaded from this repository's `extension/` directory. The packaged zip SHA-256 is `027d5abe34412717f6b70c9a21922eee4cc5a9e40ba84789848d6589003dacd2`.
+3. Confirm the unpacked Chrome companion is version `0.2.17` and loaded from this repository's `extension/` directory. The packaged zip SHA-256 is `9991640bb3bcf3b7c1977e4dd9031e732b0d7ce4e5d4d4f880a6dc8c4e30257e`. This locally verified hardening candidate still requires one supervised authenticated salary-cap recovery rehearsal before it supersedes the v0.2.16 live evidence.
 4. Run one cold-start, no-click rehearsal for the exact league. Do not wait until the real room opens to discover an ESPN login, extension, source, firewall, or Chrome-control problem.
 5. Keep the companion zip digest and current release evidence in [AGENT_HANDOFF.md](AGENT_HANDOFF.md).
 
@@ -186,6 +187,7 @@ Record the room ID, format, roster, prices/budget when applicable, audit result,
 - Fresh room imports now forcibly reset Auto-Draft and old-room telemetry. A 30-second ESPN practice room can still start before manual setup finishes, so warm and pass the pre-room gate before room creation and use one bounded import/checklist/arming sequence inside the room. Any ESPN Autopick contamination excludes that room.
 - The final v0.2.16 authenticated snake room removed the repeated late-round submit tail without weakening identity or clock checks: p95 1.140 seconds, p99 1.175 seconds, and maximum 1.184 seconds. The bounded profile activates only after ten confirmed snake roster slots; early snake, salary-cap, and mandatory K/DST paths are unchanged.
 - ESPN practice rooms may disappear after completion; the loopback audit must be captured before the tab is closed or ESPN deletes the state.
+- Companion v0.2.17 preserves a pending salary-cap sale for at most five context polls when ESPN briefly removes the budget surface between nominations. The focused recovery test proves the delayed closing price and subsequent nomination are recorded in order; the bounded limit prevents a malformed room from stalling tracking. Treat this as locally verified until the supervised authenticated recovery rehearsal is complete.
 
 ## Maintenance rule
 
