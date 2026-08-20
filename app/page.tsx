@@ -363,10 +363,32 @@ export default function Home() {
   useEffect(() => {
     const currentUrl = new URL(window.location.href);
     const reloadCompanion = currentUrl.searchParams.get("reloadCompanion") === "1";
+    const recoverLive = currentUrl.searchParams.get("recoverLive") === "1";
+    const closePractice = currentUrl.searchParams.get("closePractice") === "1";
+    const recoveryPayload = recoverLive && ["localhost", "127.0.0.1"].includes(currentUrl.hostname)
+      ? {
+          draftLeagueId: currentUrl.searchParams.get("draftLeagueId") || "",
+          sourceLeagueId: currentUrl.searchParams.get("sourceLeagueId") || "",
+          teamId: Number(currentUrl.searchParams.get("teamId") || 0),
+          season: Number(currentUrl.searchParams.get("season") || 0),
+        }
+      : null;
+    const closePracticePayload = closePractice && ["localhost", "127.0.0.1"].includes(currentUrl.hostname)
+      ? {
+          draftLeagueId: currentUrl.searchParams.get("draftLeagueId") || "",
+          sourceLeagueId: currentUrl.searchParams.get("sourceLeagueId") || "",
+          teamId: Number(currentUrl.searchParams.get("teamId") || 0),
+          season: Number(currentUrl.searchParams.get("season") || 0),
+        }
+      : null;
     if (reloadCompanion) {
       currentUrl.searchParams.delete("reloadCompanion");
       window.history.replaceState(null, "", `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`);
       sendToExtension("RELOAD_EXTENSION");
+    }
+    if (recoverLive || closePractice) {
+      ["recoverLive", "closePractice", "draftLeagueId", "sourceLeagueId", "teamId", "season"].forEach((key) => currentUrl.searchParams.delete(key));
+      window.history.replaceState(null, "", `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`);
     }
     try {
       const saved = compactDraftProfiles(JSON.parse(window.localStorage.getItem("draftforge-leagues-v1") || "{}"));
@@ -634,7 +656,11 @@ export default function Home() {
     }
     window.addEventListener("message", onMessage);
     // The content script can initialize before React attaches this listener; request a second handshake.
-    if (!reloadCompanion) sendToExtension("APP_HELLO");
+    if (!reloadCompanion) {
+      sendToExtension("APP_HELLO");
+      if (recoveryPayload) window.setTimeout(() => sendToExtension("RECOVER_LIVE_WORKSPACE", recoveryPayload), 0);
+      if (closePracticePayload) window.setTimeout(() => sendToExtension("CLOSE_PRACTICE_ROOM", closePracticePayload), 0);
+    }
     return () => { window.clearTimeout(timeout); window.removeEventListener("message", onMessage); };
   }, []);
 

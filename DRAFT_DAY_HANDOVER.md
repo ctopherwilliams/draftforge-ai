@@ -35,7 +35,7 @@ Last updated: 2026-08-20.
 
 | Gate | State |
 | --- | --- |
-| Local release gate | Backlog-hardening candidate: 179/179 tests, lint, typecheck, production build, UI, extension safety, replay, and latency passing; visual certification covers pre-room plus snake/salary command centers at 390, 1440, 1728, and 2560 widths |
+| Local release gate | Backlog-hardening candidate: 181/181 tests, lint, typecheck, production build, UI, extension safety, replay, recovery targeting, and latency passing; visual certification covers pre-room plus snake/salary command centers at 390, 1440, 1728, and 2560 widths |
 | Deterministic drafts | 20/20 snake and 20/20 salary-cap complete and legal |
 | Live-snapshot Monte Carlo | Fresh seed `20260820`: 10,000 snake + 10,000 salary-cap, including 4,000 exposed holdouts; zero failures, hard violations, or simulation errors |
 | Overnight battle qualification | Four 5-draft batches per format: 20/20 snake + 20/20 salary cap, exact holdout replay, zero hard violations |
@@ -62,7 +62,7 @@ Do not advance an authenticated count without a complete final-ready loopback au
    npm run check
    ```
 
-3. Confirm the unpacked Chrome companion is version `0.2.17` and loaded from this repository's `extension/` directory. The packaged zip SHA-256 is `9991640bb3bcf3b7c1977e4dd9031e732b0d7ce4e5d4d4f880a6dc8c4e30257e`. This locally verified hardening candidate still requires one supervised authenticated salary-cap recovery rehearsal before it supersedes the v0.2.16 live evidence.
+3. Confirm the unpacked Chrome companion is version `0.2.17` and loaded from this repository's `extension/` directory. The packaged zip SHA-256 is `30c5b3093f5508f6526d1e70526f2d400a7d45b64b0e9100134e9fd53ac5634f`. This locally verified hardening candidate still requires one supervised authenticated salary-cap recovery rehearsal before it supersedes the v0.2.16 live evidence.
 4. Run one cold-start, no-click rehearsal for the exact league. Do not wait until the real room opens to discover an ESPN login, extension, source, firewall, or Chrome-control problem.
 5. Keep the companion zip digest and current release evidence in [AGENT_HANDOFF.md](AGENT_HANDOFF.md).
 
@@ -131,6 +131,15 @@ After ESPN creates the room, explicitly bind its new league ID and rerun the com
 Then run the matching command with `--phase live`. It must return `DRAFT_DAY_READY` before the authorization modal may arm Auto-Draft.
 
 Only then may Codex arm Auto-Draft for that named room. Arming is scoped to the room and resets on reload, league switch, safety failure, completion, `hold`, or `stop`.
+
+## Chat-owned Chrome recovery
+
+Routine recovery is Codex-owned. The user should not have to reload the extension, close stale DraftForge tabs, or reconnect an exact practice room by hand.
+
+- `http://localhost:3000/?reloadCompanion=1` reloads the already-installed unpacked companion from disk. Codex then reloads the dashboard so the new bridge context is active. Never run this inside an active action window.
+- A loopback-only `recoverLive=1` command requires the exact generated practice-room league ID, source league ID, team, and season. It fails closed unless exactly one matching ESPN live room exists, reloads that room to re-inject the companion, imports its authenticated settings and roster, and closes only stale DraftForge tabs plus the matching source-league parent. It never closes unrelated ESPN or browser tabs.
+- A loopback-only `closePractice=1` command first re-imports the exact room and requires ESPN's league name to begin with `Practice Draft for ` before it will close the tab. It cannot close a real league room through this path.
+- Every recovery turns Auto-Draft off and settings confirmation false. Codex must re-warm five sources if needed, confirm the imported checklist, rerun the live dry run, and explicitly re-arm the exact room.
 
 ## Live-draft protocol
 

@@ -4,12 +4,14 @@ import { normalizePlayers } from "./player-normalizers.js";
 import { createPollCoordinator } from "./poll-coordinator.js";
 import { selectUniqueEspnContext } from "./context-selector.js";
 import { DRAFTFORGE_APP_ORIGINS, authorizeRuntimeMessage, isLocalDraftForgeSenderUrl } from "./origin-policy.js";
+import { selectRecoveryWorkspace } from "./recovery-targets.js";
 
 const appTabs = new Set();
 let espnContext = null;
 const draftPolls = createPollCoordinator({ minIntervalMs: 1800 });
 const CONNECT_CONTEXT_TIMEOUT_MS = 4000;
 const CONNECT_CONTEXT_RETRY_MS = 150;
+const RECOVERY_CONTEXT_TIMEOUT_MS = 12000;
 
 function originForTab(tab) {
   try { return new URL(tab?.url || "").origin; }
@@ -86,6 +88,16 @@ async function findUniqueDraftRoomContext(expectedLeagueId, expectedTeamId) {
   return matches.length === 1 ? matches[0] : null;
 }
 
+async function waitForExactDraftRoomContext(expectedLeagueId, expectedTeamId, expectedTabId) {
+  const deadline = Date.now() + RECOVERY_CONTEXT_TIMEOUT_MS;
+  do {
+    const context = await findEspnContext(expectedLeagueId, expectedTabId);
+    if (context?.inDraftRoom === true && Number(context.teamId) === Number(expectedTeamId)) return context;
+    await new Promise((resolve) => setTimeout(resolve, CONNECT_CONTEXT_RETRY_MS));
+  } while (Date.now() < deadline);
+  return null;
+}
+
 function leagueUrl(leagueId, season, views) {
   const url = new URL(`https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${season}/segments/0/leagues/${leagueId}`);
   views.forEach((view) => url.searchParams.append("view", view));
@@ -157,6 +169,66 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message.type === "GET_RUNTIME_DIAGNOSTICS") {
       return { ok: true, runtime: await runtimeDiagnostics() };
+    }
+    if (message.type === "CLOSE_PRACTICE_ROOM") {
+      if (!isLocalDraftForgeSenderUrl(sender.url || sender.tab?.url || "")) {
+        return { ok: false, code: "PRACTICE_CLOSE_FORBIDDEN", message: "Practice-room cleanup is available only from the local DraftForge app." };
+      }
+      const recovery = selectRecoveryWorkspace(await chrome.tabs.query({}), {
+        appTabId: sender.tab?.id,
+        draftLeagueId: message.payload?.draftLeagueId,
+        sourceLeagueId: message.payload?.sourceLeagueId,
+        teamId: message.payload?.teamId,
+        season: message.payload?.season,
+        appOrigins: DRAFTFORGE_APP_ORIGINS,
+      });
+      if (!recovery.ok) return { ...recovery, message: "DraftForge could not identify one exact ESPN practice room without ambiguity." };
+      await chrome.tabs.reload(recovery.roomTabId);
+      const context = await waitForExactDraftRoomContext(
+        message.payload?.draftLeagueId,
+        Number(message.payload?.teamId),
+        recovery.roomTabId,
+      );
+      if (!context) return { ok: false, code: "PRACTICE_CLOSE_CONTEXT_TIMEOUT", message: "The exact ESPN room could not be verified before cleanup." };
+      const data = await importLeague(context);
+      if (!String(data.league?.name || "").startsWith("Practice Draft for ")) {
+        return { ok: false, code: "PRACTICE_ROOM_REQUIRED", message: "DraftForge refused to close a room that ESPN did not identify as a practice draft." };
+      }
+      await chrome.tabs.remove(recovery.roomTabId);
+      return { ok: true, code: "PRACTICE_ROOM_CLOSED", closedTabId: recovery.roomTabId };
+    }
+    if (message.type === "RECOVER_LIVE_WORKSPACE") {
+      if (!isLocalDraftForgeSenderUrl(sender.url || sender.tab?.url || "")) {
+        return { ok: false, code: "RECOVERY_FORBIDDEN", message: "Live workspace recovery is available only from the local DraftForge app." };
+      }
+      if (!sender.tab?.id) return { ok: false, code: "RECOVERY_APP_TAB_REQUIRED", message: "A local DraftForge tab is required for recovery." };
+      appTabs.add(sender.tab.id);
+      const recovery = selectRecoveryWorkspace(await chrome.tabs.query({}), {
+        appTabId: sender.tab.id,
+        draftLeagueId: message.payload?.draftLeagueId,
+        sourceLeagueId: message.payload?.sourceLeagueId,
+        teamId: message.payload?.teamId,
+        season: message.payload?.season,
+        appOrigins: DRAFTFORGE_APP_ORIGINS,
+      });
+      if (!recovery.ok) return { ...recovery, message: "DraftForge could not identify one exact ESPN live room without ambiguity." };
+
+      await chrome.tabs.reload(recovery.roomTabId);
+      const context = await waitForExactDraftRoomContext(
+        message.payload?.draftLeagueId,
+        Number(message.payload?.teamId),
+        recovery.roomTabId,
+      );
+      if (!context) return { ok: false, code: "RECOVERY_CONTEXT_TIMEOUT", message: "The exact ESPN room did not reconnect before the recovery deadline." };
+
+      const data = await importLeague(context);
+      espnContext = { ...context, season: data.league.season };
+      const cleanupTabIds = [...new Set([...recovery.staleAppTabIds, ...recovery.sourceLeagueTabIds])]
+        .filter((tabId) => tabId !== recovery.roomTabId && tabId !== sender.tab.id);
+      if (cleanupTabIds.length) await chrome.tabs.remove(cleanupTabIds);
+      data.runtime = await runtimeDiagnostics();
+      await broadcast("DF_IMPORT_SUCCESS", data);
+      return { ok: true, code: "LIVE_WORKSPACE_RECOVERED", data, closedTabCount: cleanupTabIds.length };
     }
     if (message.type === "ESPN_CONTEXT") {
       espnContext = { ...message.payload, tabId: sender.tab?.id };

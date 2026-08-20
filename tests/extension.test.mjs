@@ -30,6 +30,8 @@ test("privileged runtime messages require the exact DraftForge or ESPN sender or
   assert.equal(authorizeRuntimeMessage("APP_HELLO", production).ok, true);
   assert.equal(authorizeRuntimeMessage("GET_RUNTIME_DIAGNOSTICS", production).ok, true);
   assert.equal(authorizeRuntimeMessage("RELOAD_EXTENSION", localhost).ok, true);
+  assert.equal(authorizeRuntimeMessage("CLOSE_PRACTICE_ROOM", localhost).ok, true);
+  assert.equal(authorizeRuntimeMessage("RECOVER_LIVE_WORKSPACE", localhost).ok, true);
   assert.equal(authorizeRuntimeMessage("SUBMIT_ACTION", espn).ok, false);
   assert.equal(authorizeRuntimeMessage("ESPN_CONTEXT", espn).ok, true);
   assert.equal(authorizeRuntimeMessage("ESPN_CONTEXT", production).ok, false);
