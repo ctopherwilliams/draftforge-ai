@@ -1,6 +1,6 @@
 # DraftForge AI
 
-Running a rehearsal or real draft? Start with [DRAFT_DAY_HANDOVER.md](DRAFT_DAY_HANDOVER.md). Moving the project to another computer or Codex account? Start with [MIGRATION.md](MIGRATION.md) and [AGENT_HANDOFF.md](AGENT_HANDOFF.md).
+New to DraftForge? Start with the [user guide and onboarding walkthrough](docs/USER_GUIDE.md). Running a rehearsal or real draft? Use [DRAFT_DAY_HANDOVER.md](DRAFT_DAY_HANDOVER.md). Moving the project to another computer or Codex account? Start with [MIGRATION.md](MIGRATION.md) and [AGENT_HANDOFF.md](AGENT_HANDOFF.md).
 
 DraftForge is an ESPN-only fantasy football draft copilot. The primary cockpit is the Codex conversation working through the authenticated Chrome companion: it imports the league's real settings, follows a live snake or salary-cap draft, combines five public player-intelligence feeds, explains the next move, and can drive the ESPN draft room within explicit safety guardrails. The local app is the live supporting dashboard for imported state, consensus provenance, recommendations, and auditability. A single-tab in-app-browser runtime is retained as a recovery and test path, not as the production Chrome workflow.
 

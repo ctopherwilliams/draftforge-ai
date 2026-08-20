@@ -2,7 +2,7 @@
 
 This is the operational source of truth for running an ESPN draft with Codex as the primary cockpit, DraftForge as the command center, and Chrome as the execution surface. Read it before every rehearsal and real draft. Update the **Certification ledger** and **Known launch risks** whenever a rehearsal changes the evidence.
 
-For implementation history and exclusions, see [AGENT_HANDOFF.md](AGENT_HANDOFF.md). For installation or migration, see [MIGRATION.md](MIGRATION.md). For source definitions and weights, see [docs/data-sources.md](docs/data-sources.md).
+If this is your first time using the system, begin with the [user guide and onboarding walkthrough](docs/USER_GUIDE.md). For implementation history and exclusions, see [AGENT_HANDOFF.md](AGENT_HANDOFF.md). For installation or migration, see [MIGRATION.md](MIGRATION.md). For source definitions and weights, see [docs/data-sources.md](docs/data-sources.md).
 
 ## Operating model
 
