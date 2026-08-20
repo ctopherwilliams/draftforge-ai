@@ -365,6 +365,11 @@ export default function Home() {
     const reloadCompanion = currentUrl.searchParams.get("reloadCompanion") === "1";
     const recoverLive = currentUrl.searchParams.get("recoverLive") === "1";
     const closePractice = currentUrl.searchParams.get("closePractice") === "1";
+    const cleanWorkspace = currentUrl.searchParams.get("cleanWorkspace") === "1";
+    const ownedBlankTabIds = (currentUrl.searchParams.get("ownedBlankTabIds") || "")
+      .split(",")
+      .map(Number)
+      .filter(Number.isInteger);
     const recoveryPayload = recoverLive && ["localhost", "127.0.0.1"].includes(currentUrl.hostname)
       ? {
           draftLeagueId: currentUrl.searchParams.get("draftLeagueId") || "",
@@ -386,8 +391,8 @@ export default function Home() {
       window.history.replaceState(null, "", `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`);
       sendToExtension("RELOAD_EXTENSION");
     }
-    if (recoverLive || closePractice) {
-      ["recoverLive", "closePractice", "draftLeagueId", "sourceLeagueId", "teamId", "season"].forEach((key) => currentUrl.searchParams.delete(key));
+    if (recoverLive || closePractice || cleanWorkspace) {
+      ["recoverLive", "closePractice", "cleanWorkspace", "ownedBlankTabIds", "draftLeagueId", "sourceLeagueId", "teamId", "season"].forEach((key) => currentUrl.searchParams.delete(key));
       window.history.replaceState(null, "", `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`);
     }
     try {
@@ -659,7 +664,30 @@ export default function Home() {
     if (!reloadCompanion) {
       sendToExtension("APP_HELLO");
       if (recoveryPayload) window.setTimeout(() => sendToExtension("RECOVER_LIVE_WORKSPACE", recoveryPayload), 0);
-      if (closePracticePayload) window.setTimeout(() => sendToExtension("CLOSE_PRACTICE_ROOM", closePracticePayload), 0);
+      if (closePracticePayload) window.setTimeout(async () => {
+        let completedAuditProof = null;
+        try {
+          const response = await fetch(`/api/draft-day?leagueId=${encodeURIComponent(closePracticePayload.draftLeagueId)}&teamId=${closePracticePayload.teamId}`, { cache: "no-store" });
+          const result = await response.json();
+          if (response.ok
+            && result?.evaluation?.finalReady === true
+            && result?.evaluation?.parity === true
+            && result?.snapshot?.safety?.autoDraft === false
+            && String(result?.snapshot?.league?.id) === closePracticePayload.draftLeagueId
+            && Number.isInteger(result?.snapshot?.binding?.tabId)) {
+            completedAuditProof = {
+              leagueId: closePracticePayload.draftLeagueId,
+              teamId: closePracticePayload.teamId,
+              tabId: result.snapshot.binding.tabId,
+              finalReady: true,
+              parity: true,
+              autoDraftOff: true,
+            };
+          }
+        } catch { /* expired-room cleanup remains fail closed without an exact completed audit */ }
+        sendToExtension("CLOSE_PRACTICE_ROOM", { ...closePracticePayload, completedAuditProof });
+      }, 0);
+      if (cleanWorkspace) window.setTimeout(() => sendToExtension("CLEAN_LOCAL_WORKSPACE", { ownedBlankTabIds }), 0);
     }
     return () => { window.clearTimeout(timeout); window.removeEventListener("message", onMessage); };
   }, []);

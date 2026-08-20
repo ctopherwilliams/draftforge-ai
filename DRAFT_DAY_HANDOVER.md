@@ -63,7 +63,7 @@ Do not advance an authenticated count without a complete final-ready loopback au
    npm run check
    ```
 
-3. Confirm the unpacked Chrome companion is version `0.2.17` and loaded from this repository's `extension/` directory. The packaged zip SHA-256 is `aa42e7cdd63a2292bb23f6342bd1ad829670db9a322f96f943cdc4ac242ce872`. Its exact-room recovery, two-window throttle protection, salary-cap action path, parity audit, and automatic shutdown are authenticated in room `1778564226`.
+3. Confirm the unpacked Chrome companion is version `0.2.17` and loaded from this repository's `extension/` directory. The packaged zip SHA-256 is `ce61daab99576a829b49fd01e92cb6d574a4a121e3988cbb6fd3132169ba8b10`. Its exact-room recovery, two-window throttle protection, salary-cap action path, parity audit, and automatic shutdown are authenticated in room `1778564226`.
 4. Run one cold-start, no-click rehearsal for the exact league. Do not wait until the real room opens to discover an ESPN login, extension, source, firewall, or Chrome-control problem.
 5. Keep the companion zip digest and current release evidence in [AGENT_HANDOFF.md](AGENT_HANDOFF.md).
 
@@ -139,7 +139,8 @@ Routine recovery is Codex-owned. The user should not have to reload the extensio
 
 - `http://localhost:3000/?reloadCompanion=1` reloads the already-installed unpacked companion from disk. Codex then reloads the dashboard so the new bridge context is active. Never run this inside an active action window.
 - A loopback-only `recoverLive=1` command requires the exact generated practice-room league ID, source league ID, team, and season. It fails closed unless exactly one matching ESPN live room exists, reloads that room to re-inject the companion, imports its authenticated settings and roster, closes only stale DraftForge tabs plus the matching source-league parent, and makes ESPN the active tab in its own Chrome window while leaving DraftForge active in the command window. It never closes unrelated ESPN or browser tabs.
-- A loopback-only `closePractice=1` command first re-imports the exact room and requires ESPN's league name to begin with `Practice Draft for ` before it will close the tab. It cannot close a real league room through this path.
+- A loopback-only `closePractice=1` command first re-imports the exact room and requires ESPN's league name to begin with `Practice Draft for ` before it will close the tab. If ESPN has removed the completed room DOM, it verifies the same exact league, team, and season through ESPN's authenticated league API before applying the unchanged practice-name gate. If ESPN has also expired that generated practice league, cleanup requires the local final-ready audit to prove the exact generated room ID, exact Chrome tab ID, parity, and automatic shutdown, and requires that generated room ID to differ from the real source league. It cannot close a live real-league room through this path.
+- A loopback-only `cleanWorkspace=1` command keeps its active dashboard, closes only other DraftForge-origin tabs, and closes `about:blank` tabs only when Codex supplies their exact observed IDs. It never closes an unrelated ESPN or user tab.
 - Every recovery turns Auto-Draft off and settings confirmation false. Codex must re-warm five sources if needed, confirm the imported checklist, rerun the live dry run, and explicitly re-arm the exact room.
 
 ## Live-draft protocol

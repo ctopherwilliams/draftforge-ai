@@ -70,6 +70,15 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(background, /chrome\.runtime\.getManifest\(\)\.version/);
   assert.match(background, /keepLiveRoomVisible/);
   assert.match(background, /chrome\.windows\.create\(\{ tabId: roomTabId, focused: false, type: "normal" \}\)/);
+  assert.match(background, /PRACTICE_CLOSE_VERIFICATION_FAILED/);
+  assert.match(background, /PRACTICE_CLOSE_IDENTITY_MISMATCH/);
+  assert.match(background, /PRACTICE_ROOM_CLOSED_AFTER_AUDIT/);
+  assert.match(background, /generatedPracticeRoom && exactCompletedAudit/);
+  assert.match(background, /Number\(proof\?\.tabId\) === Number\(recovery\.roomTabId\)/);
+  assert.match(background, /CLEAN_LOCAL_WORKSPACE/);
+  assert.match(background, /LOCAL_WORKSPACE_CLEAN/);
+  assert.match(background, /requestedBlankIds\.has\(Number\(tab\.id\)\) && tab\.url === "about:blank"/);
+  assert.match(background, /startsWith\("Practice Draft for "\)/);
   assert.match(background, /ESPN_HEARTBEAT/);
   assert.match(background, /ESPN_ACTION_RESOLVED/);
   assert.match(background, /ESPN_ACTION_SUBMITTED/);

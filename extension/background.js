@@ -181,6 +181,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === "GET_RUNTIME_DIAGNOSTICS") {
       return { ok: true, runtime: await runtimeDiagnostics() };
     }
+    if (message.type === "CLEAN_LOCAL_WORKSPACE") {
+      if (!isLocalDraftForgeSenderUrl(sender.url || sender.tab?.url || "") || !sender.tab?.id) {
+        return { ok: false, code: "WORKSPACE_CLEANUP_FORBIDDEN", message: "Workspace cleanup is available only from the active local DraftForge tab." };
+      }
+      const requestedBlankIds = new Set((Array.isArray(message.payload?.ownedBlankTabIds) ? message.payload.ownedBlankTabIds : [])
+        .map(Number)
+        .filter(Number.isInteger));
+      const tabs = await chrome.tabs.query({});
+      const staleAppTabIds = tabs.filter((tab) => tab.id !== sender.tab.id && DRAFTFORGE_APP_ORIGINS.includes(originForTab(tab)))
+        .map((tab) => tab.id)
+        .filter(Number.isInteger);
+      const exactOwnedBlankTabIds = tabs.filter((tab) => requestedBlankIds.has(Number(tab.id)) && tab.url === "about:blank")
+        .map((tab) => tab.id)
+        .filter(Number.isInteger);
+      const cleanupTabIds = [...new Set([...staleAppTabIds, ...exactOwnedBlankTabIds])];
+      if (cleanupTabIds.length) await chrome.tabs.remove(cleanupTabIds);
+      return { ok: true, code: "LOCAL_WORKSPACE_CLEAN", closedTabIds: cleanupTabIds, runtime: await runtimeDiagnostics() };
+    }
     if (message.type === "CLOSE_PRACTICE_ROOM") {
       if (!isLocalDraftForgeSenderUrl(sender.url || sender.tab?.url || "")) {
         return { ok: false, code: "PRACTICE_CLOSE_FORBIDDEN", message: "Practice-room cleanup is available only from the local DraftForge app." };
@@ -200,13 +218,41 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         Number(message.payload?.teamId),
         recovery.roomTabId,
       );
-      if (!context) return { ok: false, code: "PRACTICE_CLOSE_CONTEXT_TIMEOUT", message: "The exact ESPN room could not be verified before cleanup." };
-      const data = await importLeague(context);
+      const verificationContext = context || {
+        leagueId: String(message.payload?.draftLeagueId || ""),
+        teamId: Number(message.payload?.teamId),
+        season: Number(message.payload?.season),
+        inDraftRoom: true,
+        tabId: recovery.roomTabId,
+      };
+      let data;
+      try {
+        data = await importLeague(verificationContext);
+      } catch {
+        const proof = message.payload?.completedAuditProof;
+        const generatedPracticeRoom = String(message.payload?.draftLeagueId || "") !== String(message.payload?.sourceLeagueId || "");
+        const exactCompletedAudit = proof?.finalReady === true
+          && proof?.parity === true
+          && proof?.autoDraftOff === true
+          && String(proof?.leagueId) === String(message.payload?.draftLeagueId)
+          && Number(proof?.teamId) === Number(message.payload?.teamId)
+          && Number(proof?.tabId) === Number(recovery.roomTabId);
+        if (generatedPracticeRoom && exactCompletedAudit) {
+          await chrome.tabs.remove(recovery.roomTabId);
+          return { ok: true, code: "PRACTICE_ROOM_CLOSED_AFTER_AUDIT", closedTabId: recovery.roomTabId, verifiedFromCompletedAudit: true };
+        }
+        return { ok: false, code: "PRACTICE_CLOSE_VERIFICATION_FAILED", message: "The exact ESPN practice room could not be verified before cleanup." };
+      }
+      if (String(data.league?.id) !== String(message.payload?.draftLeagueId)
+        || Number(data.context?.teamId) !== Number(message.payload?.teamId)
+        || Number(data.league?.season) !== Number(message.payload?.season)) {
+        return { ok: false, code: "PRACTICE_CLOSE_IDENTITY_MISMATCH", message: "DraftForge refused to close a room whose authenticated ESPN identity changed." };
+      }
       if (!String(data.league?.name || "").startsWith("Practice Draft for ")) {
         return { ok: false, code: "PRACTICE_ROOM_REQUIRED", message: "DraftForge refused to close a room that ESPN did not identify as a practice draft." };
       }
       await chrome.tabs.remove(recovery.roomTabId);
-      return { ok: true, code: "PRACTICE_ROOM_CLOSED", closedTabId: recovery.roomTabId };
+      return { ok: true, code: "PRACTICE_ROOM_CLOSED", closedTabId: recovery.roomTabId, verifiedFromLiveContext: Boolean(context) };
     }
     if (message.type === "RECOVER_LIVE_WORKSPACE") {
       if (!isLocalDraftForgeSenderUrl(sender.url || sender.tab?.url || "")) {
