@@ -98,6 +98,17 @@ async function waitForExactDraftRoomContext(expectedLeagueId, expectedTeamId, ex
   return null;
 }
 
+async function keepLiveRoomVisible(roomTabId, appTab) {
+  const roomTab = await chrome.tabs.get(roomTabId);
+  if (!Number.isInteger(roomTab?.windowId) || !Number.isInteger(appTab?.windowId)) {
+    throw new Error("RECOVERY_WINDOW_IDENTITY_MISSING");
+  }
+  if (roomTab.windowId !== appTab.windowId) return { separated: false, roomWindowId: roomTab.windowId };
+  const roomWindow = await chrome.windows.create({ tabId: roomTabId, focused: false, type: "normal" });
+  if (!Number.isInteger(roomWindow?.id)) throw new Error("RECOVERY_ROOM_WINDOW_FAILED");
+  return { separated: true, roomWindowId: roomWindow.id };
+}
+
 function leagueUrl(leagueId, season, views) {
   const url = new URL(`https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${season}/segments/0/leagues/${leagueId}`);
   views.forEach((view) => url.searchParams.append("view", view));
@@ -226,9 +237,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const cleanupTabIds = [...new Set([...recovery.staleAppTabIds, ...recovery.sourceLeagueTabIds])]
         .filter((tabId) => tabId !== recovery.roomTabId && tabId !== sender.tab.id);
       if (cleanupTabIds.length) await chrome.tabs.remove(cleanupTabIds);
+      const visibility = await keepLiveRoomVisible(recovery.roomTabId, sender.tab);
       data.runtime = await runtimeDiagnostics();
       await broadcast("DF_IMPORT_SUCCESS", data);
-      return { ok: true, code: "LIVE_WORKSPACE_RECOVERED", data, closedTabCount: cleanupTabIds.length };
+      return { ok: true, code: "LIVE_WORKSPACE_RECOVERED", data, closedTabCount: cleanupTabIds.length, visibility };
     }
     if (message.type === "ESPN_CONTEXT") {
       espnContext = { ...message.payload, tabId: sender.tab?.id };

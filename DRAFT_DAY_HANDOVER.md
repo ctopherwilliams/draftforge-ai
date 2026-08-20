@@ -13,7 +13,7 @@ For implementation history and exclusions, see [AGENT_HANDOFF.md](AGENT_HANDOFF.
 | Authenticated ESPN tab | Execution surface: provide authoritative rules, room state, player availability, bids, picks, roster confirmation, sound state, and Autopick state. |
 | Chrome companion | Narrow enforcement layer: act only in the exact imported tab, league, team, clock, player/nominee, and offer state. |
 
-Keep Codex open in the desktop app and exactly two controlled Chrome tabs: `http://127.0.0.1:3000` and the one authenticated ESPN lobby or live room. Do not use a development server, multiple ESPN draft rooms, or a stale dashboard on draft day.
+Keep Codex open in the desktop app and exactly two controlled Chrome tabs: `http://127.0.0.1:3000` and the one authenticated ESPN lobby or live room. During the live draft, keep those as the active tab in separate Chrome windows so Chrome cannot background-throttle ESPN's exact action timers. Do not use a development server, multiple ESPN draft rooms, or a stale dashboard on draft day.
 
 ## Non-negotiable safety rules
 
@@ -45,6 +45,7 @@ Last updated: 2026-08-20.
 | Cold-start and recovery | Server, tab, extension, source, stale-action, and ESPN-Autopick recovery paths passed fail-closed checks; contaminated recovery room `1446060763` remains excluded |
 | One-command READY gates | Saved snake and salary-cap profiles both return `DRAFT_DAY_READY` with every exact setting/source/tab/safety check true |
 | v0.2.17 authenticated pre-room | League `44050`, team `7`: exact QB+OP salary-cap rules, two-QB intelligence profile, 5/5 sources, exactly two Chrome tabs, companion v0.2.17, settings confirmed, Auto-Draft off, and `DRAFT_DAY_READY` |
+| v0.2.17 authenticated recovery and completion | Salary-cap room `1778564226`: deliberate dashboard-reload recovery, exact two-window/two-tab workspace, 14/14 ESPN/app player-and-price parity, $182 spent/$18 remaining, K/DST complete, zero violations, muted sound, ESPN Autopick off, automatic shutdown, and `DRAFT_AUDIT_READY` |
 | Deterministic holdout replay | 2,000 snake + 2,000 salary-cap records replayed byte-for-byte with zero mismatches |
 
 Do not advance an authenticated count without a complete final-ready loopback audit. Current evidence is machine-readable in `simulation/evidence/authenticated-certification-20260818.json`; older excluded rooms remain historical and must not be retroactively counted.
@@ -62,7 +63,7 @@ Do not advance an authenticated count without a complete final-ready loopback au
    npm run check
    ```
 
-3. Confirm the unpacked Chrome companion is version `0.2.17` and loaded from this repository's `extension/` directory. The packaged zip SHA-256 is `30c5b3093f5508f6526d1e70526f2d400a7d45b64b0e9100134e9fd53ac5634f`. This locally verified hardening candidate still requires one supervised authenticated salary-cap recovery rehearsal before it supersedes the v0.2.16 live evidence.
+3. Confirm the unpacked Chrome companion is version `0.2.17` and loaded from this repository's `extension/` directory. The packaged zip SHA-256 is `aa42e7cdd63a2292bb23f6342bd1ad829670db9a322f96f943cdc4ac242ce872`. Its exact-room recovery, two-window throttle protection, salary-cap action path, parity audit, and automatic shutdown are authenticated in room `1778564226`.
 4. Run one cold-start, no-click rehearsal for the exact league. Do not wait until the real room opens to discover an ESPN login, extension, source, firewall, or Chrome-control problem.
 5. Keep the companion zip digest and current release evidence in [AGENT_HANDOFF.md](AGENT_HANDOFF.md).
 
@@ -137,7 +138,7 @@ Only then may Codex arm Auto-Draft for that named room. Arming is scoped to the 
 Routine recovery is Codex-owned. The user should not have to reload the extension, close stale DraftForge tabs, or reconnect an exact practice room by hand.
 
 - `http://localhost:3000/?reloadCompanion=1` reloads the already-installed unpacked companion from disk. Codex then reloads the dashboard so the new bridge context is active. Never run this inside an active action window.
-- A loopback-only `recoverLive=1` command requires the exact generated practice-room league ID, source league ID, team, and season. It fails closed unless exactly one matching ESPN live room exists, reloads that room to re-inject the companion, imports its authenticated settings and roster, and closes only stale DraftForge tabs plus the matching source-league parent. It never closes unrelated ESPN or browser tabs.
+- A loopback-only `recoverLive=1` command requires the exact generated practice-room league ID, source league ID, team, and season. It fails closed unless exactly one matching ESPN live room exists, reloads that room to re-inject the companion, imports its authenticated settings and roster, closes only stale DraftForge tabs plus the matching source-league parent, and makes ESPN the active tab in its own Chrome window while leaving DraftForge active in the command window. It never closes unrelated ESPN or browser tabs.
 - A loopback-only `closePractice=1` command first re-imports the exact room and requires ESPN's league name to begin with `Practice Draft for ` before it will close the tab. It cannot close a real league room through this path.
 - Every recovery turns Auto-Draft off and settings confirmation false. Codex must re-warm five sources if needed, confirm the imported checklist, rerun the live dry run, and explicitly re-arm the exact room.
 
@@ -196,7 +197,7 @@ Record the room ID, format, roster, prices/budget when applicable, audit result,
 - Fresh room imports now forcibly reset Auto-Draft and old-room telemetry. A 30-second ESPN practice room can still start before manual setup finishes, so warm and pass the pre-room gate before room creation and use one bounded import/checklist/arming sequence inside the room. Any ESPN Autopick contamination excludes that room.
 - The final v0.2.16 authenticated snake room removed the repeated late-round submit tail without weakening identity or clock checks: p95 1.140 seconds, p99 1.175 seconds, and maximum 1.184 seconds. The bounded profile activates only after ten confirmed snake roster slots; early snake, salary-cap, and mandatory K/DST paths are unchanged.
 - ESPN practice rooms may disappear after completion; the loopback audit must be captured before the tab is closed or ESPN deletes the state.
-- Companion v0.2.17 preserves a pending salary-cap sale for at most five context polls when ESPN briefly removes the budget surface between nominations. The focused recovery test proves the delayed closing price and subsequent nomination are recorded in order; the bounded limit prevents a malformed room from stalling tracking. Treat this as locally verified until the supervised authenticated recovery rehearsal is complete.
+- Companion v0.2.17 preserves a pending salary-cap sale for at most five context polls when ESPN briefly removes the budget surface between nominations. Focused tests prove the delayed closing price and subsequent nomination are recorded in order, and authenticated room `1778564226` completed with exact 14/14 player-and-price parity after an in-room dashboard recovery. The bounded limit prevents a malformed room from stalling tracking.
 
 ## Maintenance rule
 

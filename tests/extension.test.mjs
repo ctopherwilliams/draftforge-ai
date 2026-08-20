@@ -68,6 +68,8 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(background, /draftForgeTabCount/);
   assert.match(background, /espnTabCount/);
   assert.match(background, /chrome\.runtime\.getManifest\(\)\.version/);
+  assert.match(background, /keepLiveRoomVisible/);
+  assert.match(background, /chrome\.windows\.create\(\{ tabId: roomTabId, focused: false, type: "normal" \}\)/);
   assert.match(background, /ESPN_HEARTBEAT/);
   assert.match(background, /ESPN_ACTION_RESOLVED/);
   assert.match(background, /ESPN_ACTION_SUBMITTED/);
