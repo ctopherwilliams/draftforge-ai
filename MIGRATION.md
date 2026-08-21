@@ -36,7 +36,7 @@ After updating an unpacked companion, reload both the local DraftForge tab and t
 
 ESPN authentication stays in Chrome. No ESPN cookies or credentials are present in this repository.
 
-The current companion release is v0.2.23. The packaged zip SHA-256 is `f187ca6de238d04d863c0c97cc68be1d9b956bcf939bf7fe8e9c609860963f06`; verify that digest after transfer before loading it.
+The current companion release is v0.2.24. The packaged zip SHA-256 is `ff42c6a085f5973d35e34e9766ca1b90c563be6a337998c8d4a17069f1dbe3b1`; verify that digest after transfer before loading it.
 
 ## 4. Move hosting to the new Codex account
 
@@ -60,7 +60,7 @@ The code, production build, public data adapters, and local tests pass. The issu
 - one complete authenticated salary-cap mock covering nominations, strategic bids/walkaways, max-bid and one-dollar reserve enforcement; and
 - 20 complete deterministic full-draft simulations per format on the frozen candidate, plus fail-closed regression coverage for wrong league/tab, nominee, clock, player, pick, offer, budget, and changed controls.
 
-The current v0.2.23 gate passes 190/190 tests plus the ten-scenario visual certification. Its exact live-room handoff, deliberate local-server interruption/recovery, 16/16 snake parity, and automatic shutdown were authenticated in practice room `1221310079`; v0.2.23 differs from that v0.2.22 live runtime only by read-only source-tab disambiguation and corrected resolved-player telemetry attribution.
+The current v0.2.24 gate passes 201/201 tests plus the ten-scenario visual certification with zero drift. Its exact live-room handoff, deliberate local-server interruption/recovery, 16/16 snake parity, and automatic shutdown were authenticated in practice room `1221310079`. v0.2.24 preserves that live action and engine path while adding fail-closed one-dashboard election, exact owned-tab cleanup, healthy-room reuse, managed-cleanup readiness, and automatic practice-workspace closure only after a final-ready parity audit.
 
 The robustness gate also supports immutable live five-source capture/replay and sequential independent-seed matrices. Generated snapshot JSON and Monte Carlo outputs are intentionally ignored by Git; reproduce them from a fresh authenticated ESPN import rather than copying browser credentials or profiles.
 

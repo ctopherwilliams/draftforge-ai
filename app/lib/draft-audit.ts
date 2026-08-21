@@ -63,6 +63,7 @@ export type DraftRuntimeDiagnostics = {
   browserTabCount: number;
   draftForgeTabCount: number;
   espnTabCount: number;
+  managedCleanupReady: boolean;
 };
 
 export type DraftAuditSnapshot = {
@@ -212,6 +213,7 @@ export function isDraftAuditSnapshot(value: unknown): value is DraftAuditSnapsho
   }
   if (!runtime || !Number.isFinite(Date.parse(String(runtime.capturedAt || ""))) || !String(runtime.extensionVersion || "").trim()) return false;
   if (![runtime.browserTabCount, runtime.draftForgeTabCount, runtime.espnTabCount].every((count) => Number.isInteger(count) && Number(count) >= 0)) return false;
+  if (runtime.managedCleanupReady !== true) return false;
   if (!safety || !draft || !Number.isInteger(draft.totalPicks) || Number(draft.totalPicks) < 0) return false;
   if ([
     safety.settingsConfirmed,

@@ -16,6 +16,7 @@ Post-draft league management is intentionally out of scope.
 - Deterministic, inspectable consensus using ESPN, Fantasy Football Calculator, MyFantasyLeague, Tradyr, and The GNG
 - Corroborated value, sleeper, and deep-stash signals derived from model-versus-market disagreement within those same five sources
 - Source health, weights, timestamps, and player-level provenance in the UI
+- Companion-managed one-dashboard election and final-audit cleanup for exact generated practice workspaces
 - ESPN credentials remain in the browser and are never persisted by DraftForge
 
 ## Run locally
@@ -69,7 +70,7 @@ Draft day is a cold-start workflow, not a continuation of whatever tabs or serve
 4. Before creating the room, use **Confirm + arm live draft** once. The companion stores a bounded one-shot watch for the exact authenticated league, team, season, rules, and draft type. When ESPN creates the room, it binds only one exact match, reuses the authenticated player pool, verifies the generated room's rules, mutes sound, requires ESPN Autopick off, and revalidates the exact tab and action surface before Auto-Draft can turn on.
    For a regulation-timer room, also rerun the command with `--phase live`; it requires the second live-room checklist, muted sound, and resolved ESPN action surface. A short practice room may use the dashboard's equivalent in-process checklist so terminal startup does not consume the opening clock.
 5. Only then start the guarded loop. It polls cheap DOM state off-clock, calls the production engine only for an own snake turn or active salary-cap decision, submits through the shared action implementation, and requires ESPN roster confirmation.
-6. At completion, verify the exact roster, prices/budget, mandatory slots, position caps, one-dollar reserve, Autopick-off state, muted sound, and close the completed ESPN tab while keeping the dashboard available for the next rehearsal.
+6. At completion, verify the exact roster, prices/budget, mandatory slots, position caps, one-dollar reserve, Autopick-off state, and muted sound. After the final-ready parity audit, the companion closes only the exact generated practice room, its matching source-league tab, and stale DraftForge dashboards. It never treats unrelated ESPN or user tabs as cleanup targets.
 
    The dashboard also keeps a sanitized, in-memory final-certification snapshot for up to 24 hours. It is reachable only through loopback and contains no cookies, member IDs, or opponent identities. Require independent final proof with:
 

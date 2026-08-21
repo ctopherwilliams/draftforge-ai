@@ -7,6 +7,11 @@ import { DRAFTFORGE_APP_ORIGINS, authorizeRuntimeMessage, isLocalDraftForgeSende
 import { selectRecoveryWorkspace } from "./recovery-targets.js";
 import { recoverExactDraftRoomContext } from "./recovery-context.js";
 import { contextCanTriggerLiveRoomWatch, createLiveRoomWatch, liveLeagueMatchesWatch } from "./live-room-watch.js";
+import {
+  completedAuditProvesPracticeRoom,
+  practiceWorkspaceCleanupTabIds,
+  selectManagedWorkspaceCleanup,
+} from "./workspace-lifecycle.js";
 
 const appTabs = new Set();
 let espnContext = null;
@@ -29,6 +34,23 @@ async function runtimeDiagnostics() {
     browserTabCount: tabs.length,
     draftForgeTabCount: tabs.filter((tab) => DRAFTFORGE_APP_ORIGINS.includes(originForTab(tab))).length,
     espnTabCount: tabs.filter((tab) => originForTab(tab) === "https://fantasy.espn.com").length,
+    managedCleanupReady: true,
+  };
+}
+
+async function cleanManagedLocalWorkspace(senderTabId, payload = {}) {
+  const selection = selectManagedWorkspaceCleanup(await chrome.tabs.query({}), {
+    senderTabId,
+    appOrigins: DRAFTFORGE_APP_ORIGINS,
+    ownedBlankTabIds: payload.ownedBlankTabIds,
+    electNewest: payload.electNewest === true,
+  });
+  if (!selection.ok) return selection;
+  if (selection.cleanupTabIds.length) await chrome.tabs.remove(selection.cleanupTabIds);
+  return {
+    ...selection,
+    closedTabIds: selection.cleanupTabIds,
+    runtime: await runtimeDiagnostics(),
   };
 }
 
@@ -242,8 +264,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message.type === "APP_HELLO") {
       if (sender.tab?.id) appTabs.add(sender.tab.id);
+      const workspace = isLocalDraftForgeSenderUrl(sender.url || sender.tab?.url || "") && sender.tab?.id
+        ? await cleanManagedLocalWorkspace(sender.tab.id, { electNewest: true })
+        : null;
       const context = await findEspnContext();
-      return { ready: true, espnOpen: Boolean(context), context, runtime: await runtimeDiagnostics() };
+      return { ready: true, espnOpen: Boolean(context), context, workspace, runtime: await runtimeDiagnostics() };
     }
     if (message.type === "GET_RUNTIME_DIAGNOSTICS") {
       return { ok: true, runtime: await runtimeDiagnostics() };
@@ -300,19 +325,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!isLocalDraftForgeSenderUrl(sender.url || sender.tab?.url || "") || !sender.tab?.id) {
         return { ok: false, code: "WORKSPACE_CLEANUP_FORBIDDEN", message: "Workspace cleanup is available only from the active local DraftForge tab." };
       }
-      const requestedBlankIds = new Set((Array.isArray(message.payload?.ownedBlankTabIds) ? message.payload.ownedBlankTabIds : [])
-        .map(Number)
-        .filter(Number.isInteger));
-      const tabs = await chrome.tabs.query({});
-      const staleAppTabIds = tabs.filter((tab) => tab.id !== sender.tab.id && DRAFTFORGE_APP_ORIGINS.includes(originForTab(tab)))
-        .map((tab) => tab.id)
-        .filter(Number.isInteger);
-      const exactOwnedBlankTabIds = tabs.filter((tab) => requestedBlankIds.has(Number(tab.id)) && tab.url === "about:blank")
-        .map((tab) => tab.id)
-        .filter(Number.isInteger);
-      const cleanupTabIds = [...new Set([...staleAppTabIds, ...exactOwnedBlankTabIds])];
-      if (cleanupTabIds.length) await chrome.tabs.remove(cleanupTabIds);
-      return { ok: true, code: "LOCAL_WORKSPACE_CLEAN", closedTabIds: cleanupTabIds, runtime: await runtimeDiagnostics() };
+      return cleanManagedLocalWorkspace(sender.tab.id, message.payload);
     }
     if (message.type === "CLOSE_PRACTICE_ROOM") {
       if (!isLocalDraftForgeSenderUrl(sender.url || sender.tab?.url || "")) {
@@ -327,12 +340,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         appOrigins: DRAFTFORGE_APP_ORIGINS,
       });
       if (!recovery.ok) return { ...recovery, message: "DraftForge could not identify one exact ESPN practice room without ambiguity." };
-      await chrome.tabs.reload(recovery.roomTabId);
-      const context = await waitForExactDraftRoomContext(
-        message.payload?.draftLeagueId,
-        Number(message.payload?.teamId),
-        recovery.roomTabId,
-      );
+      const { context, reloadedRoom } = await recoverExactDraftRoomContext({
+        draftLeagueId: message.payload?.draftLeagueId,
+        teamId: Number(message.payload?.teamId),
+        roomTabId: recovery.roomTabId,
+        findContext: findEspnContext,
+        reloadTab: (tabId) => chrome.tabs.reload(tabId),
+        waitForContext: waitForExactDraftRoomContext,
+      });
       const verificationContext = context || {
         leagueId: String(message.payload?.draftLeagueId || ""),
         teamId: Number(message.payload?.teamId),
@@ -345,16 +360,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         data = await importLeague(verificationContext);
       } catch {
         const proof = message.payload?.completedAuditProof;
-        const generatedPracticeRoom = String(message.payload?.draftLeagueId || "") !== String(message.payload?.sourceLeagueId || "");
-        const exactCompletedAudit = proof?.finalReady === true
-          && proof?.parity === true
-          && proof?.autoDraftOff === true
-          && String(proof?.leagueId) === String(message.payload?.draftLeagueId)
-          && Number(proof?.teamId) === Number(message.payload?.teamId)
-          && Number(proof?.tabId) === Number(recovery.roomTabId);
-        if (generatedPracticeRoom && exactCompletedAudit) {
-          await chrome.tabs.remove(recovery.roomTabId);
-          return { ok: true, code: "PRACTICE_ROOM_CLOSED_AFTER_AUDIT", closedTabId: recovery.roomTabId, verifiedFromCompletedAudit: true };
+        const exactCompletedAudit = completedAuditProvesPracticeRoom({
+          proof,
+          draftLeagueId: message.payload?.draftLeagueId,
+          sourceLeagueId: message.payload?.sourceLeagueId,
+          teamId: message.payload?.teamId,
+          roomTabId: recovery.roomTabId,
+        });
+        if (exactCompletedAudit) {
+          const cleanupTabIds = practiceWorkspaceCleanupTabIds(recovery, sender.tab?.id);
+          if (cleanupTabIds.length) await chrome.tabs.remove(cleanupTabIds);
+          return {
+            ok: true,
+            code: "PRACTICE_ROOM_CLOSED_AFTER_AUDIT",
+            closedTabId: recovery.roomTabId,
+            closedTabIds: cleanupTabIds,
+            verifiedFromCompletedAudit: true,
+            reloadedRoom,
+            runtime: await runtimeDiagnostics(),
+          };
         }
         return { ok: false, code: "PRACTICE_CLOSE_VERIFICATION_FAILED", message: "The exact ESPN practice room could not be verified before cleanup." };
       }
@@ -366,8 +390,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!String(data.league?.name || "").startsWith("Practice Draft for ")) {
         return { ok: false, code: "PRACTICE_ROOM_REQUIRED", message: "DraftForge refused to close a room that ESPN did not identify as a practice draft." };
       }
-      await chrome.tabs.remove(recovery.roomTabId);
-      return { ok: true, code: "PRACTICE_ROOM_CLOSED", closedTabId: recovery.roomTabId, verifiedFromLiveContext: Boolean(context) };
+      const cleanupTabIds = practiceWorkspaceCleanupTabIds(recovery, sender.tab?.id);
+      if (cleanupTabIds.length) await chrome.tabs.remove(cleanupTabIds);
+      return {
+        ok: true,
+        code: "PRACTICE_ROOM_CLOSED",
+        closedTabId: recovery.roomTabId,
+        closedTabIds: cleanupTabIds,
+        verifiedFromLiveContext: Boolean(context),
+        reloadedRoom,
+        runtime: await runtimeDiagnostics(),
+      };
     }
     if (message.type === "RECOVER_LIVE_WORKSPACE") {
       if (!isLocalDraftForgeSenderUrl(sender.url || sender.tab?.url || "")) {
@@ -397,6 +430,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       const data = await importLeague(context);
       espnContext = { ...context, season: data.league.season };
+      data.workspaceRecovery = {
+        recovered: true,
+        sourceLeagueId: String(message.payload?.sourceLeagueId || ""),
+        roomLeagueId: String(data.league.id),
+        roomTabId: recovery.roomTabId,
+      };
       const cleanupTabIds = [...new Set([...recovery.staleAppTabIds, ...recovery.sourceLeagueTabIds])]
         .filter((tabId) => tabId !== recovery.roomTabId && tabId !== sender.tab.id);
       if (cleanupTabIds.length) await chrome.tabs.remove(cleanupTabIds);

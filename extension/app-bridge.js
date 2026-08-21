@@ -23,7 +23,7 @@ window.addEventListener("message", async (event) => {
     if (event.data.type === "APP_HELLO") {
       publish("EXTENSION_READY", response ?? { ready: true });
     } else if (response) {
-      publish("COMMAND_RESULT", response);
+      publish("COMMAND_RESULT", { ...response, commandType: event.data.type });
     }
   } catch (error) {
     publish("EXTENSION_ERROR", { message: error instanceof Error ? error.message : String(error) });

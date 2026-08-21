@@ -45,11 +45,12 @@ test("privileged runtime messages require the exact DraftForge or ESPN sender or
 });
 
 test("draft actions fail closed and private ESPN credentials are not persisted", async () => {
-  const [background, content, bridge, page] = await Promise.all([
+  const [background, content, bridge, page, workspaceLifecycle] = await Promise.all([
     readFile(new URL("background.js", root), "utf8"),
     readFile(new URL("espn-content.js", root), "utf8"),
     readFile(new URL("app-bridge.js", root), "utf8"),
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("workspace-lifecycle.js", root), "utf8"),
   ]);
   assert.doesNotMatch(background, /chrome\.storage|espn_s2|SWID/);
   assert.match(background, /authorizeRuntimeMessage\(message\?\.type, sender\.url \|\| sender\.tab\?\.url \|\| ""\)/);
@@ -68,17 +69,24 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(background, /browserTabCount/);
   assert.match(background, /draftForgeTabCount/);
   assert.match(background, /espnTabCount/);
+  assert.match(background, /managedCleanupReady: true/);
   assert.match(background, /chrome\.runtime\.getManifest\(\)\.version/);
   assert.match(background, /keepLiveRoomVisible/);
   assert.match(background, /chrome\.windows\.create\(\{ tabId: roomTabId, focused: false, type: "normal" \}\)/);
   assert.match(background, /PRACTICE_CLOSE_VERIFICATION_FAILED/);
   assert.match(background, /PRACTICE_CLOSE_IDENTITY_MISMATCH/);
   assert.match(background, /PRACTICE_ROOM_CLOSED_AFTER_AUDIT/);
-  assert.match(background, /generatedPracticeRoom && exactCompletedAudit/);
-  assert.match(background, /Number\(proof\?\.tabId\) === Number\(recovery\.roomTabId\)/);
+  assert.match(background, /if \(exactCompletedAudit\)/);
+  assert.match(workspaceLifecycle, /Number\(proof\?\.tabId\) === Number\(roomTabId\)/);
+  assert.match(workspaceLifecycle, /url\.href === "about:blank"/);
   assert.match(background, /CLEAN_LOCAL_WORKSPACE/);
-  assert.match(background, /LOCAL_WORKSPACE_CLEAN/);
-  assert.match(background, /requestedBlankIds\.has\(Number\(tab\.id\)\) && tab\.url === "about:blank"/);
+  assert.match(workspaceLifecycle, /LOCAL_WORKSPACE_CLEAN/);
+  assert.match(background, /selectManagedWorkspaceCleanup/);
+  assert.match(background, /electNewest: true/);
+  assert.match(background, /completedAuditProvesPracticeRoom/);
+  assert.match(background, /practiceWorkspaceCleanupTabIds/);
+  assert.match(background, /recoverExactDraftRoomContext\(\{/);
+  assert.match(background, /data\.workspaceRecovery/);
   assert.match(background, /startsWith\("Practice Draft for "\)/);
   assert.match(background, /ESPN_HEARTBEAT/);
   assert.match(background, /ESPN_ACTION_RESOLVED/);
@@ -126,7 +134,11 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.doesNotMatch(content, /return executeAction\(/);
   assert.match(bridge, /function announceReady\(\)/);
   assert.match(bridge, /event\.data\.type === "APP_HELLO"/);
+  assert.match(bridge, /commandType: event\.data\.type/);
   assert.match(page, /sendToExtension\("APP_HELLO"\)/);
+  assert.match(page, /runtimeDiagnostics\?\.managedCleanupReady === true/);
+  assert.match(page, /sendToExtension\("CLOSE_PRACTICE_ROOM"/);
+  assert.match(page, /resolvePracticeRoomCleanupRequest/);
   assert.match(page, /sendToExtension\("ARM_LIVE_ROOM_WATCH"/);
   assert.match(page, /sourceTabId: context\.tabId/);
   assert.match(page, /autoArmRequested: true/);
