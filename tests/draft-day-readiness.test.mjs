@@ -23,6 +23,7 @@ function audit(overrides = {}) {
       browserTabCount: 2,
       draftForgeTabCount: 1,
       espnTabCount: 1,
+      managedCleanupReady: true,
     },
     safety: {
       settingsConfirmed: true,
@@ -74,6 +75,13 @@ test("live gate detects extension, source, tab, sound, autopick, and markup reco
   for (const blocker of ["exactTabBound", "extensionConnected", "fiveSources", "espnAutopickOff", "actionHealthy", "liveChecklistReady", "inDraftRoom", "soundMuted"]) {
     assert.ok(result.blockers.includes(blocker), blocker);
   }
+});
+
+test("readiness rejects a companion without managed workspace cleanup", () => {
+  const unmanaged = audit({ runtime: { ...audit().runtime, managedCleanupReady: false } });
+  const result = evaluateDraftDayReadiness({ snapshot: unmanaged, expected, now: Date.parse("2026-08-18T12:00:05.000Z") });
+  assert.equal(result.ready, false);
+  assert.ok(result.blockers.includes("managedWorkspaceCleanup"));
 });
 
 test("live and complete phases cannot be confused", () => {

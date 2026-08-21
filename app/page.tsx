@@ -46,6 +46,11 @@ import {
   type SalaryCapDecisionObservation,
 } from "./lib/salary-cap-evidence";
 import { mergeAuthenticatedSleeperEvidence } from "./lib/sleeper-evidence";
+import {
+  canRetryPracticeRoomCleanup,
+  MAX_AUTOMATIC_PRACTICE_CLEANUP_ATTEMPTS,
+  resolvePracticeRoomCleanupRequest,
+} from "./lib/practice-room-cleanup";
 
 const DEMO_PLAYERS: DraftPlayer[] = [
   { id: 1, name: "Ja'Marr Chase", team: "CIN", pos: "WR", rank: 1, adp: 1.4, auction: 61, projected: 312 },
@@ -195,6 +200,7 @@ export default function Home() {
   const espnPlayersRef = useRef<DraftPlayer[]>(DEMO_PLAYERS);
   const activeLeagueSettingsRef = useRef<LeagueSettings>(DEMO_LEAGUE);
   const activeLeagueRef = useRef("demo");
+  const activeSourceLeagueRef = useRef("demo");
   const activeEspnTabRef = useRef<number | null>(null);
   const activeEspnTeamRef = useRef<number | null>(null);
   const actionRequestSequenceRef = useRef(0);
@@ -223,6 +229,8 @@ export default function Home() {
   } | null>(null);
   const draftAuditDigestRef = useRef("");
   const draftAuditPendingRef = useRef("");
+  const finalizedPracticeRoomRef = useRef("");
+  const practiceRoomCleanupAttemptRef = useRef({ key: "", attempts: 0 });
   const actionTelemetryRef = useRef<DraftActionTelemetryEvent[]>([]);
   const pendingActionTelemetryRef = useRef(new Map<number, {
     sentAt: number;
@@ -257,6 +265,9 @@ export default function Home() {
 
   function activateProfile(profile: DraftProfile, roomContext?: EspnContext) {
     activeLeagueRef.current = profile.league.id;
+    activeSourceLeagueRef.current = profile.league.id;
+    finalizedPracticeRoomRef.current = "";
+    practiceRoomCleanupAttemptRef.current = { key: "", attempts: 0 };
     activeLeagueSettingsRef.current = profile.league;
     // A saved profile does not prove which currently-open ESPN tab supplied
     // it. Require a fresh explicit import before it can become actionable.
@@ -296,6 +307,9 @@ export default function Home() {
 
   function startAnotherLeague() {
     activeLeagueRef.current = "demo";
+    activeSourceLeagueRef.current = "demo";
+    finalizedPracticeRoomRef.current = "";
+    practiceRoomCleanupAttemptRef.current = { key: "", attempts: 0 };
     activeLeagueSettingsRef.current = DEMO_LEAGUE;
     activeEspnTabRef.current = null;
     setActiveEspnTabId(null);
@@ -332,6 +346,9 @@ export default function Home() {
   function previewDraftFormat(draftType: "SNAKE" | "AUCTION") {
     const previewLeague = draftType === "AUCTION" ? DEMO_SALARY_LEAGUE : DEMO_LEAGUE;
     activeLeagueRef.current = previewLeague.id;
+    activeSourceLeagueRef.current = previewLeague.id;
+    finalizedPracticeRoomRef.current = "";
+    practiceRoomCleanupAttemptRef.current = { key: "", attempts: 0 };
     activeLeagueSettingsRef.current = previewLeague;
     activeEspnTabRef.current = null;
     setActiveEspnTabId(null);
@@ -460,6 +477,13 @@ export default function Home() {
         );
         const importedTabId = Number(importedContext?.tabId);
         activeLeagueRef.current = importedLeague.id;
+        activeSourceLeagueRef.current = String(
+          data.roomWatch?.sourceLeagueId
+          || data.workspaceRecovery?.sourceLeagueId
+          || importedLeague.id,
+        );
+        finalizedPracticeRoomRef.current = "";
+        practiceRoomCleanupAttemptRef.current = { key: "", attempts: 0 };
         activeLeagueSettingsRef.current = importedLeague;
         activeEspnTabRef.current = Number.isInteger(importedTabId) ? importedTabId : null;
         setActiveEspnTabId(Number.isInteger(importedTabId) ? importedTabId : null);
@@ -664,6 +688,22 @@ export default function Home() {
         if (payload.runtime) setRuntimeDiagnostics(payload.runtime as DraftRuntimeDiagnostics);
         setExtension("connected");
         setActionState("Exact ESPN live-room handoff armed. Open the league-specific draft; DraftForge will bind and foreground the command center automatically.");
+      }
+      if (type === "COMMAND_RESULT" && payload?.commandType === "CLOSE_PRACTICE_ROOM") {
+        if (payload?.ok === true) {
+          if (payload.runtime) setRuntimeDiagnostics(payload.runtime as DraftRuntimeDiagnostics);
+          setExtension("connected");
+          setActionState("Final audit passed. DraftForge closed the verified practice room and its exact stale workspace tabs.");
+        } else {
+          const attempts = practiceRoomCleanupAttemptRef.current.attempts;
+          if (canRetryPracticeRoomCleanup(attempts)) {
+            finalizedPracticeRoomRef.current = "";
+            setActionState(`Draft complete. Practice-room cleanup stayed fail closed; exact retry ${attempts + 1}/${MAX_AUTOMATIC_PRACTICE_CLEANUP_ATTEMPTS} is queued.`);
+          } else {
+            setActionState(`Draft complete. Practice-room cleanup stopped after ${MAX_AUTOMATIC_PRACTICE_CLEANUP_ATTEMPTS} exact attempts; no unrelated tab was touched.`);
+          }
+        }
+        return;
       }
       if (type === "COMMAND_RESULT" && payload?.ok === false) {
         // SUBMIT_ACTION is broadcast as DF_ACTION_RESULT first so its retry or
@@ -992,6 +1032,7 @@ export default function Home() {
     { label: `${league.scoringLabel} scoring and ${league.scoringRules} ESPN scoring rules`, ok: Boolean(league.scoringLabel) && league.scoringRules > 0 },
     { label: `${espnPlayers.length} ESPN players with projections/market values`, ok: espnPlayers.length >= league.size * league.rosterSize },
     { label: `${healthySources.length + 1}/5 fresh deterministic sources`, ok: healthySources.length === 4 },
+    { label: "Companion-managed one-dashboard workspace cleanup", ok: runtimeDiagnostics?.managedCleanupReady === true },
     { label: `${strategyInfo.label} strategy and ${league.draftType === "AUCTION" ? "$" + Object.values(auctionPlan.positionBudgets).reduce((sum, amount) => sum + amount, 0) + " planned" : "position priorities"}`, ok: league.draftType !== "AUCTION" || Object.values(auctionPlan.positionBudgets).reduce((sum, amount) => sum + amount, 0) === league.auctionBudget },
   ];
   const preflightReady = preflightChecks.every((check) => check.ok);
@@ -1447,11 +1488,29 @@ export default function Home() {
             body: JSON.stringify({ operation: "AUDIT", audit: snapshot }),
             cache: "no-store",
           });
-          const result = await response.json().catch(() => null) as { code?: string } | null;
+          const result = await response.json().catch(() => null) as {
+            code?: string;
+            evaluation?: { finalReady?: boolean; parity?: boolean };
+          } | null;
           if (!response.ok || result?.code !== "DRAFT_AUDIT_RECORDED") throw new Error(result?.code || `HTTP_${response.status}`);
           if (draftAuditPendingRef.current === digest) {
             draftAuditDigestRef.current = digest;
             draftAuditPendingRef.current = "";
+          }
+          const cleanup = resolvePracticeRoomCleanupRequest({
+            sourceLeagueId: activeSourceLeagueRef.current,
+            snapshot,
+            evaluation: result?.evaluation,
+            finalizedKey: finalizedPracticeRoomRef.current,
+          });
+          if (cleanup) {
+            finalizedPracticeRoomRef.current = cleanup.key;
+            const previousAttempt = practiceRoomCleanupAttemptRef.current;
+            practiceRoomCleanupAttemptRef.current = {
+              key: cleanup.key,
+              attempts: previousAttempt.key === cleanup.key ? previousAttempt.attempts + 1 : 1,
+            };
+            sendToExtension("CLOSE_PRACTICE_ROOM", cleanup.payload);
           }
           return;
         } catch {

@@ -25,6 +25,7 @@ function snapshot(overrides = {}) {
       browserTabCount: 2,
       draftForgeTabCount: 1,
       espnTabCount: 1,
+      managedCleanupReady: true,
     },
     safety: {
       settingsConfirmed: true,
@@ -81,6 +82,13 @@ test("draft-day doctor fails closed on extra tabs, stale import, or package drif
   for (const blocker of ["authenticatedImportFresh", "exactTwoChromeTabs", "extensionPackageIntegrity"]) {
     assert.ok(result.blockers.includes(blocker), blocker);
   }
+});
+
+test("draft-day doctor rejects an extension without managed cleanup capability", () => {
+  const candidate = snapshot({ runtime: { ...snapshot().runtime, managedCleanupReady: false } });
+  const result = evaluateDraftDayDoctor({ snapshot: candidate, expected, system: system(), now });
+  assert.equal(result.ready, false);
+  assert.ok(result.blockers.includes("managedWorkspaceCleanup"));
 });
 
 test("live doctor enforces the five-second recheck SLO and live safety gate", () => {

@@ -78,6 +78,7 @@ export function evaluateDraftDayDoctor(input: {
     exactTwoChromeTabs: runtime.browserTabCount === 2,
     oneDraftForgeTab: runtime.draftForgeTabCount === 1,
     oneEspnTab: runtime.espnTabCount === 1,
+    managedWorkspaceCleanup: runtime.managedCleanupReady === true,
     manifestVersionPinned: system.manifestVersion === system.expectedExtensionVersion,
     installedExtensionVersionPinned: runtime.extensionVersion === system.expectedExtensionVersion,
     extensionPackageIntegrity: Boolean(system.extensionPackageSha256)

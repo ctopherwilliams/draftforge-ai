@@ -53,6 +53,7 @@ export function evaluateDraftDayReadiness(input: {
     currentPublisher: Boolean(snapshot.binding.commandCenterSessionId && Number.isFinite(Date.parse(String(snapshot.binding.commandCenterStartedAt || "")))),
     settingsConfirmed: snapshot.safety.settingsConfirmed === true,
     extensionConnected: snapshot.safety.extensionConnected === true,
+    managedWorkspaceCleanup: snapshot.runtime.managedCleanupReady === true,
     fiveSources: snapshot.safety.sourceCoverage === 5,
     exactSourceSet: JSON.stringify([...new Set(snapshot.safety.sourceIds)].sort()) === JSON.stringify(["espn", "ffc", "gng", "mfl", "tradyr"]),
     autoDraftOff: snapshot.safety.autoDraft === false,

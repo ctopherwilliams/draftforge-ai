@@ -55,6 +55,7 @@ function snapshot(overrides = {}) {
       browserTabCount: 2,
       draftForgeTabCount: 1,
       espnTabCount: 1,
+      managedCleanupReady: true,
     },
     safety: {
       settingsConfirmed: true,
