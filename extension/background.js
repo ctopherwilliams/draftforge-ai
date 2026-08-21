@@ -5,9 +5,12 @@ import { createPollCoordinator } from "./poll-coordinator.js";
 import { selectUniqueEspnContext } from "./context-selector.js";
 import { DRAFTFORGE_APP_ORIGINS, authorizeRuntimeMessage, isLocalDraftForgeSenderUrl } from "./origin-policy.js";
 import { selectRecoveryWorkspace } from "./recovery-targets.js";
+import { recoverExactDraftRoomContext } from "./recovery-context.js";
+import { contextCanTriggerLiveRoomWatch, createLiveRoomWatch, liveLeagueMatchesWatch } from "./live-room-watch.js";
 
 const appTabs = new Set();
 let espnContext = null;
+let liveRoomWatch = null;
 const draftPolls = createPollCoordinator({ minIntervalMs: 1800 });
 const CONNECT_CONTEXT_TIMEOUT_MS = 4000;
 const CONNECT_CONTEXT_RETRY_MS = 150;
@@ -60,11 +63,11 @@ async function findEspnContext(expectedLeagueId, expectedTabId) {
   return selectUniqueEspnContext(contexts, expectedLeagueId);
 }
 
-async function waitForEspnContext(expectedLeagueId) {
-  if (!expectedLeagueId) return findEspnContext();
+async function waitForEspnContext(expectedLeagueId, expectedTabId) {
+  if (!expectedLeagueId) return findEspnContext(undefined, expectedTabId);
   const deadline = Date.now() + CONNECT_CONTEXT_TIMEOUT_MS;
   do {
-    const context = await findEspnContext(expectedLeagueId);
+    const context = await findEspnContext(expectedLeagueId, expectedTabId);
     if (context) return context;
     await new Promise((resolve) => setTimeout(resolve, CONNECT_CONTEXT_RETRY_MS));
   } while (Date.now() < deadline);
@@ -135,10 +138,16 @@ async function fetchPlayers(leagueId, season, scoringLabel) {
   return normalizePlayers(raw);
 }
 
-async function importLeague(context) {
+async function importLeagueMetadata(context) {
   const season = Number(context.season || new Date().getFullYear());
   const raw = await espnFetch(leagueUrl(context.leagueId, season, ["mSettings", "mTeam", "mRoster", "mDraftDetail"]));
   const league = normalizeSettings(raw, context);
+  return { league, raw };
+}
+
+async function importLeague(context) {
+  const { league, raw } = await importLeagueMetadata(context);
+  const season = Number(context.season || new Date().getFullYear());
   const players = await fetchPlayers(context.leagueId, season, league.scoringLabel);
   return { league, players, picks: normalizeImportPicks(raw), context };
 }
@@ -162,6 +171,64 @@ async function pollDraftIfDue(context) {
   }
 }
 
+async function recoverWatchedLiveRoom(context, senderTab) {
+  const watch = liveRoomWatch;
+  const roomTabId = Number(senderTab?.id);
+  if (!contextCanTriggerLiveRoomWatch(watch, { ...context, tabId: roomTabId })) return null;
+  watch.processingTabId = roomTabId;
+  try {
+    const exactContext = await findEspnContext(context.leagueId, roomTabId);
+    if (!contextCanTriggerLiveRoomWatch(watch, exactContext)) return null;
+    // The authenticated source league already supplied the full ESPN player
+    // pool. Re-fetch only the generated room's settings/picks so the exact
+    // rules and practice-room name are still verified without spending the
+    // 30-second opening countdown downloading the same 500 players again.
+    const { league, raw } = await importLeagueMetadata(exactContext);
+    const data = {
+      league,
+      players: watch.sourcePlayers,
+      picks: normalizeImportPicks(raw),
+      context: exactContext,
+    };
+    if (!liveLeagueMatchesWatch(watch, data.league, exactContext)) {
+      await broadcast("DF_EXTENSION_ERROR", {
+        code: "LIVE_ROOM_WATCH_IDENTITY_MISMATCH",
+        message: "DraftForge saw an ESPN room, but its authenticated league rules did not exactly match the armed draft.",
+      });
+      return null;
+    }
+    espnContext = { ...exactContext, season: data.league.season };
+    data.runtime = await runtimeDiagnostics();
+    data.roomWatch = {
+      recovered: true,
+      sourceLeagueId: watch.sourceLeagueId,
+      roomLeagueId: String(data.league.id),
+      appTabId: watch.appTabId,
+      roomTabId,
+      reloadedRoom: false,
+      autoArmRequested: watch.autoArmRequested === true,
+      reusedAuthenticatedPlayerPool: Array.isArray(watch.sourcePlayers) && watch.sourcePlayers.length > 0,
+    };
+    liveRoomWatch = null;
+    // Broadcast the verified room first. Window separation, source cleanup,
+    // and focus are presentation work and must not consume the opening clock.
+    await broadcast("DF_IMPORT_SUCCESS", data);
+    const appTab = await chrome.tabs.get(watch.appTabId);
+    data.roomWatch.visibility = await keepLiveRoomVisible(roomTabId, appTab);
+    if (Number.isInteger(watch.sourceTabId) && watch.sourceTabId !== roomTabId) {
+      try { await chrome.tabs.remove(watch.sourceTabId); } catch { /* the source tab may already have closed */ }
+    }
+    if (Number.isInteger(appTab.windowId)) {
+      await chrome.tabs.update(appTab.id, { active: true });
+      try { await chrome.windows.update(appTab.windowId, { focused: true }); } catch { /* focus is helpful, not an identity invariant */ }
+    }
+    return data.roomWatch;
+  } catch (error) {
+    watch.processingTabId = null;
+    throw error;
+  }
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     const authorization = authorizeRuntimeMessage(message?.type, sender.url || sender.tab?.url || "");
@@ -180,6 +247,54 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message.type === "GET_RUNTIME_DIAGNOSTICS") {
       return { ok: true, runtime: await runtimeDiagnostics() };
+    }
+    if (message.type === "ARM_LIVE_ROOM_WATCH") {
+      if (!isLocalDraftForgeSenderUrl(sender.url || sender.tab?.url || "") || !sender.tab?.id) {
+        return { ok: false, code: "LIVE_ROOM_WATCH_FORBIDDEN", message: "Live-room watch is available only from the active local DraftForge tab." };
+      }
+      const requestedLeagueId = String(message.payload?.sourceLeagueId || "");
+      const requestedSourceTabId = Number(message.payload?.sourceTabId);
+      const importedSourceTabId = Number(espnContext?.tabId);
+      const exactSourceTabId = Number.isInteger(requestedSourceTabId) && requestedSourceTabId > 0
+        ? requestedSourceTabId
+        : String(espnContext?.leagueId || "") === requestedLeagueId
+          && Number(espnContext?.teamId) === Number(message.payload?.teamId)
+          && Number(espnContext?.season) === Number(message.payload?.season)
+          && Number.isInteger(importedSourceTabId)
+          && importedSourceTabId > 0
+          ? importedSourceTabId
+          : undefined;
+      const sourceContext = await waitForEspnContext(
+        requestedLeagueId,
+        exactSourceTabId,
+      );
+      if (!sourceContext
+        || sourceContext.inDraftRoom === true
+        || Number(sourceContext.teamId) !== Number(message.payload?.teamId)
+        || Number(sourceContext.season) !== Number(message.payload?.season)) {
+        return { ok: false, code: "LIVE_ROOM_WATCH_SOURCE_MISMATCH", message: "Open the exact authenticated ESPN league before arming the live-room handoff." };
+      }
+      const sourceData = await importLeague(sourceContext);
+      if (String(sourceData.league?.draftType || "") !== String(message.payload?.draftType || "")) {
+        return { ok: false, code: "LIVE_ROOM_WATCH_FORMAT_MISMATCH", message: "The authenticated ESPN draft format changed before the live-room handoff was armed." };
+      }
+      const watch = createLiveRoomWatch({
+        appTabId: sender.tab.id,
+        sourceContext,
+        sourceLeague: sourceData.league,
+        sourcePlayers: sourceData.players,
+        autoArmRequested: message.payload?.autoArmRequested === true,
+      });
+      if (!watch) return { ok: false, code: "LIVE_ROOM_WATCH_INVALID", message: "DraftForge could not prove one exact pre-draft league and team." };
+      appTabs.add(sender.tab.id);
+      liveRoomWatch = watch;
+      return {
+        ok: true,
+        code: "LIVE_ROOM_WATCH_ARMED",
+        message: "Exact ESPN live-room handoff armed.",
+        watch: { sourceLeagueId: watch.sourceLeagueId, teamId: watch.teamId, season: watch.season, expiresAt: watch.expiresAt },
+        runtime: await runtimeDiagnostics(),
+      };
     }
     if (message.type === "CLEAN_LOCAL_WORKSPACE") {
       if (!isLocalDraftForgeSenderUrl(sender.url || sender.tab?.url || "") || !sender.tab?.id) {
@@ -270,12 +385,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       if (!recovery.ok) return { ...recovery, message: "DraftForge could not identify one exact ESPN live room without ambiguity." };
 
-      await chrome.tabs.reload(recovery.roomTabId);
-      const context = await waitForExactDraftRoomContext(
-        message.payload?.draftLeagueId,
-        Number(message.payload?.teamId),
-        recovery.roomTabId,
-      );
+      const { context, reloadedRoom } = await recoverExactDraftRoomContext({
+        draftLeagueId: message.payload?.draftLeagueId,
+        teamId: Number(message.payload?.teamId),
+        roomTabId: recovery.roomTabId,
+        findContext: findEspnContext,
+        reloadTab: (tabId) => chrome.tabs.reload(tabId),
+        waitForContext: waitForExactDraftRoomContext,
+      });
       if (!context) return { ok: false, code: "RECOVERY_CONTEXT_TIMEOUT", message: "The exact ESPN room did not reconnect before the recovery deadline." };
 
       const data = await importLeague(context);
@@ -286,15 +403,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const visibility = await keepLiveRoomVisible(recovery.roomTabId, sender.tab);
       data.runtime = await runtimeDiagnostics();
       await broadcast("DF_IMPORT_SUCCESS", data);
-      return { ok: true, code: "LIVE_WORKSPACE_RECOVERED", data, closedTabCount: cleanupTabIds.length, visibility };
+      return { ok: true, code: "LIVE_WORKSPACE_RECOVERED", data, closedTabCount: cleanupTabIds.length, visibility, reloadedRoom };
     }
     if (message.type === "ESPN_CONTEXT") {
       espnContext = { ...message.payload, tabId: sender.tab?.id };
+      const roomWatch = await recoverWatchedLiveRoom(espnContext, sender.tab);
       await broadcast("DF_ESPN_CONTEXT", espnContext);
       const poll = espnContext.inDraftRoom && espnContext.leagueId
         ? await pollDraftIfDue(espnContext)
         : { skipped: true, reason: "NOT_IN_DRAFT_ROOM" };
-      return { ok: true, poll };
+      return { ok: true, poll, roomWatch };
     }
     if (message.type === "ESPN_HEARTBEAT") {
       const context = { ...message.payload, tabId: sender.tab?.id };

@@ -249,6 +249,7 @@ function getContext() {
       .some((button) => isElementVisible(button) && /^select$/i.test((button.textContent || "").trim()));
   const leagueMatch = window.location.href.match(/league(?:Id|\/)(?:=|\/)(\d+)/i);
   const teamMatch = window.location.href.match(/team(?:Id|\/)(?:=|\/)(\d+)/i);
+  const seasonMatch = window.location.href.match(/(?:seasonId=|\/seasons\/)(\d{4})/i);
   const waitingTeamLink = [...document.querySelectorAll("a[href*='teamId=']")].find((link) => /edit team settings/i.test(link.textContent || ""));
   const waitingTeamMatch = waitingTeamLink?.getAttribute("href")?.match(/[?&]teamId=(\d+)/i);
   const inDraftRoom = /\/football\/draft(?:\/|$)/i.test(url.pathname) || /on the clock:\s*pick|you(?:'|’)re on the clock(?!\s+in\b)|your turn to (?:pick|nominate)|nominate player|current (?:bid|offer)/i.test(text);
@@ -282,6 +283,7 @@ function getContext() {
     url: window.location.href,
     leagueId: url.searchParams.get("leagueId") || leagueMatch?.[1] || null,
     teamId: Number(url.searchParams.get("teamId") || teamMatch?.[1] || waitingTeamMatch?.[1] || 0) || null,
+    season: Number(url.searchParams.get("seasonId") || seasonMatch?.[1] || 0) || null,
     inDraftRoom,
     // A generic ESPN banner can remain mounted while another team is picking.
     // Snake authorization therefore comes only from the exact active-clock

@@ -8,6 +8,10 @@ export function selectUniqueEspnContext(contexts, expectedLeagueId) {
 
   const exactLeague = eligible.filter((context) => String(context.leagueId) === String(expectedLeagueId));
   const liveRooms = exactLeague.filter((context) => context.inDraftRoom === true);
-  const candidates = liveRooms.length ? liveRooms : exactLeague;
-  return candidates.length === 1 ? candidates[0] : null;
+  // Two live rooms are actionably ambiguous and must fail closed. Duplicate
+  // ordinary league pages are read-only sources, so choose the newest one and
+  // bind its exact tab id for every later watch/action check.
+  if (liveRooms.length) return liveRooms.length === 1 ? liveRooms[0] : null;
+  return [...exactLeague]
+    .sort((left, right) => Number(right.lastAccessed || 0) - Number(left.lastAccessed || 0))[0] || null;
 }

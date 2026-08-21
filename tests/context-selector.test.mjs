@@ -26,6 +26,14 @@ test("exact ESPN import fails closed when two live rooms match", () => {
   assert.equal(selected, null);
 });
 
+test("duplicate ordinary league pages select the newest exact read-only source", () => {
+  const selected = selectUniqueEspnContext([
+    { leagueId: "701", tabId: 41, inDraftRoom: false, lastAccessed: 100 },
+    { leagueId: "701", tabId: 42, inDraftRoom: false, lastAccessed: 300 },
+  ], "701");
+  assert.equal(selected?.tabId, 42);
+});
+
 test("ambient ESPN context still prefers the newest live room", () => {
   const selected = selectUniqueEspnContext([
     { leagueId: "701", tabId: 41, inDraftRoom: false, lastAccessed: 300 },

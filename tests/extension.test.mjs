@@ -32,6 +32,7 @@ test("privileged runtime messages require the exact DraftForge or ESPN sender or
   assert.equal(authorizeRuntimeMessage("RELOAD_EXTENSION", localhost).ok, true);
   assert.equal(authorizeRuntimeMessage("CLOSE_PRACTICE_ROOM", localhost).ok, true);
   assert.equal(authorizeRuntimeMessage("RECOVER_LIVE_WORKSPACE", localhost).ok, true);
+  assert.equal(authorizeRuntimeMessage("ARM_LIVE_ROOM_WATCH", localhost).ok, true);
   assert.equal(authorizeRuntimeMessage("SUBMIT_ACTION", espn).ok, false);
   assert.equal(authorizeRuntimeMessage("ESPN_CONTEXT", espn).ok, true);
   assert.equal(authorizeRuntimeMessage("ESPN_CONTEXT", production).ok, false);
@@ -89,6 +90,7 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(content, /MIN_ACTION_WINDOW_SECONDS = 5/);
   assert.match(content, /AUTOPICK_ACTIVE/);
   assert.match(content, /SOUND_NOT_MUTED/);
+  assert.match(content, /season: Number\(url\.searchParams\.get\("seasonId"\)/);
   assert.match(content, /autopickActive/);
   assert.match(content, /snakeClockOwnMarker/);
   assert.match(content, /snakeClockSource/);
@@ -125,6 +127,16 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(bridge, /function announceReady\(\)/);
   assert.match(bridge, /event\.data\.type === "APP_HELLO"/);
   assert.match(page, /sendToExtension\("APP_HELLO"\)/);
+  assert.match(page, /sendToExtension\("ARM_LIVE_ROOM_WATCH"/);
+  assert.match(page, /sourceTabId: context\.tabId/);
+  assert.match(page, /autoArmRequested: true/);
+  assert.match(page, /pendingLiveRoomAutoArmRef/);
+  assert.match(background, /reusedAuthenticatedPlayerPool/);
+  assert.match(background, /Broadcast the verified room first/);
+  assert.match(background, /const exactSourceTabId = Number\.isInteger\(requestedSourceTabId\)/);
+  assert.match(background, /Number\(espnContext\?\.tabId\)/);
+  assert.match(background, /waitForEspnContext\(\s*requestedLeagueId,\s*exactSourceTabId/);
+  assert.match(page, /LIVE_ROOM_WATCH_ARMED/);
   assert.match(page, /expectedCurrentBid: resolvedOperation === "BID"/);
   assert.match(page, /maxApprovedBid: resolvedOperation === "BID"/);
   assert.match(page, /fillsMandatoryStarter: candidate\.fillsMandatoryStarter/);
@@ -139,6 +151,8 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(page, /type === "DF_ACTION_RESOLVED"/);
   assert.match(page, /type === "DF_ACTION_SUBMITTED"/);
   assert.match(page, /pending\.playerId = Number\(payload\.playerId\)/);
+  assert.match(page, /pendingTelemetry\.playerId = Number\(payload\.playerId\)/);
+  assert.match(page, /pendingTelemetry\.operation === "SELECT" && resolvedPlayerId > 0/);
   assert.match(page, /payload\.code === "ROSTER_CONFIRMED"/);
   const rosterConfirmedHandler = page.match(/if \(payload\.code === "ROSTER_CONFIRMED"\) \{([\s\S]*?)\n\s*\}/)?.[1] || "";
   assert.match(rosterConfirmedHandler, /pendingSnakeActionRef\.current = null/);

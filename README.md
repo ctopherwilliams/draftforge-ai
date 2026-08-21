@@ -66,8 +66,8 @@ Draft day is a cold-start workflow, not a continuation of whatever tabs or serve
    ```
 
    This gate compares the live loopback audit with the exact saved ESPN settings, tab binding, publisher session, five-source set, source freshness, extension state, telemetry schema, and Auto-Draft/ESPN-Autopick safety state. It exits nonzero on any mismatch.
-4. Create the league-specific practice or live room in the same ESPN tab, let the companion bind that exact tab, mute sound, disable ESPN Autopick, and verify the exact league/team/action surface.
-   Before arming, rerun the command with `--phase live`; it additionally requires the second live-room checklist, muted sound, and resolved ESPN action surface.
+4. Before creating the room, use **Confirm + arm live draft** once. The companion stores a bounded one-shot watch for the exact authenticated league, team, season, rules, and draft type. When ESPN creates the room, it binds only one exact match, reuses the authenticated player pool, verifies the generated room's rules, mutes sound, requires ESPN Autopick off, and revalidates the exact tab and action surface before Auto-Draft can turn on.
+   For a regulation-timer room, also rerun the command with `--phase live`; it requires the second live-room checklist, muted sound, and resolved ESPN action surface. A short practice room may use the dashboard's equivalent in-process checklist so terminal startup does not consume the opening clock.
 5. Only then start the guarded loop. It polls cheap DOM state off-clock, calls the production engine only for an own snake turn or active salary-cap decision, submits through the shared action implementation, and requires ESPN roster confirmation.
 6. At completion, verify the exact roster, prices/budget, mandatory slots, position caps, one-dollar reserve, Autopick-off state, muted sound, and close the completed ESPN tab while keeping the dashboard available for the next rehearsal.
 
@@ -80,6 +80,8 @@ Draft day is a cold-start workflow, not a continuation of whatever tabs or serve
    The command exits nonzero unless the exact ESPN/app roster (including auction prices) is complete and legal, the live checklists and five-source gate passed, sound remained muted, ESPN Autopick remained off, and DraftForge shut itself down.
 
 Any failed check stops DraftForge from clicking. A cold source refresh may take roughly 20 seconds because MFL is intentionally queried sequentially under its public rate limit; that work must finish before room launch.
+
+Stop any running production server before `npm run build`, then start exactly one fresh `npm run start` process from the certified output. Do not overwrite `dist` while vinext is serving it.
 
 ## Verify
 

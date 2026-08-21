@@ -200,6 +200,7 @@ export default function Home() {
   const actionRequestSequenceRef = useRef(0);
   const autoArmRequestSequenceRef = useRef(0);
   const pendingAutoArmRequestRef = useRef<number | null>(null);
+  const pendingLiveRoomAutoArmRef = useRef(false);
   const latestActionRequestRef = useRef(0);
   const pendingSnakeActionRef = useRef<{
     playerId: number;
@@ -282,6 +283,7 @@ export default function Home() {
     setStrategy(profile.strategy);
     setLeagueId(profile.league.id);
     setAutoDraft(false);
+    pendingLiveRoomAutoArmRef.current = false;
     pendingAutoArmRequestRef.current = null;
     setAutoArmVerification(null);
     dispatchUi({ type: "set", key: "autoWarning", value: false });
@@ -317,6 +319,7 @@ export default function Home() {
     setLeagueId("");
     setSettingsConfirmed(false);
     setAutoDraft(false);
+    pendingLiveRoomAutoArmRef.current = false;
     pendingAutoArmRequestRef.current = null;
     setAutoArmVerification(null);
     dispatchUi({ type: "set", key: "autoWarning", value: false });
@@ -354,6 +357,7 @@ export default function Home() {
     setPicks([]);
     setSettingsConfirmed(false);
     setAutoDraft(false);
+    pendingLiveRoomAutoArmRef.current = false;
     setContext({});
     setExtension("ready");
     dispatchUi({ type: "set", key: "settingsOpen", value: false });
@@ -479,6 +483,8 @@ export default function Home() {
         pendingAutoArmRequestRef.current = null;
         setAutoArmVerification(null);
         dispatchUi({ type: "set", key: "autoWarning", value: false });
+        const watchedAutoArm = data.roomWatch?.recovered === true && data.roomWatch?.autoArmRequested === true;
+        pendingLiveRoomAutoArmRef.current = watchedAutoArm;
         setLeague(importedLeague);
         espnPlayersRef.current = importedPlayers;
         setEspnPlayers(importedPlayers);
@@ -486,10 +492,14 @@ export default function Home() {
         setContext(contextMatchesActiveDraftTab(importedContext, importedLeague.id, activeEspnTabRef.current) ? importedContext || {} : {});
         setLeagueId(String(importedLeague.id));
         setExtension("connected");
-        dispatchUi({ type: "set", key: "settingsOpen", value: true });
-        setSettingsConfirmed(false);
-        setActionState("ESPN settings imported. Confirm them before drafting.");
-        const profile: DraftProfile = { league: importedLeague, espnPlayers: importedPlayers, picks: importedPicks, settingsConfirmed: false, strategy: "BALANCED", savedAt: new Date().toISOString() };
+        dispatchUi({ type: "set", key: "settingsOpen", value: !watchedAutoArm });
+        setSettingsConfirmed(watchedAutoArm);
+        setActionState(data.roomWatch?.recovered === true
+          ? watchedAutoArm
+            ? "Exact ESPN live room auto-bound without a reload. Revalidating the room and arming Auto-Draft before the opening pick."
+            : "Exact ESPN live room auto-bound without a reload. Confirm the live-room checklist, then enable Auto-Draft."
+          : "ESPN settings imported. Confirm them before drafting.");
+        const profile: DraftProfile = { league: importedLeague, espnPlayers: importedPlayers, picks: importedPicks, settingsConfirmed: watchedAutoArm, strategy: "BALANCED", savedAt: new Date().toISOString() };
         profilesRef.current = upsertDraftProfile(profilesRef.current, profile);
         setProfiles(profilesRef.current);
       }
@@ -523,6 +533,18 @@ export default function Home() {
           pending.playerId = Number(payload.playerId);
           pending.playerName = String(payload.playerName || pending.playerName);
         }
+        const pendingTelemetry = pendingActionTelemetryRef.current.get(actionRequestId);
+        if (pendingTelemetry
+          && Number.isInteger(actionRequestId)
+          && actionRequestId === latestActionRequestRef.current
+          && payload.operation === "SELECT"
+          && Number(payload.tabId) === activeEspnTabRef.current
+          && Number(payload.playerId) > 0) {
+          // Candidate fallback is resolved against ESPN's current visible pool.
+          // Attribute the action to the player actually submitted, not the
+          // recommendation that initiated the request.
+          pendingTelemetry.playerId = Number(payload.playerId);
+        }
       }
       if (type === "DF_ACTION_SUBMITTED") {
         const actionRequestId = Number(payload.actionRequestId);
@@ -544,6 +566,10 @@ export default function Home() {
         const pendingTelemetry = pendingActionTelemetryRef.current.get(actionRequestId);
         if (pendingTelemetry) {
           pendingActionTelemetryRef.current.delete(actionRequestId);
+          const resolvedPlayerId = Number(payload.action?.playerId);
+          if (pendingTelemetry.operation === "SELECT" && resolvedPlayerId > 0) {
+            pendingTelemetry.playerId = resolvedPlayerId;
+          }
           const resultSubmittedAt = Number(payload.action?.submittedAt);
           const submittedAt = pendingTelemetry.submittedAt ?? (
             Number.isFinite(resultSubmittedAt) && resultSubmittedAt >= pendingTelemetry.sentAt
@@ -633,6 +659,11 @@ export default function Home() {
         setAutoDraft(false);
         setExtension("error");
         setActionState(payload.message || "The ESPN companion reported an error.");
+      }
+      if (type === "COMMAND_RESULT" && payload?.code === "LIVE_ROOM_WATCH_ARMED") {
+        if (payload.runtime) setRuntimeDiagnostics(payload.runtime as DraftRuntimeDiagnostics);
+        setExtension("connected");
+        setActionState("Exact ESPN live-room handoff armed. Open the league-specific draft; DraftForge will bind and foreground the command center automatically.");
       }
       if (type === "COMMAND_RESULT" && payload?.ok === false) {
         // SUBMIT_ACTION is broadcast as DF_ACTION_RESULT first so its retry or
@@ -973,6 +1004,29 @@ export default function Home() {
   ];
   const liveChecklistReady = settingsConfirmed && preflightReady && liveChecks.every((check) => check.ok);
   useEffect(() => {
+    if (!pendingLiveRoomAutoArmRef.current || !liveChecklistReady || extension !== "connected") return;
+    const expectedTabId = activeEspnTabRef.current;
+    // Consume the one-shot handoff intent before the asynchronous exact-tab
+    // verification so no render or response can arm it twice.
+    pendingLiveRoomAutoArmRef.current = false;
+    if (!Number.isInteger(expectedTabId)) {
+      setAutoDraft(false);
+      dispatchUi({ type: "set", key: "settingsOpen", value: true });
+      setActionState("Auto-Draft locked: the verified live-room tab disappeared during handoff.");
+      return;
+    }
+    const requestId = ++autoArmRequestSequenceRef.current;
+    pendingAutoArmRequestRef.current = requestId;
+    setAutoDraft(false);
+    setActionState("Revalidating the exact ESPN draft tab before the opening pick…");
+    sendToExtension("REFRESH_ESPN_CONTEXT", {
+      expectedLeagueId: league.id,
+      expectedTeamId: activeEspnTeamRef.current,
+      expectedTabId,
+      autoArmRequestId: requestId,
+    });
+  }, [liveChecklistReady, extension, league.id]);
+  useEffect(() => {
     if (!autoArmVerification) return;
     const requestIsCurrent = autoArmVerification.requestId === pendingAutoArmRequestRef.current;
     const armReady = requestIsCurrent && canArmAutoDraft({
@@ -1010,6 +1064,24 @@ export default function Home() {
     setExtension("connecting");
     setActionState("Reading your signed-in ESPN league…");
     sendToExtension("CONNECT_ESPN", { ...(leagueId.trim() ? { leagueId: leagueId.trim() } : {}), season: league.season || new Date().getFullYear() });
+  }
+
+  function confirmPreDraftChecklist() {
+    setSettingsConfirmed(true);
+    dispatchUi({ type: "set", key: "settingsOpen", value: false });
+    if (context.inDraftRoom !== true) {
+      sendToExtension("ARM_LIVE_ROOM_WATCH", {
+        sourceLeagueId: league.id,
+        sourceTabId: context.tabId,
+        teamId: league.teamId,
+        season: league.season,
+        draftType: league.draftType,
+        autoArmRequested: true,
+      });
+      setActionState("Pre-draft rules, sources, roster, and strategy confirmed. Auto-Draft will arm only after the exact live room passes every safety check.");
+      return;
+    }
+    setActionState("Exact live-room rules, sound, Autopick, player pool, roster, clock, and no-click dry run confirmed.");
   }
 
   const submit = useCallback((player: Recommendation | undefined, automatic = false, operation?: "SELECT" | "NOMINATE" | "BID", amount?: number, nominationIntent: "TARGET" | "DRAIN" = "TARGET") => {
@@ -1461,7 +1533,7 @@ export default function Home() {
         {league.draftType === "AUCTION" && <div className="auction-plan"><b>Predefined budget plan</b>{Object.entries(auctionPlan.positionBudgets).map(([position, amount]) => <span key={position}>{position} <strong>${amount}</strong></span>)}<small>${auctionPlan.endgameReserve} late leverage protected. Walk-away prices adapt to remaining-dollar inflation and tier supply without crossing these portfolio envelopes.</small></div>}
         <button className="raw-toggle" onClick={() => dispatchUi({ type: "toggle", key: "rawSettingsOpen" })}>{rawSettingsOpen ? "Hide" : "Inspect"} all imported ESPN fields</button>
         {rawSettingsOpen && <pre className="raw-settings">{JSON.stringify(league.rawSettings || league, null, 2)}</pre>}
-        <div className="rule-actions"><button className="secondary-button" onClick={connect}>Re-import</button><button className="primary-button" disabled={!preflightReady} onClick={() => { setSettingsConfirmed(true); dispatchUi({ type: "set", key: "settingsOpen", value: false }); setActionState("Pre-draft rules, sources, roster, and strategy confirmed. Live-room check still required before Auto-Draft."); }}>Confirm pre-draft checklist</button></div>
+        <div className="rule-actions"><button className="secondary-button" onClick={connect}>Re-import</button><button className="primary-button" disabled={!preflightReady} onClick={confirmPreDraftChecklist}>{context.inDraftRoom === true ? "Confirm live-room checklist" : "Confirm + arm live draft"}</button></div>
       </div>}
     </section>}
 
