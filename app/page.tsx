@@ -563,7 +563,8 @@ export default function Home() {
           && actionRequestId === latestActionRequestRef.current
           && payload.operation === "SELECT"
           && Number(payload.tabId) === activeEspnTabRef.current
-          && Number(payload.playerId) > 0) {
+          && Number.isInteger(Number(payload.playerId))
+          && Number(payload.playerId) !== 0) {
           // Candidate fallback is resolved against ESPN's current visible pool.
           // Attribute the action to the player actually submitted, not the
           // recommendation that initiated the request.
@@ -591,7 +592,9 @@ export default function Home() {
         if (pendingTelemetry) {
           pendingActionTelemetryRef.current.delete(actionRequestId);
           const resolvedPlayerId = Number(payload.action?.playerId);
-          if (pendingTelemetry.operation === "SELECT" && resolvedPlayerId > 0) {
+          if (pendingTelemetry.operation === "SELECT"
+            && Number.isInteger(resolvedPlayerId)
+            && resolvedPlayerId !== 0) {
             pendingTelemetry.playerId = resolvedPlayerId;
           }
           const resultSubmittedAt = Number(payload.action?.submittedAt);
