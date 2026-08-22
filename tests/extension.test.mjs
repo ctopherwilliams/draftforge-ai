@@ -164,7 +164,10 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(page, /type === "DF_ACTION_SUBMITTED"/);
   assert.match(page, /pending\.playerId = Number\(payload\.playerId\)/);
   assert.match(page, /pendingTelemetry\.playerId = Number\(payload\.playerId\)/);
-  assert.match(page, /pendingTelemetry\.operation === "SELECT" && resolvedPlayerId > 0/);
+  assert.match(page, /Number\.isInteger\(Number\(payload\.playerId\)\)/);
+  assert.match(page, /Number\(payload\.playerId\) !== 0/);
+  assert.match(page, /Number\.isInteger\(resolvedPlayerId\)/);
+  assert.match(page, /resolvedPlayerId !== 0/);
   assert.match(page, /payload\.code === "ROSTER_CONFIRMED"/);
   const rosterConfirmedHandler = page.match(/if \(payload\.code === "ROSTER_CONFIRMED"\) \{([\s\S]*?)\n\s*\}/)?.[1] || "";
   assert.match(rosterConfirmedHandler, /pendingSnakeActionRef\.current = null/);

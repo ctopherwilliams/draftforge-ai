@@ -31,11 +31,11 @@ Keep Codex open in the desktop app and exactly two controlled Chrome tabs: `http
 
 ## Certification ledger
 
-Last updated: 2026-08-20.
+Last updated: 2026-08-21.
 
 | Gate | State |
 | --- | --- |
-| Local release gate | v0.2.24: 201/201 tests, lint, typecheck, production build, UI, extension safety, replay, managed workspace cleanup, recovery targeting, and latency passing; visual certification covers pre-room plus snake/salary command centers at 390, 1440, 1728, and 2560 widths with zero drift |
+| Local release gate | v0.2.24: 201/201 tests, lint, typecheck, production build, UI, extension safety, replay, managed workspace cleanup, recovery targeting, and latency passing; visual certification covers pre-room plus snake/salary command centers at 390, 1440, 1728, and 2560 widths with nine zero-distance captures and one accepted one-pixel mobile distance |
 | Deterministic drafts | 20/20 snake and 20/20 salary-cap complete and legal |
 | Live-snapshot Monte Carlo | Fresh seed `20260820`: 10,000 snake + 10,000 salary-cap, including 4,000 exposed holdouts; zero failures, hard violations, or simulation errors |
 | Overnight battle qualification | Four 5-draft batches per format: 20/20 snake + 20/20 salary cap, exact holdout replay, zero hard violations |
@@ -48,6 +48,8 @@ Last updated: 2026-08-20.
 | v0.2.17 authenticated recovery and completion | Salary-cap room `1778564226`: deliberate dashboard-reload recovery, exact two-window/two-tab workspace, 14/14 ESPN/app player-and-price parity, $182 spent/$18 remaining, K/DST complete, zero violations, muted sound, ESPN Autopick off, automatic shutdown, and `DRAFT_AUDIT_READY` |
 | v0.2.22 authenticated cold-start and server recovery | Snake room `1221310079`: one-shot pre-room watch bound before the opening slot, first pick submitted with 27 seconds left, deliberate server outage at 2/16 recovered without reloading ESPN, exact 16/16 parity, zero violations, muted sound, ESPN Autopick off, automatic shutdown, and `DRAFT_AUDIT_READY` |
 | v0.2.24 final candidate | Same live action and engine path as v0.2.23 plus one-dashboard election, exact owned-tab cleanup, healthy-room reuse, managed-cleanup readiness, and final-audit practice-workspace closure; package SHA-256 `ff42c6a085f5973d35e34e9766ca1b90c563be6a337998c8d4a17069f1dbe3b1`; full local and visual gates pass |
+| v0.2.24 authenticated lifecycle certification | Salary-cap room `1551126922` completed 14/14 with exact player-and-price parity, $186 spent/$14 remaining, K/DST, deliberate recovery, muted sound, ESPN Autopick off, automatic shutdown, exact practice-tab cleanup, and `DRAFT_AUDIT_READY`. Snake room `1586041611` completed 16/16 with exact parity, K/DST, 5/5 sources, 16 confirmed automatic actions, muted sound, ESPN Autopick off, automatic shutdown, exact practice-tab cleanup, and `DRAFT_AUDIT_READY`. |
+| Excluded v0.2.24 recovery drill | Snake room `290283938` was deliberately excluded: an optional recovery was started after ESPN had already advanced to the team's 30-second clock; DraftForge refused the unsafe late action, ESPN timed out and enabled its own Autopick, and the exact room was closed. Never schedule an optional recovery during or immediately before an own-turn window. |
 | Deterministic holdout replay | 2,000 snake + 2,000 salary-cap records replayed byte-for-byte with zero mismatches |
 
 Do not advance an authenticated count without a complete final-ready loopback audit. Current evidence is machine-readable in `simulation/evidence/authenticated-certification-20260818.json`; older excluded rooms remain historical and must not be retroactively counted.
@@ -65,7 +67,7 @@ Do not advance an authenticated count without a complete final-ready loopback au
    npm run check
    ```
 
-3. Confirm the unpacked Chrome companion is version `0.2.24` and loaded from this repository's `extension/` directory. The packaged zip SHA-256 is `ff42c6a085f5973d35e34e9766ca1b90c563be6a337998c8d4a17069f1dbe3b1`. Its one-shot live-room handoff and server recovery are authenticated in snake room `1221310079`; its salary-cap action path, parity audit, and automatic shutdown are authenticated in room `1778564226`. The dashboard preflight must also report companion-managed workspace cleanup ready.
+3. Confirm the unpacked Chrome companion is version `0.2.24` and loaded from this repository's `extension/` directory. The packaged zip SHA-256 is `ff42c6a085f5973d35e34e9766ca1b90c563be6a337998c8d4a17069f1dbe3b1`. Its one-shot live-room handoff and server recovery are authenticated in snake rooms `1221310079` and `1586041611`; its salary-cap action path, deliberate recovery, parity audit, automatic shutdown, and exact tab cleanup are authenticated in room `1551126922`. The dashboard preflight must also report companion-managed workspace cleanup ready.
 4. Run one cold-start, no-click rehearsal for the exact league. Do not wait until the real room opens to discover an ESPN login, extension, source, firewall, or Chrome-control problem.
 5. Keep the companion zip digest and current release evidence in [AGENT_HANDOFF.md](AGENT_HANDOFF.md).
 
@@ -146,6 +148,7 @@ Routine recovery is Codex-owned. The user should not have to reload the extensio
 - After a final-ready parity audit, the dashboard automatically requests closure of the exact generated practice room, matching source-league parent, and stale DraftForge dashboards. Live verification still requires ESPN's league name to begin with `Practice Draft for `. If ESPN has expired the room, the audit fallback requires the exact generated room ID, Chrome tab ID, parity, automatic shutdown, and a room ID distinct from the real source league. A manual loopback-only `closePractice=1` command retains the same proof boundary.
 - On every local handshake, the companion elects the newest exact DraftForge dashboard and closes only older DraftForge-origin dashboards. The manual `cleanWorkspace=1` path may additionally close `about:blank` tabs only when Codex supplies their exact observed IDs. Neither path closes Gmail, an unrelated ESPN page, an arbitrary blank tab, or any other user tab.
 - Every recovery turns Auto-Draft off and settings confirmation false. Codex must re-warm five sources if needed, confirm the imported checklist, rerun the live dry run, and explicitly re-arm the exact room.
+- Optional recovery drills must run before the room starts, while ESPN is paused, or only after authoritative state proves the team is safely outside its action window. Do not begin an optional recovery during or immediately before an own snake turn; 30-second Auto-team mocks can advance an entire round while the checklist is being rebuilt.
 
 ## Live-draft protocol
 
