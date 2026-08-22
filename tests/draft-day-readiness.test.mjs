@@ -96,6 +96,7 @@ test("readiness config tracks both authenticated ESPN formats", () => {
   assert.deepEqual(Object.keys(config.profiles).sort(), ["salary-cap", "snake"]);
   assert.equal(config.profiles.snake.draftType, "SNAKE");
   assert.equal(config.profiles.snake.secondsPerPick, 60);
+  assert.equal(config.profiles.snake.scoringLabel, "PPR");
   assert.equal(config.profiles.snake.scoringRules, 29);
   assert.equal(config.profiles["salary-cap"].draftType, "AUCTION");
   assert.equal(config.profiles["salary-cap"].keeperCount, 2);

@@ -79,7 +79,7 @@ const REAL_LEAGUES = {
     auctionBudget: 200,
     lineupSlotCounts: { "0": 1, "2": 2, "3": 1, "4": 2, "6": 1, "7": 1, "16": 1, "17": 1, "20": 6 },
     positionLimits: { "0": 0, "1": 4, "2": 8, "3": 8, "4": 3, "5": 3, "6": -1, "7": -1, "8": -1, "9": -1, "10": -1, "11": -1, "12": -1, "13": -1, "14": -1, "15": -1, "16": 3, "17": -1 },
-    scoringLabel: "Standard",
+    scoringLabel: "PPR",
     scoringRules: 29,
     keeperCount: 0,
   },
