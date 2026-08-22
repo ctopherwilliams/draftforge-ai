@@ -51,10 +51,10 @@ Draft day is a cold-start workflow, not a continuation of whatever tabs or serve
 
 1. Verify the repository and current production build, start exactly one DraftForge server on port 3000, and confirm `/api/draft-day` exists.
 2. Open the local dashboard plus exactly one authenticated ESPN lobby tab in Chrome and import the named league's scoring, roster, keeper, timer, order, and draft-type rules.
-3. Warm all five sources before ESPN creates the room, using the scoring and team count returned by the authenticated league-rules probe rather than a remembered default. For the saved 10-team Standard snake league, the executable gate is:
+3. Warm all five sources before ESPN creates the room, using the scoring and team count returned by the authenticated league-rules probe rather than a remembered default. For the saved 10-team PPR snake league, the executable gate is:
 
    ```bash
-   npm run draft-day:warm -- --scoring Standard --teams 10 --season 2026
+   npm run draft-day:warm -- --scoring PPR --teams 10 --season 2026 --qbs 2
    ```
 
    Change scoring and team count to the imported league values. Add `--qbs 2` when the authenticated ESPN starter slots contain QB plus OP; the dashboard and one-command READY path derive this automatically from the imported rules. The command exits nonzero unless ESPN plus FFC, MFL, Tradyr, and GNG are all ready.
