@@ -6,6 +6,68 @@ DraftForge is an ESPN-only fantasy football draft copilot. The primary cockpit i
 
 Post-draft league management is intentionally out of scope.
 
+## Grok implementation handoff: live player-availability guard
+
+This section is the authoritative implementation brief for a Grok coding agent. The current baseline already reads ESPN's authenticated `injuryStatus`, marks definitive inactive designations such as `OUT`, `IR`, `SUSPENDED`, and `INACTIVE` as unavailable, and removes those players from both snake and salary-cap decisions. Grok's task is to close the remaining draft-day risk: recent, credible news that has not yet propagated into ESPN's player status.
+
+### Goal
+
+Add a deterministic, fail-closed **availability veto layer** that can prevent DraftForge from recommending or submitting a player when current evidence says the player cannot materially contribute this season or is not eligible to play. This is a safety overlay, not a new ranking source. The five-source consensus must remain exactly ESPN, FFC, MFL, Tradyr, and GNG with the existing weights.
+
+### Required workflow
+
+1. Read `README.md`, `AGENT_HANDOFF.md`, `MIGRATION.md`, `DRAFT_DAY_HANDOVER.md`, and `docs/data-sources.md` completely. Treat the Git worktree and tests as authoritative.
+2. Record `git status --short`, the current branch and commit, then run `npm test` before editing. Do not build over a running production `vinext start` process.
+3. Inspect the existing implementation in `extension/player-normalizers.js`, `app/lib/draft-engine.ts`, the draft-day bridge, source snapshot code, and their tests before proposing a design.
+4. Implement the smallest reusable boundary that satisfies the acceptance criteria below. Do not duplicate recommendation, roster, bid-ceiling, reserve, sleeper, or action logic.
+5. Add focused unit and integration tests, run the complete release gate, update the relevant handoff/data-source documentation, and report the exact commands and results.
+
+### Functional contract
+
+- Keep the weighted five-source player ranking and auction-value calculation unchanged. News cannot add points, reorder healthy players, raise a salary-cap ceiling, or promote a sleeper.
+- Combine ESPN's authenticated availability state with a sanitized external availability artifact supplied before the draft. The artifact must contain only normalized player identity, classification, event time, retrieval time, evidence URL/domain, and a short machine-readable reason. It must never contain ESPN cookies, member IDs, opponent identities, credentials, or arbitrary executable content.
+- Require exact normalized player identity. Ambiguous, unmatched, or conflicting identities must not silently veto a player; expose them as unresolved and block arming only when the unresolved record claims a definitive season-ending or eligibility event for a player currently inside the actionable recommendation window.
+- Treat only definitive states as hard vetoes: season-ending injury, injured reserve/PUP/NFI when the supplied evidence explicitly says the player cannot contribute in the relevant season window, retirement, release without a team, suspension covering the fantasy season, death, or another explicit league-ineligibility event. `QUESTIONABLE`, `DOUBTFUL`, day-to-day, limited practice, ordinary legal allegations, rumors, and opinion are advisory flags unless ESPN itself marks the player unavailable.
+- Require evidence and retrieval timestamps. Default maximum age is 30 minutes on draft day and must be configurable only through an explicit bounded setting. Stale or malformed artifacts fail closed at the arming/readiness boundary; they must never be treated as fresh truth.
+- Freeze an immutable availability digest for each individual decision. A source refresh may affect the next decision, but it must not mutate the truth underneath an action already being revalidated or submitted.
+- Recheck the chosen player immediately before every snake selection, salary-cap nomination, and bid. If the player becomes vetoed, clear the pending intent, recompute from the same production engine, and require the normal exact-player/clock/offer verification path.
+- A vetoed nominee in salary cap is always `PASS`; it may not be used as a price-enforcement or drain nomination. Existing one-dollar reserve, exact next-offer rule, walk-away ceiling, and bidding-war prevention remain absolute.
+- The dashboard should show a compact status and timestamp for the availability gate plus the reason/evidence for a veto. Do not redesign the command center or add a general news feed.
+- No Grok model call may occur inside a live action window. Any Grok-assisted collection or classification must complete before arming or between decisions with enough time to pass the normal clock gate. A model timeout, unavailable service, or invalid response must never authorize an action.
+
+### Required tests
+
+- ESPN definitive unavailable statuses remain excluded from snake and salary-cap recommendations.
+- A fresh, exact-match external season-ending record vetoes an otherwise top-ranked player without changing the ordering or scores of the remaining healthy players.
+- Questionable, doubtful, rumor, allegation, and day-to-day records remain advisory and do not become automatic hard vetoes.
+- Stale, malformed, unsigned/untrusted if signing is introduced, conflicting, and identity-ambiguous artifacts cannot arm Auto-Draft.
+- A veto arriving between recommendation and submission invalidates the pending action and forces a fresh deterministic recommendation.
+- Salary-cap code never bids on or nominates a vetoed player and never changes the existing ceiling or reserve for other players.
+- Identical league state, five-source snapshot, availability artifact, and seed produce byte-for-byte identical decision output and digest.
+- Snapshot and audit output remain sanitized and contain no credentials, cookies, member IDs, real opponent names, or free-form model transcripts.
+- Existing extension fail-closed, exact-tab, clock, Autopick, roster completion, sleeper, specialist, and 20-drafts-per-format tests continue to pass.
+
+### Acceptance gate
+
+Run all of the following from the repository root and include their exact results in the handoff:
+
+```bash
+npm test
+npm run lint
+npm run typecheck
+npm run test:visual
+node --check extension/background.js
+node --check extension/espn-content.js
+node --check extension/app-bridge.js
+git diff --check
+```
+
+Then perform one no-click authenticated pre-room rehearsal for each saved ESPN format. Both must return `DRAFT_DAY_READY`, show the exact imported league rules, five fresh consensus sources, a fresh availability digest, muted sound, ESPN Autopick off, DraftForge Auto-Draft off, and exactly one DraftForge dashboard plus one authenticated ESPN tab. Do not enter or operate a real league draft, and do not count simulations as authenticated certification.
+
+### Definition of done
+
+The work is complete only when the full gate passes, deterministic replay is proven, no existing strategy or safety invariant regresses, the extension package/version is updated when extension code changes, the README and handoff describe the final data contract, and the implementation is committed on a focused branch with a clean worktree. Report limitations honestly. Do not claim that rumor detection or player availability is perfect.
+
 ## What works
 
 - Separate saved profiles for multiple ESPN leagues, including leagues drafting on different days
