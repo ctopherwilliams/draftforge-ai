@@ -22,10 +22,60 @@ Add a deterministic, fail-closed **availability veto layer** that can prevent Dr
 4. Implement the smallest reusable boundary that satisfies the acceptance criteria below. Do not duplicate recommendation, roster, bid-ceiling, reserve, sleeper, or action logic.
 5. Add focused unit and integration tests, run the complete release gate, update the relevant handoff/data-source documentation, and report the exact commands and results.
 
+### Grok VM capability contract
+
+Grok is expected to perform this task in an isolated Linux VM with a writable repository checkout, shell access, Git, Node/npm, bounded CPU/memory/disk, and outbound network access that may be restricted or intermittent. Treat every capability as untrusted until it is observed. At startup, run the following non-secret capability probe and retain its output in the implementation report:
+
+```bash
+pwd
+uname -a
+node --version
+npm --version
+git --version
+git status --short --branch
+git remote -v
+df -h .
+```
+
+Do not print environment variables, credential files, browser profiles, GitHub tokens, cookies, or keychain contents. If the repository is not already present, clone the configured GitHub remote, verify the default branch, and create a focused `grok/availability-guard` branch. Prefer `npm ci` when a lockfile is present. Never commit generated source snapshots, browser profiles, `.env` files, build output, or authenticated ESPN payloads.
+
+Use the VM for:
+
+- Reading and editing repository files.
+- Running deterministic unit, integration, build, lint, type, snapshot-replay, Monte Carlo, and visual-regression checks.
+- Fetching public documentation or public news endpoints during adapter development when network policy allows it.
+- Using Grok's native web/X search, when exposed to the VM, to prepare a pre-draft evidence artifact; model prose is never itself authoritative evidence.
+- Running a temporary, isolated, muted Chromium instance for localhost visual tests only.
+- Producing a focused Git commit/branch, machine-readable test results, and a concise implementation handoff.
+
+The VM must **not** be assumed to have:
+
+- The user's authenticated ESPN session, macOS Chrome profile, DraftForge unpacked extension state, Keychain, Tailscale identity, or localhost process running on the user's Mac.
+- Permission to drive the user's real ESPN draft, install software globally, change host firewall rules, expose port 3000 publicly, or access unrelated browser tabs/files.
+- Stable long-lived storage or enough resources for unbounded parallel browsers, servers, or simulations.
+
+If Grok has a browser-control tool, use it only against an ephemeral VM browser and localhost test fixtures. Do not sign in to ESPN and do not claim authenticated certification from mocked, copied, or replayed cookies. If Grok has GitHub write access, push only the focused branch; do not force-push, merge to `main`, rewrite history, or modify repository settings. If a capability is absent, use the safest repository-local substitute and record the limitation instead of weakening a gate.
+
+Keep resource use bounded: run test families sequentially, start at most one temporary app server and one temporary browser, record their process IDs, and terminate them on success or failure. Reuse ignored output directories where the existing scripts expect them; do not leave orphan processes, browser windows, or listening ports. A VM timeout or eviction is an incomplete run, not a pass.
+
+### VM-to-Mac handoff boundary
+
+Grok's deliverable ends with code and reproducible local evidence. The authenticated Chrome proof must run later on the user's Mac from the exact reviewed commit. Grok must provide:
+
+- Branch name and full commit SHA.
+- A concise file-by-file change list tied to the functional contract.
+- Baseline and final command results, including failures or skipped checks.
+- Exact reproduction commands and any required repository-local configuration schema.
+- Sanitized example availability artifacts covering hard veto, advisory, stale, conflicting, and ambiguous identity cases.
+- An explicit `MAC_AUTHENTICATED_CERTIFICATION_PENDING` marker until both no-click ESPN rehearsals pass on the Mac.
+
+The Mac operator must review/merge the branch, install the exact companion build if extension code changed, cold-start one production server on loopback port 3000, and perform the authenticated checks described below. VM tests may support this certification but can never replace it.
+
 ### Functional contract
 
 - Keep the weighted five-source player ranking and auction-value calculation unchanged. News cannot add points, reorder healthy players, raise a salary-cap ceiling, or promote a sleeper.
 - Combine ESPN's authenticated availability state with a sanitized external availability artifact supplied before the draft. The artifact must contain only normalized player identity, classification, event time, retrieval time, evidence URL/domain, and a short machine-readable reason. It must never contain ESPN cookies, member IDs, opponent identities, credentials, or arbitrary executable content.
+- A Grok/web/X result may discover evidence but may not serve as the evidence. Every hard veto must resolve to an official NFL/team/league transaction or injury report, or to two independent reputable reports that explicitly support the same definitive state. Preserve source URLs and timestamps, not model transcripts.
 - Require exact normalized player identity. Ambiguous, unmatched, or conflicting identities must not silently veto a player; expose them as unresolved and block arming only when the unresolved record claims a definitive season-ending or eligibility event for a player currently inside the actionable recommendation window.
 - Treat only definitive states as hard vetoes: season-ending injury, injured reserve/PUP/NFI when the supplied evidence explicitly says the player cannot contribute in the relevant season window, retirement, release without a team, suspension covering the fantasy season, death, or another explicit league-ineligibility event. `QUESTIONABLE`, `DOUBTFUL`, day-to-day, limited practice, ordinary legal allegations, rumors, and opinion are advisory flags unless ESPN itself marks the player unavailable.
 - Require evidence and retrieval timestamps. Default maximum age is 30 minutes on draft day and must be configurable only through an explicit bounded setting. Stale or malformed artifacts fail closed at the arming/readiness boundary; they must never be treated as fresh truth.
@@ -62,7 +112,7 @@ node --check extension/app-bridge.js
 git diff --check
 ```
 
-Then perform one no-click authenticated pre-room rehearsal for each saved ESPN format. Both must return `DRAFT_DAY_READY`, show the exact imported league rules, five fresh consensus sources, a fresh availability digest, muted sound, ESPN Autopick off, DraftForge Auto-Draft off, and exactly one DraftForge dashboard plus one authenticated ESPN tab. Do not enter or operate a real league draft, and do not count simulations as authenticated certification.
+After the VM branch is reviewed on the Mac, perform one no-click authenticated pre-room rehearsal for each saved ESPN format. Both must return `DRAFT_DAY_READY`, show the exact imported league rules, five fresh consensus sources, a fresh availability digest, muted sound, ESPN Autopick off, DraftForge Auto-Draft off, and exactly one DraftForge dashboard plus one authenticated ESPN tab. Until that happens, Grok's report must end with `MAC_AUTHENTICATED_CERTIFICATION_PENDING`. Do not enter or operate a real league draft, and do not count simulations as authenticated certification.
 
 ### Definition of done
 
