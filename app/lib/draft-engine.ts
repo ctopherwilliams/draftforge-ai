@@ -12,7 +12,9 @@ export type DraftPlayer = {
   adp: number;
   auction: number;
   projected: number;
+  availabilityStatus?: string;
   injured?: boolean;
+  unavailable?: boolean;
   consensusRank?: number;
   consensusScore?: number;
   consensusConfidence?: number;
@@ -301,7 +303,8 @@ function projectionAuctionValues(players: DraftPlayer[], league: LeagueSettings,
 
 export function buildPlayerPoolIndex(players: DraftPlayer[], league: LeagueSettings): PlayerPoolIndex {
   const playerById = new Map(players.map((player) => [player.id, player]));
-  const playersByPosition = players.reduce<Partial<Record<Position, DraftPlayer[]>>>((pools, player) => {
+  const draftablePlayers = players.filter((player) => player.unavailable !== true);
+  const playersByPosition = draftablePlayers.reduce<Partial<Record<Position, DraftPlayer[]>>>((pools, player) => {
     (pools[player.pos] ||= []).push(player);
     return pools;
   }, {});
@@ -309,8 +312,8 @@ export function buildPlayerPoolIndex(players: DraftPlayer[], league: LeagueSetti
     pool?.sort((left, right) => Number(right.projected || 0) - Number(left.projected || 0));
   }
   const replacements = getReplacementPoints(playersByPosition, league);
-  const projectionValues = projectionAuctionValues(players, league, replacements);
-  const rosterableMarket = [...players]
+  const projectionValues = projectionAuctionValues(draftablePlayers, league, replacements);
+  const rosterableMarket = [...draftablePlayers]
     .sort((left, right) => Number(right.auction || 0) - Number(left.auction || 0))
     .slice(0, Math.max(1, league.size * league.rosterSize));
   const marketExtraByPosition = rosterableMarket.reduce<Record<string, number>>((totals, player) => {
@@ -626,7 +629,7 @@ export function recommendPlayers(
   auctionPlanOverride?: AuctionPlan,
 ): Recommendation[] {
   const draftedIds = new Set(picks.map((pick) => pick.playerId));
-  const available = players.filter((player) => !draftedIds.has(player.id));
+  const available = players.filter((player) => !draftedIds.has(player.id) && player.unavailable !== true);
   const myPicks = picks.filter((pick) => pick.teamId === league.teamId);
   const mySpend = myPicks.reduce((sum, pick) => sum + pick.amount, 0);
   const myRoster = myPicks.map((pick) => playerPool.playerById.get(pick.playerId)).filter(Boolean) as DraftPlayer[];

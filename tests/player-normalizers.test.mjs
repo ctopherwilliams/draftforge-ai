@@ -27,3 +27,18 @@ test("ESPN ADP remains authoritative and invalid market data fails to unranked d
   assert.equal(normalized[1].rank, 999);
   assert.equal(normalized[1].adp, 999);
 });
+
+test("ESPN definitive inactive statuses fail closed while day-to-day designations remain draftable", () => {
+  const normalized = normalizePlayers({
+    players: [
+      { player: { id: 5, fullName: "Questionable Player", defaultPositionId: 3, injuryStatus: "QUESTIONABLE", ownership: { averageDraftPosition: 20 } } },
+      { player: { id: 6, fullName: "Reserve Player", defaultPositionId: 2, injuryStatus: "INJURY_RESERVE", ownership: { averageDraftPosition: 1 } } },
+      { player: { id: 7, fullName: "Suspended Player", defaultPositionId: 1, injuryStatus: "SUSPENSION", ownership: { averageDraftPosition: 2 } } },
+    ],
+  });
+
+  assert.equal(normalized[0].injured, true);
+  assert.equal(normalized[0].unavailable, false);
+  assert.equal(normalized[1].unavailable, true);
+  assert.equal(normalized[2].unavailable, true);
+});

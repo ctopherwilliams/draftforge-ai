@@ -30,6 +30,27 @@ test("recommendations are deterministic and remove drafted players", () => {
   assert.equal(later.find((player) => player.id === 3).adpValue, 0);
 });
 
+test("definitively unavailable players never enter snake or salary-cap decisions", () => {
+  const unavailableStar = {
+    id: 99,
+    name: "Unavailable Star",
+    team: "Z",
+    pos: "RB",
+    rank: 1,
+    adp: 1,
+    auction: 70,
+    projected: 500,
+    availabilityStatus: "INJURY_RESERVE",
+    injured: true,
+    unavailable: true,
+  };
+  const candidatePool = [unavailableStar, ...players];
+
+  assert.equal(recommendPlayers(candidatePool, [], league, "BALANCED").some((player) => player.id === 99), false);
+  assert.equal(recommendPlayers(candidatePool, [], { ...league, draftType: "AUCTION" }, "BALANCED").some((player) => player.id === 99), false);
+  assert.equal(buildPlayerPoolIndex(candidatePool, league).playersByPosition.RB?.some((player) => player.id === 99), false);
+});
+
 test("indexed decisions are identical to the compatibility recommendation path", () => {
   const auctionLeague = { ...league, draftType: "AUCTION" };
   const picks = [{ playerId: 1, teamId: 2, overall: 1, round: 0, amount: 42 }];

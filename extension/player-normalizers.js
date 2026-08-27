@@ -8,10 +8,31 @@ function positiveNumber(value, fallback) {
   return Number.isFinite(number) && number > 0 ? number : fallback;
 }
 
+const UNAVAILABLE_STATUSES = new Set([
+  "OUT",
+  "IR",
+  "INJURY_RESERVE",
+  "INJURED_RESERVE",
+  "PUP",
+  "PHYSICALLY_UNABLE_TO_PERFORM",
+  "NFI",
+  "NON_FOOTBALL_INJURY",
+  "SUSPENDED",
+  "SUSPENSION",
+  "COMMISSIONER_EXEMPT",
+  "EXEMPT",
+  "INACTIVE",
+]);
+
+function normalizedAvailabilityStatus(value) {
+  return String(value || "ACTIVE").trim().toUpperCase().replace(/[\s-]+/g, "_");
+}
+
 export function normalizePlayers(raw) {
   return (raw.players || []).map((entry) => {
     const player = entry.player || entry;
     const ownership = player.ownership || {};
+    const availabilityStatus = normalizedAvailabilityStatus(player.injuryStatus);
     const adp = positiveNumber(ownership.averageDraftPosition, 999);
     const projection = (player.stats || []).find((stat) => Number(stat.statSourceId) === 1 && Number(stat.scoringPeriodId) === 0)
       || (player.stats || []).find((stat) => Number(stat.statSourceId) === 1);
@@ -27,7 +48,9 @@ export function normalizePlayers(raw) {
       adp,
       auction: positiveNumber(ownership.auctionValueAverage, 1),
       projected: Math.max(0, Number(projection?.appliedTotal || 0)),
-      injured: Boolean(player.injuryStatus && player.injuryStatus !== "ACTIVE"),
+      availabilityStatus,
+      injured: availabilityStatus !== "ACTIVE",
+      unavailable: UNAVAILABLE_STATUSES.has(availabilityStatus),
     };
   }).filter((player) => player.id && ["QB", "RB", "WR", "TE", "K", "DST"].includes(player.pos));
 }
