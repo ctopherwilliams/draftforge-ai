@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   ADVISORY_CLASSIFICATIONS,
   AVAILABILITY_ARTIFACT_SCHEMA,
+  availabilityBoundedActionDeadline,
   createAvailabilityDecisionSnapshot,
   evaluateAvailabilityGate,
   excludeAvailabilityVetoes,
@@ -55,6 +56,13 @@ function artifact(records, overrides = {}) {
   return {
     schemaVersion: AVAILABILITY_ARTIFACT_SCHEMA,
     generatedAt: "2026-08-27T23:50:00.000Z",
+    scanReceipt: {
+      completedAt: "2026-08-27T23:49:30.000Z",
+      feeds: [
+        { id: "authenticated_espn_player_news", url: "https://fantasy.espn.com/football/players/news", retrievedAt: "2026-08-27T23:49:00.000Z", status: "ok" },
+        { id: "official_nfl_news", url: "https://www.nfl.com/news/", retrievedAt: "2026-08-27T23:49:00.000Z", status: "ok" },
+      ],
+    },
     records,
     ...overrides,
   };
@@ -170,6 +178,107 @@ test("stale, future, malformed, and out-of-bounds configuration fail closed at a
   assert.equal(parseAvailabilityPolicy({ ...policy, maxAgeMinutes: 4 }).ok, false);
   assert.equal(parseAvailabilityPolicy({ ...policy, maxAgeMinutes: 121 }).ok, false);
   assert.equal(parseAvailabilityPolicy({ ...policy, reputableDomains: ["espn.com", "news.espn.com"] }).ok, false);
+});
+
+test("availability arming requires fresh successful ESPN and official NFL scan receipts", () => {
+  const missing = artifact([]);
+  delete missing.scanReceipt;
+  assert.equal(evaluateAvailabilityGate({ artifact: missing, policy, players, evaluatedAt }).armingAllowed, false);
+
+  const failed = artifact([]);
+  failed.scanReceipt.feeds[0].status = "failed";
+  const failedEvaluation = evaluateAvailabilityGate({ artifact: failed, policy, players, evaluatedAt });
+  assert.equal(failedEvaluation.armingAllowed, false);
+  assert.ok(failedEvaluation.blockingReasons.includes("NEWS_SCAN_FAILED"));
+
+  const staleScan = artifact([]);
+  staleScan.scanReceipt.completedAt = "2026-08-27T22:00:00.000Z";
+  staleScan.scanReceipt.feeds = staleScan.scanReceipt.feeds.map((feed) => ({ ...feed, retrievedAt: "2026-08-27T22:00:00.000Z" }));
+  const staleEvaluation = evaluateAvailabilityGate({ artifact: staleScan, policy, players, evaluatedAt });
+  assert.equal(staleEvaluation.armingAllowed, false);
+  assert.ok(staleEvaluation.blockingReasons.includes("STALE_NEWS_SCAN_RECEIPT"));
+  assert.ok(staleEvaluation.blockingReasons.includes("STALE_NEWS_SCAN_FEED"));
+});
+
+test("scan receipts bind each required feed id to its exact credential-safe host and path", () => {
+  const mutations = [
+    ["hostile ESPN host", (value) => { value.scanReceipt.feeds[0].url = "https://fantasy.espn.com.evil.test/football/players/news"; }],
+    ["swapped feed urls", (value) => {
+      const first = value.scanReceipt.feeds[0].url;
+      value.scanReceipt.feeds[0].url = value.scanReceipt.feeds[1].url;
+      value.scanReceipt.feeds[1].url = first;
+    }],
+    ["sensitive ESPN query", (value) => { value.scanReceipt.feeds[0].url += "?memberId=secret"; }],
+    ["nonstandard NFL port", (value) => { value.scanReceipt.feeds[1].url = "https://www.nfl.com:8443/news/"; }],
+    ["unrelated ESPN path", (value) => { value.scanReceipt.feeds[0].url = "https://fantasy.espn.com/football/team"; }],
+  ];
+  for (const [label, mutate] of mutations) {
+    const value = artifact([]);
+    mutate(value);
+    const parsed = parseAvailabilityArtifact(value);
+    assert.equal(parsed.ok, false, label);
+    assert.ok(parsed.errors.some((error) => error.code === "INVALID_SCAN_FEED_URL"), label);
+  }
+});
+
+test("availability expiry uses the earliest artifact, scan, feed, or record lease and bounds clicks", () => {
+  const evaluation = evaluateAvailabilityGate({
+    artifact: artifact([record("season_ending_injury", {
+      evidence: [evidence("season_ending_injury", {
+        kind: "official_nfl",
+        url: "https://www.nfl.com/news/example-season-ending-injury",
+        domain: "www.nfl.com",
+      })],
+    })]),
+    policy,
+    players,
+    evaluatedAt,
+  });
+  assert.equal(evaluation.armingAllowed, true);
+  assert.equal(evaluation.freshUntil, "2026-08-28T00:19:00.000Z");
+
+  const twoSecondsBeforeExpiry = Date.parse("2026-08-28T00:18:58.000Z");
+  assert.equal(
+    availabilityBoundedActionDeadline(evaluation, 2_500, twoSecondsBeforeExpiry),
+    Date.parse(evaluation.freshUntil),
+  );
+  assert.equal(
+    availabilityBoundedActionDeadline(evaluation, 2_500, Date.parse(evaluation.freshUntil)),
+    null,
+  );
+  assert.equal(availabilityBoundedActionDeadline({ ...evaluation, armingAllowed: false }, 2_500, twoSecondsBeforeExpiry), null);
+
+  const oneMillisecondBefore = evaluateAvailabilityGate({
+    artifact: artifact([record("opinion")]),
+    policy,
+    players,
+    evaluatedAt: "2026-08-28T00:18:59.999Z",
+  });
+  assert.equal(oneMillisecondBefore.armingAllowed, true);
+  const exactlyExpired = evaluateAvailabilityGate({
+    artifact: artifact([record("opinion")]),
+    policy,
+    players,
+    evaluatedAt: "2026-08-28T00:19:00.000Z",
+  });
+  assert.equal(exactlyExpired.armingAllowed, false);
+  assert.ok(exactlyExpired.blockingReasons.some((reason) => reason.startsWith("STALE_")));
+});
+
+test("each provenance timestamp independently limits the availability lease", () => {
+  const cases = [
+    ["generatedAt", (value) => { value.generatedAt = "2026-08-27T23:48:00.000Z"; }],
+    ["scan completedAt", (value) => { value.scanReceipt.completedAt = "2026-08-27T23:48:00.000Z"; }],
+    ["feed retrievedAt", (value) => { value.scanReceipt.feeds[0].retrievedAt = "2026-08-27T23:48:00.000Z"; }],
+    ["record retrievedAt", (value) => { value.records[0].retrievedAt = "2026-08-27T23:48:00.000Z"; }],
+  ];
+  for (const [label, mutate] of cases) {
+    const value = artifact([record("opinion")]);
+    mutate(value);
+    const evaluation = evaluateAvailabilityGate({ artifact: value, policy, players, evaluatedAt });
+    assert.equal(evaluation.armingAllowed, true, label);
+    assert.equal(evaluation.freshUntil, "2026-08-28T00:18:00.000Z", label);
+  }
 });
 
 test("conflicting exact claims and actionable ambiguous identity claims cannot arm", async () => {

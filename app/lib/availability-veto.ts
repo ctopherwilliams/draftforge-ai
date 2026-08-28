@@ -73,9 +73,22 @@ export type AvailabilityRecord = Readonly<{
   evidence: readonly AvailabilityEvidence[];
 }>;
 
+export type AvailabilityScanFeed = Readonly<{
+  id: "authenticated_espn_player_news" | "official_nfl_news";
+  url: string;
+  retrievedAt: string;
+  status: "ok" | "failed";
+}>;
+
+export type AvailabilityScanReceipt = Readonly<{
+  completedAt: string;
+  feeds: readonly AvailabilityScanFeed[];
+}>;
+
 export type AvailabilityArtifact = Readonly<{
   schemaVersion: typeof AVAILABILITY_ARTIFACT_SCHEMA;
   generatedAt: string;
+  scanReceipt: AvailabilityScanReceipt;
   records: readonly AvailabilityRecord[];
 }>;
 
@@ -154,6 +167,20 @@ export type AvailabilityDecisionSnapshot = Readonly<{
   reasons: readonly AvailabilityProvenance[];
 }>;
 
+export function availabilityBoundedActionDeadline(
+  evaluation: AvailabilityGateEvaluation,
+  responseBudgetMs: number,
+  now = Date.now(),
+) {
+  const freshUntilMs = Date.parse(evaluation.freshUntil || "");
+  if (!evaluation.armingAllowed
+    || !Number.isSafeInteger(responseBudgetMs) || responseBudgetMs < 1
+    || !Number.isFinite(now)
+    || !Number.isFinite(freshUntilMs)) return null;
+  const deadline = Math.min(now + responseBudgetMs, freshUntilMs);
+  return Number.isSafeInteger(deadline) && deadline > now ? deadline : null;
+}
+
 const HARD_VETO_SET = new Set<string>(HARD_VETO_CLASSIFICATIONS);
 const ADVISORY_SET = new Set<string>(ADVISORY_CLASSIFICATIONS);
 const CLASSIFICATION_SET = new Set<string>([...HARD_VETO_CLASSIFICATIONS, ...ADVISORY_CLASSIFICATIONS]);
@@ -165,6 +192,32 @@ const MAX_RECORDS = 512;
 const MAX_EVIDENCE_PER_RECORD = 8;
 const MAX_URL_LENGTH = 2_048;
 const MAX_DECISION_KEY_LENGTH = 128;
+const REQUIRED_SCAN_FEEDS = ["authenticated_espn_player_news", "official_nfl_news"] as const;
+const SCAN_FEED_URL_RULES: Record<typeof REQUIRED_SCAN_FEEDS[number], {
+  hostname: string;
+  pathname: (pathname: string) => boolean;
+}> = {
+  authenticated_espn_player_news: {
+    hostname: "fantasy.espn.com",
+    pathname: (pathname) => pathname === "/football/players/news" || pathname === "/football/players/news/",
+  },
+  official_nfl_news: {
+    hostname: "www.nfl.com",
+    pathname: (pathname) => pathname === "/news" || pathname === "/news/" || pathname.startsWith("/news/"),
+  },
+};
+
+function scanFeedUrlMatchesId(id: typeof REQUIRED_SCAN_FEEDS[number], url: URL) {
+  const rule = SCAN_FEED_URL_RULES[id];
+  return url.protocol === "https:"
+    && url.hostname.toLowerCase() === rule.hostname
+    && (url.port === "" || url.port === "443")
+    && !url.username
+    && !url.password
+    && !url.search
+    && !url.hash
+    && rule.pathname(url.pathname);
+}
 
 function deepFreeze<T>(value: T): Readonly<T> {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
@@ -345,6 +398,63 @@ function parseRecord(value: unknown, index: number, errors: AvailabilityValidati
   };
 }
 
+function parseScanReceipt(value: unknown, errors: AvailabilityValidationError[]): AvailabilityScanReceipt | null {
+  const path = "$.scanReceipt";
+  if (!isPlainObject(value)) {
+    errors.push({ path, code: "INVALID_OBJECT" });
+    return null;
+  }
+  exactKeys(value, ["completedAt", "feeds"], path, errors);
+  if (!isStrictIsoTimestamp(value.completedAt)) errors.push({ path: `${path}.completedAt`, code: "INVALID_TIMESTAMP" });
+  if (!Array.isArray(value.feeds) || value.feeds.length !== REQUIRED_SCAN_FEEDS.length) {
+    errors.push({ path: `${path}.feeds`, code: "INVALID_SCAN_FEED_COUNT" });
+  }
+  const feeds: AvailabilityScanFeed[] = [];
+  const rawFeeds: unknown[] = Array.isArray(value.feeds) ? value.feeds : [];
+  for (let index = 0; index < rawFeeds.length; index += 1) {
+    const feed = rawFeeds[index];
+    const feedPath = `${path}.feeds[${index}]`;
+    if (!isPlainObject(feed)) {
+      errors.push({ path: feedPath, code: "INVALID_OBJECT" });
+      continue;
+    }
+    exactKeys(feed, ["id", "url", "retrievedAt", "status"], feedPath, errors);
+    if (!REQUIRED_SCAN_FEEDS.includes(feed.id as typeof REQUIRED_SCAN_FEEDS[number])) {
+      errors.push({ path: `${feedPath}.id`, code: "INVALID_SCAN_FEED_ID" });
+    }
+    let url: URL | null = null;
+    try { url = new URL(String(feed.url || "")); } catch { /* validation below */ }
+    const feedId = REQUIRED_SCAN_FEEDS.includes(feed.id as typeof REQUIRED_SCAN_FEEDS[number])
+      ? feed.id as typeof REQUIRED_SCAN_FEEDS[number]
+      : null;
+    if (!url || !feedId || !scanFeedUrlMatchesId(feedId, url) || String(feed.url).length > MAX_URL_LENGTH) {
+      errors.push({ path: `${feedPath}.url`, code: "INVALID_SCAN_FEED_URL" });
+    }
+    if (!isStrictIsoTimestamp(feed.retrievedAt)) errors.push({ path: `${feedPath}.retrievedAt`, code: "INVALID_TIMESTAMP" });
+    if (!new Set(["ok", "failed"]).has(String(feed.status || ""))) {
+      errors.push({ path: `${feedPath}.status`, code: "INVALID_SCAN_FEED_STATUS" });
+    }
+    if (feedId && url && scanFeedUrlMatchesId(feedId, url)
+      && isStrictIsoTimestamp(feed.retrievedAt) && ["ok", "failed"].includes(String(feed.status))) {
+      feeds.push({
+        id: feed.id as AvailabilityScanFeed["id"],
+        url: url.toString(),
+        retrievedAt: feed.retrievedAt,
+        status: feed.status as AvailabilityScanFeed["status"],
+      });
+    }
+  }
+  const ids = feeds.map((feed) => feed.id);
+  if (new Set(ids).size !== ids.length || !REQUIRED_SCAN_FEEDS.every((id) => ids.includes(id))) {
+    errors.push({ path: `${path}.feeds`, code: "REQUIRED_SCAN_FEEDS_MISSING" });
+  }
+  if (!isStrictIsoTimestamp(value.completedAt)) return null;
+  return {
+    completedAt: value.completedAt,
+    feeds: feeds.sort((left, right) => left.id.localeCompare(right.id)),
+  };
+}
+
 export function parseAvailabilityPolicy(input: unknown): AvailabilityValidationResult<AvailabilityPolicy> {
   const errors: AvailabilityValidationError[] = [];
   if (!isPlainObject(input)) {
@@ -377,12 +487,13 @@ export function parseAvailabilityArtifact(input: unknown): AvailabilityValidatio
   if (!isPlainObject(input)) {
     return deepFreeze({ ok: false, value: null, errors: [{ path: "$", code: "INVALID_OBJECT" }] });
   }
-  exactKeys(input, ["schemaVersion", "generatedAt", "records"], "$", errors);
+  exactKeys(input, ["schemaVersion", "generatedAt", "scanReceipt", "records"], "$", errors);
   if (input.schemaVersion !== AVAILABILITY_ARTIFACT_SCHEMA) errors.push({ path: "$.schemaVersion", code: "UNSUPPORTED_SCHEMA" });
   if (!isStrictIsoTimestamp(input.generatedAt)) errors.push({ path: "$.generatedAt", code: "INVALID_TIMESTAMP" });
   if (!Array.isArray(input.records) || input.records.length > MAX_RECORDS) {
     errors.push({ path: "$.records", code: "INVALID_RECORD_COUNT" });
   }
+  const scanReceipt = parseScanReceipt(input.scanReceipt, errors);
   const records = Array.isArray(input.records)
     ? input.records.slice(0, MAX_RECORDS + 1)
       .map((record, index) => parseRecord(record, index, errors))
@@ -391,10 +502,10 @@ export function parseAvailabilityArtifact(input: unknown): AvailabilityValidatio
         || left.classification.localeCompare(right.classification)
         || left.eventAt.localeCompare(right.eventAt))
     : [];
-  if (errors.length || !isStrictIsoTimestamp(input.generatedAt)) return deepFreeze({ ok: false, value: null, errors });
+  if (errors.length || !isStrictIsoTimestamp(input.generatedAt) || !scanReceipt) return deepFreeze({ ok: false, value: null, errors });
   return deepFreeze({
     ok: true,
-    value: { schemaVersion: AVAILABILITY_ARTIFACT_SCHEMA, generatedAt: input.generatedAt, records },
+    value: { schemaVersion: AVAILABILITY_ARTIFACT_SCHEMA, generatedAt: input.generatedAt, scanReceipt, records },
     errors: [] as const,
   });
 }
@@ -583,7 +694,22 @@ export function evaluateAvailabilityGate(input: {
   const blockingReasons = new Set<string>();
   const validationErrors: AvailabilityValidationError[] = [];
   if (generatedMs > evaluatedMs + FUTURE_CLOCK_SKEW_MS) blockingReasons.add("FUTURE_AVAILABILITY_ARTIFACT");
-  if (evaluatedMs - generatedMs > maxAgeMs) blockingReasons.add("STALE_AVAILABILITY_ARTIFACT");
+  if (evaluatedMs - generatedMs >= maxAgeMs) blockingReasons.add("STALE_AVAILABILITY_ARTIFACT");
+  const scanCompletedMs = Date.parse(artifact.scanReceipt.completedAt);
+  const freshnessAnchors = [generatedMs, scanCompletedMs];
+  if (scanCompletedMs > generatedMs + FUTURE_CLOCK_SKEW_MS || scanCompletedMs > evaluatedMs + FUTURE_CLOCK_SKEW_MS) {
+    blockingReasons.add("FUTURE_NEWS_SCAN_RECEIPT");
+  }
+  if (evaluatedMs - scanCompletedMs >= maxAgeMs) blockingReasons.add("STALE_NEWS_SCAN_RECEIPT");
+  if (artifact.scanReceipt.feeds.some((feed) => feed.status !== "ok")) blockingReasons.add("NEWS_SCAN_FAILED");
+  for (const feed of artifact.scanReceipt.feeds) {
+    const retrievedMs = Date.parse(feed.retrievedAt);
+    freshnessAnchors.push(retrievedMs);
+    if (retrievedMs > scanCompletedMs + FUTURE_CLOCK_SKEW_MS || retrievedMs > evaluatedMs + FUTURE_CLOCK_SKEW_MS) {
+      blockingReasons.add("FUTURE_NEWS_SCAN_FEED");
+    }
+    if (evaluatedMs - retrievedMs >= maxAgeMs) blockingReasons.add("STALE_NEWS_SCAN_FEED");
+  }
 
   const normalizedPlayers = input.players.map(normalizePoolPlayer);
   if (normalizedPlayers.some((player) => !player)) blockingReasons.add("INVALID_PLAYER_POOL_IDENTITY");
@@ -616,11 +742,12 @@ export function evaluateAvailabilityGate(input: {
   const unresolved: AvailabilityUnresolvedRecord[] = [];
   for (const record of artifact.records) {
     const recordRetrievedMs = Date.parse(record.retrievedAt);
+    freshnessAnchors.push(recordRetrievedMs);
     const eventMs = Date.parse(record.eventAt);
     if (recordRetrievedMs > generatedMs + FUTURE_CLOCK_SKEW_MS || recordRetrievedMs > evaluatedMs + FUTURE_CLOCK_SKEW_MS) {
       blockingReasons.add("FUTURE_AVAILABILITY_RECORD");
     }
-    if (evaluatedMs - recordRetrievedMs > maxAgeMs) blockingReasons.add("STALE_AVAILABILITY_RECORD");
+    if (evaluatedMs - recordRetrievedMs >= maxAgeMs) blockingReasons.add("STALE_AVAILABILITY_RECORD");
     if (eventMs > recordRetrievedMs + FUTURE_CLOCK_SKEW_MS) blockingReasons.add("EVENT_AFTER_RETRIEVAL");
     if (record.evidence.some((item) => Date.parse(item.publishedAt) > recordRetrievedMs + FUTURE_CLOCK_SKEW_MS)) {
       blockingReasons.add("EVIDENCE_AFTER_RETRIEVAL");
@@ -667,11 +794,12 @@ export function evaluateAvailabilityGate(input: {
   unresolved.sort((left, right) => identityKey(left.identity).localeCompare(identityKey(right.identity))
     || left.classification.localeCompare(right.classification) || left.reason.localeCompare(right.reason));
   const sortedBlockingReasons = [...blockingReasons].sort();
+  const effectiveFreshUntilMs = Math.min(...freshnessAnchors) + maxAgeMs;
   return deepFreeze({
     schemaVersion: AVAILABILITY_ARTIFACT_SCHEMA,
     evaluatedAt: input.evaluatedAt,
     artifactGeneratedAt: artifact.generatedAt,
-    freshUntil: new Date(generatedMs + maxAgeMs).toISOString(),
+    freshUntil: new Date(effectiveFreshUntilMs).toISOString(),
     digest: availabilityDigest,
     armingAllowed: sortedBlockingReasons.length === 0,
     status: sortedBlockingReasons.length === 0 ? "READY" : "BLOCKED",

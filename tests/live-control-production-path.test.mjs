@@ -1,0 +1,188 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+import {
+  percentile,
+  runLiveControlProductionPath,
+} from "../scripts/live-control-production-path.mjs";
+import {
+  CONTENTION_MEMORY_BUDGETS,
+  contentionCadencePlan,
+  evaluateContentionMemory,
+  runLiveControlContention,
+} from "../scripts/live-control-contention.mjs";
+
+test("production-path percentile accounting is deterministic", () => {
+  assert.equal(percentile([8, 2, 5, 1, 9], .5), 5);
+  assert.equal(percentile([8, 2, 5, 1, 9], .95), 9);
+  assert.equal(percentile([], .99), Number.POSITIVE_INFINITY);
+});
+
+test("contention cadences are phase-separated with meaningful tail samples", () => {
+  const plan = contentionCadencePlan();
+  assert.deepEqual(plan, {
+    normalObserver: { intervalMs: 1_000, phaseOffsetMs: 0, samples: 25 },
+    burstObserver: { intervalMs: 250, phaseOffsetMs: 62.5, samples: 100 },
+    writer: { intervalMs: 500, phaseOffsetMs: 125, samples: 50 },
+    availability: { intervalMs: 250, phaseOffsetMs: 187.5, samples: 100 },
+  });
+  assert.equal(plan.normalObserver.samples + plan.burstObserver.samples, 125);
+  assert.equal(new Set(Object.values(plan).map((cadence) => cadence.phaseOffsetMs)).size, 4);
+  assert.throws(() => contentionCadencePlan(4_999), /CONTENTION_DURATION/);
+  assert.throws(() => contentionCadencePlan(25_001), /CONTENTION_DURATION/);
+});
+
+test("contention memory gate distinguishes allocator RSS expansion from post-GC retention", () => {
+  const mib = 1024 * 1024;
+  const baseline = { rss: 116 * mib, heapUsed: 14 * mib, external: 8 * mib };
+  const allocatorExpansion = evaluateContentionMemory({
+    baseline,
+    postRun: { rss: 141 * mib, heapUsed: 14.5 * mib, external: 8.25 * mib },
+    peakRss: 145 * mib,
+  });
+  assert.equal(allocatorExpansion.passed, true);
+  assert.equal(allocatorExpansion.checks.peakRss, true);
+  assert.equal(allocatorExpansion.retainedGrowthMb.heapUsed, .5);
+  assert.equal(allocatorExpansion.retainedGrowthMb.external, .25);
+
+  for (const [label, input, failedCheck] of [
+    ["absolute peak RSS", {
+      baseline,
+      postRun: baseline,
+      peakRss: (CONTENTION_MEMORY_BUDGETS.peakRssMb + 1) * mib,
+    }, "peakRss"],
+    ["retained heap", {
+      baseline,
+      postRun: { ...baseline, heapUsed: baseline.heapUsed + (CONTENTION_MEMORY_BUDGETS.retainedHeapGrowthMb + .01) * mib },
+      peakRss: 150 * mib,
+    }, "retainedHeap"],
+    ["retained external", {
+      baseline,
+      postRun: { ...baseline, external: baseline.external + (CONTENTION_MEMORY_BUDGETS.retainedExternalGrowthMb + .01) * mib },
+      peakRss: 150 * mib,
+    }, "retainedExternal"],
+    ["absolute post-GC heap", {
+      baseline,
+      postRun: { ...baseline, heapUsed: (CONTENTION_MEMORY_BUDGETS.postGcHeapUsedMb + 1) * mib },
+      peakRss: 150 * mib,
+    }, "postGcHeap"],
+    ["absolute post-GC external", {
+      baseline,
+      postRun: { ...baseline, external: (CONTENTION_MEMORY_BUDGETS.postGcExternalMb + 1) * mib },
+      peakRss: 150 * mib,
+    }, "postGcExternal"],
+    ["missing measurements", {
+      baseline: {},
+      postRun: {},
+      peakRss: 0,
+    }, "measurements"],
+  ]) {
+    const result = evaluateContentionMemory(input);
+    assert.equal(result.passed, false, label);
+    assert.equal(result.checks[failedCheck], false, label);
+  }
+});
+
+test("contention retention certification fails closed without exposed full GC", async () => {
+  if (typeof globalThis.gc === "function") return;
+  await assert.rejects(
+    runLiveControlContention({ durationMs: 5_000 }),
+    /CONTENTION_REQUIRES_EXPOSE_GC/,
+  );
+});
+
+test("the production-path probe is a first-class package and release-gate command", async () => {
+  const [packageJson, releaseGate] = await Promise.all([
+    readFile(new URL("../package.json", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/live-control-release-gate.mjs", import.meta.url), "utf8"),
+  ]);
+  assert.equal(JSON.parse(packageJson).scripts["test:production-path"], "node scripts/live-control-production-path.mjs");
+  assert.equal(JSON.parse(packageJson).scripts["test:contention"], "node --expose-gc scripts/live-control-contention.mjs");
+  assert.match(releaseGate, /runBoundedNode\(\["scripts\/live-control-production-path\.mjs"\], 30_000\)/);
+  assert.match(releaseGate, /runBoundedNode\(\["--expose-gc", "scripts\/live-control-contention\.mjs"\], 40_000\)/);
+  assert.match(releaseGate, /"tests\/live-control-production-path\.test\.mjs"/);
+  assert.match(releaseGate, /contentionWarmSeconds: 5/);
+  assert.match(releaseGate, /productionContentionSeconds: 25/);
+});
+
+test("the bounded production path covers snake and salary-cap actions under churn and observer pressure", async () => {
+  const result = await runLiveControlProductionPath({ observerDurationMs: 1_000, actionSamplesPerOperation: 5 });
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
+  assert.equal(result.code, "LIVE_CONTROL_PRODUCTION_PATH_PASSED");
+  assert.deepEqual(result.scenario.formats, ["SNAKE", "AUCTION"]);
+  assert.equal(result.scenario.bidChurnMs, 75);
+  assert.deepEqual(result.scenario.observerCadenceHz, [1, 4]);
+  assert.equal(result.scenario.producerDeliveries.staleRejected, 2);
+  assert.equal(result.scenario.samplesPerOperation, 5);
+  assert.equal(result.scenario.physicalClicks, 22);
+  assert.equal(result.scenario.preliminaryNominationClicks, 5);
+  assert.equal(result.scenario.exactAcknowledgements, 22);
+  assert.equal(result.scenario.observerWrites, 0);
+  assert.deepEqual(result.scenario.snakeObserverOverlap, {
+    delayedConfirmationMs: 450,
+    physicalClicks: 1,
+    exactAcknowledgements: 1,
+    observerSamples: { normal: 1, burst: 4 },
+    boardObserverSamples: { normal: 1, burst: 4 },
+    statusObserverSamples: { normal: 1, burst: 4 },
+    observerWrites: 0,
+    maximumInFlight: 1,
+  });
+  assert.deepEqual(result.scenario.resultCodes, {
+    SELECT: { ROSTER_CONFIRMED: 5 },
+    NOMINATE: { NOMINATION_CONFIRMED: 5 },
+    BID_INCREMENTAL: { BID_SUPERSEDED: 1, BID_CONFIRMED: 4 },
+    BID_CUSTOM: { BID_SUPERSEDED: 1, BID_CONFIRMED: 4 },
+  });
+  assert.deepEqual(result.scenario.settlement, {
+    playerId: 10001,
+    amount: 9,
+    remainingBudget: 191,
+    maxLegalBid: 177,
+    rosterAmount: 9,
+    nextPlayerId: 10002,
+    nextCurrentBid: 1,
+    pending: false,
+  });
+  for (const operation of ["SELECT", "NOMINATE", "BID_INCREMENTAL", "BID_CUSTOM"]) {
+    assert.equal(result.latencyMs.actionByOperation[operation].count, 5);
+    assert.ok(result.latencyMs.actionByOperation[operation].p95 <= 1_000);
+    assert.ok(result.latencyMs.actionByOperation[operation].p99 <= 1_500);
+  }
+  assert.equal(result.resources.maximumActiveAuditPosts, 1);
+  assert.equal(result.resources.queue.maximumInFlight <= 1, true);
+  assert.equal(result.resources.queue.matrixMaximumInFlight <= 1, true);
+  assert.equal(result.resources.queue.final.inFlight, 0);
+  assert.deepEqual(result.observers.errors, []);
+  assert.deepEqual(result.observers.snake.boardActual, { normal: 1, burst: 4 });
+  assert.ok(result.latencyMs.snakeBoardRoute.p99 <= 200);
+  assert.ok(result.latencyMs.statusRoute.p99 <= 200);
+  assert.ok(result.latencyMs.snakeStatusRoute.p99 <= 200);
+  assert.equal(result.scenario.persistentCheckpoint.enabled, true);
+  assert.equal(result.scenario.persistentCheckpoint.entries, 4);
+  assert.equal(result.scenario.persistentCheckpoint.minimumPreseedBytes, Math.ceil(1.8 * 1024 * 1024));
+  assert.ok(result.scenario.persistentCheckpoint.preseedBytes >= Math.ceil(1.8 * 1024 * 1024));
+  assert.ok(result.scenario.persistentCheckpoint.preseedBytes <= 2 * 1024 * 1024);
+  assert.equal(result.scenario.persistentCheckpoint.preseedEntryBytes.length, 4);
+  assert.ok(result.scenario.persistentCheckpoint.preseedEntryBytes.every((bytes) => bytes <= 508 * 1024));
+  assert.equal(result.scenario.persistentCheckpoint.plannedDiskAck, true);
+  assert.equal(result.scenario.persistentCheckpoint.finalDiskAck, true);
+  assert.ok(result.scenario.persistentCheckpoint.finalBytes <= 2 * 1024 * 1024);
+  assert.deepEqual(result.scenario.criticalAuditChurn, {
+    writes: 12,
+    intervalMs: 75,
+    diskAcknowledgements: 13,
+    maximumActiveWriters: 1,
+    observerSamples: { normal: 1, burst: 4 },
+    observerWrites: 0,
+    observerErrors: [],
+    finalCheckpointBytes: result.scenario.criticalAuditChurn.finalCheckpointBytes,
+    finalSequence: 23,
+  });
+  assert.ok(result.scenario.criticalAuditChurn.finalCheckpointBytes <= 2 * 1024 * 1024);
+  assert.equal(result.latencyMs.criticalAuditPosts.count, 12);
+  assert.ok(result.latencyMs.criticalAuditPosts.p99 <= 450);
+  assert.ok(result.resources.peakRssMb <= result.budgets.peakRssMb);
+  assert.deepEqual(result.finalControl, { sequence: 5, pendingActionCount: 0, eventCount: 5 });
+});

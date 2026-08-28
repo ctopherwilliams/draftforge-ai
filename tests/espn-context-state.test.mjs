@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveEspnNominatedPlayer, resolveLiveBoardDisplayRank, stabilizeEspnContext } from "../app/lib/espn-context-state.ts";
+import { resolveEspnNominatedPlayer, resolveLiveBoardDisplayRank, resolveOwnNominationIntent, stabilizeEspnContext } from "../app/lib/espn-context-state.ts";
 
 const base = {
   leagueId: "701",
@@ -50,10 +50,46 @@ test("live auction nominees resolve by exact ESPN player id before duplicate nam
   );
 });
 
-test("live auction nominee name fallback is used only without a usable ESPN id", () => {
+test("live auction nominee name fallback is used only when the ESPN id is absent", () => {
   const players = [{ id: 202, name: "A.J. Brown" }];
   assert.equal(resolveEspnNominatedPlayer(players, { nominatedPlayer: "AJ Brown" }), players[0]);
+  assert.equal(resolveEspnNominatedPlayer(players, { nominatedPlayer: "AJ Brown", nominatedPlayerId: null }), players[0]);
   assert.equal(resolveEspnNominatedPlayer(players, { nominatedPlayer: "AJ Brown", nominatedPlayerId: 999 }), undefined);
+});
+
+test("live auction nominees accept exact signed ESPN defense ids before name variants", () => {
+  const players = [{ id: -16023, name: "Pittsburgh Steelers D/ST" }];
+  assert.equal(resolveEspnNominatedPlayer(players, {
+    nominatedPlayer: "Steelers Defense",
+    nominatedPlayerId: -16023,
+  }), players[0]);
+});
+
+test("present but invalid ESPN nominee ids fail closed without name fallback", () => {
+  const players = [{ id: -16023, name: "Pittsburgh Steelers D/ST" }];
+  for (const nominatedPlayerId of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.equal(resolveEspnNominatedPlayer(players, {
+      nominatedPlayer: "Pittsburgh Steelers D/ST",
+      nominatedPlayerId,
+    }), undefined);
+  }
+});
+
+test("late content recovery keeps an exact DRAIN nomination as a no-bid veto", () => {
+  const nominee = { id: 12345, name: "Exact Player" };
+  assert.equal(resolveOwnNominationIntent({
+    ownNominationIntent: "DRAIN",
+    ownNominationPlayerId: 12345,
+  }, nominee, null), "DRAIN");
+  assert.equal(resolveOwnNominationIntent({
+    ownNominationIntent: "DRAIN",
+    ownNominationPlayerId: 99999,
+  }, nominee, null), null);
+  assert.equal(resolveOwnNominationIntent({}, nominee, {
+    playerId: 12345,
+    playerName: "Exact Player",
+    intent: "DRAIN",
+  }), "DRAIN");
 });
 
 test("exact live nominee keeps its action object but displays its canonical live-board position", () => {

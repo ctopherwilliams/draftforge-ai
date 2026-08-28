@@ -2,12 +2,19 @@ export type EspnRosterEntry = { playerId?: number | null; name?: string | null; 
 export type EspnAuctionSale = { playerId?: number | null; playerName?: string | null; teamName?: string | null; amount?: number; sequence?: number };
 export type EspnAuctionBudget = { teamName: string; remaining: number; maxOffer: number };
 export type EspnSnakePick = { playerName: string; teamName: string; round: number; roundPick: number };
+export type EspnNominationIdentity = { playerId: number; playerName: string; intent: "TARGET" | "DRAIN" };
 
 export type EspnContext = {
+  producerSessionId?: string;
+  producerRevision?: number;
+  contextCapturedAt?: string;
   onClock?: boolean;
   inDraftRoom?: boolean;
   auctionActive?: boolean;
+  auctionTransactionMode?: "OFFER" | "NOMINATION" | null;
+  auctionTransactionReady?: boolean;
   leagueId?: string;
+  season?: number;
   tabId?: number;
   teamId?: number;
   nominatedPlayer?: string;
@@ -15,6 +22,8 @@ export type EspnContext = {
   currentBid?: number;
   maxLegalBid?: number;
   leadingBid?: boolean;
+  ownNominationIntent?: "TARGET" | "DRAIN" | null;
+  ownNominationPlayerId?: number | null;
   currentPick?: number | null;
   remainingSeconds?: number | null;
   availablePlayerIds?: number[];
@@ -22,6 +31,9 @@ export type EspnContext = {
   ownRoster?: EspnRosterEntry[];
   soundMuted?: boolean;
   autopickActive?: boolean;
+  playerPoolReady?: boolean;
+  auctionOfferReady?: boolean;
+  auctionNominationReady?: boolean;
   actionSurfaceReady?: boolean;
   snakeClockSource?: "ACTIVE_OWN_PICK" | "TEAM_LABEL" | null;
   snakeClockOwnMarker?: boolean;
@@ -30,6 +42,9 @@ export type EspnContext = {
   snakePicks?: EspnSnakePick[];
   auctionBudgets?: EspnAuctionBudget[];
   auctionSales?: EspnAuctionSale[];
+  auctionSettlementPending?: boolean;
+  auctionSettlementExpired?: boolean;
+  auctionSettlementCode?: "AUCTION_SETTLEMENT_CURRENT" | "AUCTION_SETTLEMENT_PENDING" | "AUCTION_SETTLEMENT_EXPIRED" | "AUCTION_SETTLEMENT_AMBIGUOUS";
 };
 
 function normalizedPlayerName(value: string | null | undefined) {
@@ -40,14 +55,33 @@ export function resolveEspnNominatedPlayer<T extends { id: number; name: string 
   players: T[],
   context: Pick<EspnContext, "nominatedPlayer" | "nominatedPlayerId">,
 ) {
-  const nominatedPlayerId = Number(context.nominatedPlayerId);
-  if (Number.isInteger(nominatedPlayerId) && nominatedPlayerId > 0) {
+  if (context.nominatedPlayerId !== null && context.nominatedPlayerId !== undefined) {
+    const nominatedPlayerId = Number(context.nominatedPlayerId);
+    if (!Number.isInteger(nominatedPlayerId) || nominatedPlayerId === 0 || nominatedPlayerId === -1) {
+      return undefined;
+    }
     return players.find((player) => player.id === nominatedPlayerId);
   }
   const nominatedPlayerName = normalizedPlayerName(context.nominatedPlayer);
   return nominatedPlayerName
     ? players.find((player) => normalizedPlayerName(player.name) === nominatedPlayerName)
     : undefined;
+}
+
+export function resolveOwnNominationIntent(
+  context: Pick<EspnContext, "ownNominationIntent" | "ownNominationPlayerId">,
+  nominated: { id: number; name: string } | undefined,
+  pending: EspnNominationIdentity | null,
+) {
+  if (!nominated) return null;
+  const contextIntent = ["TARGET", "DRAIN"].includes(String(context.ownNominationIntent || ""))
+    ? context.ownNominationIntent as "TARGET" | "DRAIN"
+    : null;
+  if (contextIntent && Number(context.ownNominationPlayerId) === nominated.id) return contextIntent;
+  if (pending
+    && pending.playerId === nominated.id
+    && normalizedPlayerName(pending.playerName) === normalizedPlayerName(nominated.name)) return pending.intent;
+  return null;
 }
 
 export function resolveLiveBoardDisplayRank<

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { auctionBudgetUsage, buildAuctionPlan, buildDraftDecision, buildPlayerPoolIndex, chooseAuctionNomination, openStarterSlots, recommendPlayers, starterNeeds } from "../app/lib/draft-engine.ts";
+import { auctionBudgetUsage, auctionRosterAllocation, buildAuctionPlan, buildDraftDecision, buildPlayerPoolIndex, chooseAuctionNomination, openStarterSlots, recommendPlayers, starterNeeds } from "../app/lib/draft-engine.ts";
 
 const league = {
   id: "1", name: "Test", season: 2026, size: 12, teamId: 1, draftType: "SNAKE",
@@ -214,6 +214,33 @@ test("salary-cap room inflation uses complete live spend when ESPN omits late bi
   assert.notEqual(plan.roomInflation, 1);
 });
 
+test("duplicate or unknown ESPN budget rows cannot impersonate complete room spend", () => {
+  const auctionLeague = {
+    ...league,
+    draftType: "AUCTION",
+    size: 2,
+    rosterSize: 4,
+    teams: [{ id: 1, name: "Us", abbrev: "US" }, { id: 2, name: "Rival", abbrev: "RIV" }],
+  };
+  const partialPrices = [
+    { playerId: 1, teamId: 1, overall: 1, round: 0, amount: 50 },
+    { playerId: 2, teamId: 2, overall: 2, round: 0, amount: 0 },
+  ];
+  const duplicate = buildAuctionPlan(players, partialPrices, auctionLeague, "BALANCED", [
+    { teamName: "Us", remaining: 150, maxOffer: 148 },
+    { teamName: "Us", remaining: 120, maxOffer: 118 },
+  ]);
+  const unknown = buildAuctionPlan(players, partialPrices, auctionLeague, "BALANCED", [
+    { teamName: "Us", remaining: 150, maxOffer: 148 },
+    { teamName: "Hidden stale table", remaining: 120, maxOffer: 118 },
+  ]);
+
+  assert.equal(duplicate.roomInflation, 1);
+  assert.equal(unknown.roomInflation, 1);
+  assert.equal(duplicate.knownSaleCoverage, .5);
+  assert.equal(unknown.knownSaleCoverage, .5);
+});
+
 test("salary-cap position budgets adapt to source-backed league values", () => {
   const auctionLeague = { ...league, draftType: "AUCTION" };
   const baseline = buildAuctionPlan(players, [], auctionLeague, "BALANCED");
@@ -271,6 +298,30 @@ test("ESPN multi-position starter slots contribute to every eligible position", 
     lineupSlotCounts: { "3": 1, "5": 1, "7": 1, "23": 2, "20": 6 },
   });
   assert.deepEqual(needs, { QB: .25, RB: .75, WR: 1.25, TE: .75, FLEX: 2 });
+});
+
+test("salary-cap planning allocates OP, RB/WR, and WR/TE starter slots exactly once", () => {
+  const sharedSlotLeague = {
+    ...league,
+    draftType: "AUCTION",
+    rosterSize: 10,
+    lineupSlotCounts: { "0": 1, "2": 1, "3": 1, "4": 1, "5": 1, "6": 1, "7": 1, "20": 3 },
+  };
+  const allocation = auctionRosterAllocation(sharedSlotLeague);
+  assert.deepEqual(allocation, {
+    QB: 1.25,
+    RB: 1.75,
+    WR: 2.25,
+    TE: 1.75,
+    FLEX: 0,
+    K: 0,
+    DST: 0,
+    BN: 3,
+  });
+  assert.equal(Object.values(allocation).reduce((sum, count) => sum + count, 0), 10);
+
+  const plan = buildAuctionPlan(players, [], sharedSlotLeague, "BALANCED");
+  assert.equal(Object.values(plan.positionBudgets).reduce((sum, amount) => sum + amount, 0), 200);
 });
 
 test("exact OP/FLEX matching releases a cheap QB surplus only after skill starters are filled", () => {
@@ -384,6 +435,38 @@ test("an ESPN QB plus OP lineup rejects a third quarterback", () => {
 
   assert.equal(recommendations.find((player) => player.id === 8).maxBid, 0);
   assert.ok(recommendations.find((player) => player.id === 8).score < recommendations.find((player) => player.id === 2).score);
+});
+
+test("ESPN slot 1 quarterback capacity keeps the third starter legal and caps the fourth", () => {
+  const threeQbLeague = {
+    ...league,
+    draftType: "AUCTION",
+    rosterSize: 5,
+    lineupSlotCounts: { "1": 3, "2": 1, "20": 1 },
+  };
+  const threeQbPlayers = [
+    { id: 701, name: "QB Starter One", team: "A", pos: "QB", rank: 1, adp: 1, auction: 30, projected: 410 },
+    { id: 702, name: "QB Starter Two", team: "B", pos: "QB", rank: 2, adp: 2, auction: 28, projected: 400 },
+    { id: 703, name: "QB Starter Three", team: "C", pos: "QB", rank: 3, adp: 3, auction: 25, projected: 390 },
+    { id: 704, name: "QB Depth Four", team: "D", pos: "QB", rank: 4, adp: 4, auction: 20, projected: 380 },
+    { id: 705, name: "Required Runner", team: "E", pos: "RB", rank: 5, adp: 5, auction: 20, projected: 275 },
+  ];
+  const twoQuarterbacks = [
+    { playerId: 701, teamId: 1, overall: 1, round: 0, amount: 3 },
+    { playerId: 702, teamId: 1, overall: 2, round: 0, amount: 3 },
+  ];
+
+  const thirdStarter = recommendPlayers(threeQbPlayers, twoQuarterbacks, threeQbLeague, "BALANCED", 3)
+    .find((player) => player.id === 703);
+  assert.equal(thirdStarter.fillsMandatoryStarter, true);
+  assert.ok(thirdStarter.maxBid > 0, "the third slot-1 QB starter must retain a legal salary-cap bid");
+
+  const fourthDepth = recommendPlayers(threeQbPlayers, [
+    ...twoQuarterbacks,
+    { playerId: 703, teamId: 1, overall: 3, round: 0, amount: 3 },
+  ], threeQbLeague, "BALANCED", 4).find((player) => player.id === 704);
+  assert.equal(fourthDepth.fillsMandatoryStarter, false);
+  assert.equal(fourthDepth.maxBid, 0, "the fourth QB must remain capped after all three slot-1 starters are filled");
 });
 
 test("salary-cap rosters cannot hoard scarce kicker or defense inventory", () => {

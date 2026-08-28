@@ -47,11 +47,48 @@ export type ConsensusPlayer = DraftPlayer & {
 };
 
 const SOURCE_WEIGHTS: Record<string, number> = { espn: .30, gng: .20, tradyr: .20, ffc: .15, mfl: .15 };
+const TOTAL_CONSENSUS_WEIGHT = Object.values(SOURCE_WEIGHTS).reduce((sum, weight) => sum + weight, 0);
+const TOTAL_MARKET_WEIGHT = SOURCE_WEIGHTS.espn + SOURCE_WEIGHTS.ffc + SOURCE_WEIGHTS.mfl;
+const TOTAL_MODEL_WEIGHT = SOURCE_WEIGHTS.gng + SOURCE_WEIGHTS.tradyr;
 const MAX_SOURCE_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const MAX_SOURCE_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const MIN_SOURCE_PLAYER_COVERAGE = 25;
 const REQUIRED_SOURCE_POSITIONS = ["QB", "RB", "WR", "TE"];
 const REQUIRED_INTELLIGENCE_SOURCE_IDS: IntelligenceSource["id"][] = ["ffc", "mfl", "tradyr", "gng"];
+
+export type PlayerConsensusCorroboration = Readonly<{
+  corroborated: boolean;
+  sourceCount: number;
+  minimumSourceCount: number;
+  specialist: boolean;
+}>;
+
+/**
+ * Pure metadata for later action-policy evaluation. This is intentionally not
+ * a universal action gate: ESPN specialist pools are covered by fewer public
+ * boards, and roster-completion safety needs paired evidence before wiring a
+ * new blocker into the live path.
+ */
+export function classifyPlayerConsensusCorroboration(player: {
+  pos?: string;
+  sourceCount?: number;
+  sourceRanks?: Record<string, number>;
+}): PlayerConsensusCorroboration {
+  const rankSourceIds = Object.keys(player.sourceRanks || {});
+  const reportedSourceCount = Number(player.sourceCount || 0);
+  const sourceCount = rankSourceIds.length
+    ? rankSourceIds.length
+    : Number.isInteger(reportedSourceCount) ? Math.max(0, Math.min(5, reportedSourceCount)) : 0;
+  const specialist = ["K", "DST"].includes(String(player.pos || "").toUpperCase());
+  const minimumSourceCount = specialist ? 2 : 4;
+  const espnPresent = rankSourceIds.length === 0 || rankSourceIds.includes("espn");
+  return Object.freeze({
+    corroborated: espnPresent && sourceCount >= minimumSourceCount,
+    sourceCount,
+    minimumSourceCount,
+    specialist,
+  });
+}
 
 type AuctionContext = Pick<LeagueSettings, "size" | "rosterSize" | "auctionBudget">;
 
@@ -287,12 +324,15 @@ export function mergeConsensus(
 
     const ranks = Object.values(sourceRanks);
     const rankSpread = standardDeviation(ranks);
-    const consensusScore = totalWeight ? weightedPercentile / totalWeight * 100 : 0;
+    // Missing player-level signals consume their fixed share instead of being
+    // silently renormalized away. A globally healthy board can omit one exact
+    // identity; that omission must lower, never inflate, the player's score.
+    const consensusScore = totalWeight ? weightedPercentile / TOTAL_CONSENSUS_WEIGHT * 100 : 0;
     const sourceCount = ranks.length;
     const coverage = sourceCount / 5;
     const consensusConfidence = Math.round(Math.max(35, Math.min(98, 52 + coverage * 38 - Math.min(20, rankSpread * .65))));
-    const marketScore = marketWeight ? marketPercentile / marketWeight * 100 : 0;
-    const modelScore = modelWeight ? modelPercentile / modelWeight * 100 : 0;
+    const marketScore = marketWeight ? marketPercentile / TOTAL_MARKET_WEIGHT * 100 : 0;
+    const modelScore = modelWeight ? modelPercentile / TOTAL_MODEL_WEIGHT * 100 : 0;
     const modelMarketEdge = modelWeight ? modelScore - marketScore : 0;
     const modelSourceCount = modelPercentiles.length;
     const modelSpread = standardDeviation(modelPercentiles);

@@ -25,11 +25,6 @@ function requireLabOnly(options) {
 export async function buildDraftDayRuntimeExpression(options = {}) {
   requireLabOnly(options);
   const contentScript = await readFile(espnContentPath, "utf8");
-  const readOnlyContentScript = contentScript.replace(
-    "  enforceMutedDraftSound(context);",
-    "  // LAB OBSERVER: never mutate ESPN sound or any other action control.",
-  );
-  if (readOnlyContentScript === contentScript) throw new Error("DRAFTFORGE_LAB_RUNTIME_READ_ONLY_PATCH_MISSING");
   return `(() => {
     try { globalThis.__DRAFTFORGE_CHAT_RUNTIME__?.stop?.(); } catch {}
     try { globalThis.__DRAFTFORGE_AUTOPILOT__?.stop?.("LAB_RUNTIME_REPLACED"); } catch {}
@@ -43,7 +38,7 @@ export async function buildDraftDayRuntimeExpression(options = {}) {
         sendMessage() { return Promise.resolve({ ok: true }); },
       },
     };
-    ${readOnlyContentScript}
+    ${contentScript}
     globalThis.__DRAFTFORGE_LAB_RUNTIME__ = Object.freeze({
       mode: "READ_ONLY_LAB",
       getContext: getTrackedContext,

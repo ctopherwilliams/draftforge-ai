@@ -99,6 +99,8 @@ export type AuctionPlan = {
   }[];
 };
 
+export type AuctionRosterAllocation = Record<Position | "BN", number>;
+
 export type LiveAuctionBudget = { teamName: string; remaining: number; maxOffer: number };
 
 export type PlayerPoolIndex = {
@@ -155,13 +157,16 @@ const STARTER_SLOT_ELIGIBILITY: Record<string, Position[]> = {
 
 const SKILL_POSITIONS = new Set<Position>(["QB", "RB", "WR", "TE"]);
 const POSITION_LIMIT_KEYS: Record<Position, string[]> = {
-  QB: ["QB", "1"],
-  RB: ["RB", "2"],
-  WR: ["WR", "3"],
-  TE: ["TE", "4"],
-  K: ["K", "5", "17"],
-  DST: ["DST", "D/ST", "16"],
-  FLEX: ["FLEX", "23"],
+  // Authenticated ESPN profiles use numeric position ids. When a simulation
+  // or compatibility caller also supplies symbolic defaults, the captured
+  // numeric rule remains authoritative instead of being silently shadowed.
+  QB: ["1", "QB"],
+  RB: ["2", "RB"],
+  WR: ["3", "WR"],
+  TE: ["4", "TE"],
+  K: ["5", "17", "K"],
+  DST: ["16", "DST", "D/ST"],
+  FLEX: ["23", "FLEX"],
 };
 
 type StarterSlot = {
@@ -265,6 +270,28 @@ export function starterNeeds(league: LeagueSettings) {
   return needs;
 }
 
+export function auctionRosterAllocation(league: LeagueSettings): AuctionRosterAllocation {
+  const needs = starterNeeds(league);
+  const allocation: AuctionRosterAllocation = {
+    QB: Number(needs.QB || 0),
+    RB: Number(needs.RB || 0),
+    WR: Number(needs.WR || 0),
+    TE: Number(needs.TE || 0),
+    FLEX: Number(needs.FLEX || 0),
+    K: Number(needs.K || 0),
+    DST: Number(needs.DST || 0),
+    BN: 0,
+  };
+  const starterSlotCount = Object.entries(allocation)
+    .filter(([position]) => position !== "BN")
+    .reduce((sum, [, count]) => sum + count, 0);
+  // Fractional shares are an allocation device: their sum is the exact count
+  // of OP/RB-WR/WR-TE slots. Rounding each share independently would reserve
+  // the same physical starter slot two to four times and erase bench slots.
+  allocation.BN = Math.max(0, league.rosterSize - starterSlotCount);
+  return allocation;
+}
+
 function percentile(value: number, min: number, max: number) {
   if (!Number.isFinite(value) || max === min) return 0;
   return Math.max(0, Math.min(1, (value - min) / (max - min)));
@@ -335,6 +362,35 @@ function openSlotsFromLiveBudget(budget: LiveAuctionBudget, rosterSize: number) 
   return Math.max(0, Math.min(rosterSize, Number(budget.remaining) - Number(budget.maxOffer) + 1));
 }
 
+function indexedLiveAuctionBudgets(league: LeagueSettings, liveBudgets: LiveAuctionBudget[]) {
+  const rowsByTeamId = new Map<number, LiveAuctionBudget[]>();
+  for (const budget of liveBudgets) {
+    const budgetName = normalizedTeamName(budget.teamName);
+    const matchingTeams = league.teams.filter((team) => (
+      [team.name, team.abbrev].some((name) => normalizedTeamName(name) === budgetName)
+    ));
+    const remaining = Number(budget.remaining);
+    const maxOffer = Number(budget.maxOffer);
+    if (matchingTeams.length !== 1
+      || !Number.isInteger(remaining)
+      || remaining < 0
+      || remaining > league.auctionBudget
+      || !Number.isInteger(maxOffer)
+      || maxOffer < 0
+      || maxOffer > remaining) continue;
+    const rows = rowsByTeamId.get(matchingTeams[0].id) || [];
+    rows.push({ ...budget, remaining, maxOffer });
+    rowsByTeamId.set(matchingTeams[0].id, rows);
+  }
+  const byTeamId = new Map([...rowsByTeamId.entries()].flatMap(([teamId, rows]) => (
+    rows.length === 1 ? [[teamId, rows[0]] as const] : []
+  )));
+  const complete = league.teams.length === league.size
+    && byTeamId.size === league.size
+    && league.teams.every((team) => byTeamId.has(team.id));
+  return { byTeamId, complete };
+}
+
 export function buildAuctionPlan(
   players: DraftPlayer[],
   picks: DraftPick[],
@@ -344,17 +400,7 @@ export function buildAuctionPlan(
   playerPool = buildPlayerPoolIndex(players, league),
 ): AuctionPlan {
   const needs = starterNeeds(league);
-  const dedicatedCounts: Record<string, number> = {
-    QB: Math.ceil(Number(needs.QB || 0)),
-    RB: Math.ceil(Number(needs.RB || 0)),
-    WR: Math.ceil(Number(needs.WR || 0)),
-    TE: Math.ceil(Number(needs.TE || 0)),
-    FLEX: Math.ceil(Number(needs.FLEX || 0)),
-    K: Math.ceil(Number(needs.K || 0)),
-    DST: Math.ceil(Number(needs.DST || 0)),
-  };
-  const starterSlots = Object.values(dedicatedCounts).reduce((sum, count) => sum + count, 0);
-  dedicatedCounts.BN = Math.max(0, league.rosterSize - starterSlots);
+  const dedicatedCounts = auctionRosterAllocation(league);
   const minimumRosterReserve = Math.max(0, league.rosterSize);
   const discretionary = Math.max(0, league.auctionBudget - minimumRosterReserve);
   const { marketExtraByPosition, playerById, rosterableMarket } = playerPool;
@@ -412,11 +458,11 @@ export function buildAuctionPlan(
     return player && expected ? [{ actual: Math.max(0, pick.amount), expected, position: player.pos }] : [];
   });
   const pricedMarketPicks = marketPicks.filter((pick) => pick.actual > 0);
-  const normalizedLiveBudgets = new Map(liveBudgets.map((budget) => [normalizedTeamName(budget.teamName), budget]));
+  const indexedBudgets = indexedLiveAuctionBudgets(league, liveBudgets);
   const opponents = league.teams.filter((team) => team.id !== league.teamId).map((team) => {
     const teamPicks = picksByTeam.get(team.id) || [];
     const pricedTeamPicks = teamPicks.filter((pick) => pick.amount > 0);
-    const liveBudget = normalizedLiveBudgets.get(normalizedTeamName(team.name || team.abbrev || ""));
+    const liveBudget = indexedBudgets.byTeamId.get(team.id);
     const spent = liveBudget ? Math.max(0, league.auctionBudget - liveBudget.remaining) : pricedTeamPicks.reduce((sum, pick) => sum + pick.amount, 0);
     const liveOpenSlots = liveBudget ? openSlotsFromLiveBudget(liveBudget, league.rosterSize) : null;
     const playersRostered = liveOpenSlots === null ? teamPicks.length : Math.max(0, league.rosterSize - liveOpenSlots);
@@ -441,20 +487,20 @@ export function buildAuctionPlan(
     };
   });
 
-  const liveRoomPlayers = liveBudgets.length >= league.size
-    ? liveBudgets.reduce((sum, budget) => {
+  const liveRoomPlayers = indexedBudgets.complete
+    ? league.teams.reduce((sum, team) => {
+        const budget = indexedBudgets.byTeamId.get(team.id)!;
         const openSlots = openSlotsFromLiveBudget(budget, league.rosterSize);
         if (openSlots !== null) return sum + Math.max(0, league.rosterSize - openSlots);
-        const team = league.teams.find((candidate) => normalizedTeamName(candidate.name || candidate.abbrev || "") === normalizedTeamName(budget.teamName));
-        return sum + (team ? (picksByTeam.get(team.id) || []).length : 0);
+        return sum + (picksByTeam.get(team.id) || []).length;
       }, 0)
     : 0;
   const roomPlayers = Math.max(picks.length, liveRoomPlayers);
   const knownSaleCoverage = roomPlayers > 0 ? Math.min(1, pricedMarketPicks.length / roomPlayers) : 1;
   const marketCoverage = roomPlayers > 0 ? Math.min(1, marketPicks.length / roomPlayers) : 1;
-  const hasCompleteLiveBudgets = liveBudgets.length >= league.size;
+  const hasCompleteLiveBudgets = indexedBudgets.complete;
   const actualSpend = hasCompleteLiveBudgets
-    ? liveBudgets.reduce((sum, budget) => sum + Math.max(0, league.auctionBudget - Number(budget.remaining)), 0)
+    ? [...indexedBudgets.byTeamId.values()].reduce((sum, budget) => sum + Math.max(0, league.auctionBudget - Number(budget.remaining)), 0)
     : pricedMarketPicks.reduce((sum, pick) => sum + pick.actual, 0);
   const expectedSpend = marketPicks.reduce((sum, pick) => sum + pick.expected, 0);
   const inflationReady = marketPicks.length > 0
@@ -707,6 +753,7 @@ export function recommendPlayers(
     // Use exact dedicated slots for QB and TE saturation instead of the
     // fractional need total.
     const quarterbackStarterCapacity = Number(league.lineupSlotCounts?.["0"] || 0)
+      + Number(league.lineupSlotCounts?.["1"] || 0)
       + Number(league.lineupSlotCounts?.["7"] || 0);
     const quarterbackDepthCap = Math.max(2, quarterbackStarterCapacity);
     const singleTightEndStarter = Number(league.lineupSlotCounts?.["6"] || 0) === 1;

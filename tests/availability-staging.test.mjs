@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { GET, OPTIONS, POST } from "../app/api/availability/route.ts";
+import { GET, OPTIONS, POST, resetAvailabilityStageMemoryForTesting } from "../app/api/availability/route.ts";
+import { clearPersistedAvailabilityStage } from "../app/lib/availability-stage-store.ts";
 import {
   normalizeAvailabilityOrigin,
   parseAvailabilityStageArguments,
@@ -21,6 +22,13 @@ function currentArtifact(overrides = {}) {
   return {
     schemaVersion: "draftforge.availability/v1",
     generatedAt: timestamp(-30_000),
+    scanReceipt: {
+      completedAt: timestamp(-40_000),
+      feeds: [
+        { id: "authenticated_espn_player_news", url: "https://fantasy.espn.com/football/players/news", retrievedAt: timestamp(-50_000), status: "ok" },
+        { id: "official_nfl_news", url: "https://www.nfl.com/news/", retrievedAt: timestamp(-50_000), status: "ok" },
+      ],
+    },
     records: [{
       identity: { espnPlayerId: 901, normalizedName: "stagingexample", team: "BUF", position: "WR" },
       classification,
@@ -51,6 +59,25 @@ function post(body, overrides = {}) {
   }));
 }
 
+function delayedPost(body) {
+  let release;
+  const ready = new Promise((resolve) => { release = resolve; });
+  const encoded = new TextEncoder().encode(typeof body === "string" ? body : JSON.stringify(body));
+  const request = new Request("http://127.0.0.1:3000/api/availability", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: "http://127.0.0.1:3000" },
+    body: new ReadableStream({
+      async start(controller) {
+        await ready;
+        controller.enqueue(encoded);
+        controller.close();
+      },
+    }),
+    duplex: "half",
+  });
+  return { request, release };
+}
+
 test("availability staging starts fail-closed and permits only exact loopback requests", async () => {
   const missing = await GET(new Request("http://127.0.0.1:3000/api/availability"));
   assert.equal(missing.status, 404);
@@ -77,6 +104,9 @@ test("availability staging starts fail-closed and permits only exact loopback re
 });
 
 test("POST stages only validated sanitized state and GET returns the deterministic current digest", async () => {
+  const previousPersistence = process.env.DRAFTFORGE_PERSIST_AVAILABILITY_STAGE;
+  process.env.DRAFTFORGE_PERSIST_AVAILABILITY_STAGE = "1";
+  try {
   const artifact = currentArtifact();
   const recorded = await post({ artifact, policy });
   assert.equal(recorded.status, 200);
@@ -104,6 +134,73 @@ test("POST stages only validated sanitized state and GET returns the determinist
 
   const replay = await post({ policy, artifact });
   assert.equal((await replay.json()).digest, result.digest);
+
+  resetAvailabilityStageMemoryForTesting();
+  const recovered = await GET(new Request("http://127.0.0.1:3000/api/availability"));
+  assert.equal(recovered.status, 200);
+  const recoveredStage = await recovered.json();
+  assert.equal(recoveredStage.code, "AVAILABILITY_STAGE_READY");
+  assert.equal(recoveredStage.digest, result.digest);
+  assert.deepEqual(recoveredStage.artifact, artifact);
+  } finally {
+    resetAvailabilityStageMemoryForTesting();
+    await clearPersistedAvailabilityStage();
+    if (previousPersistence === undefined) delete process.env.DRAFTFORGE_PERSIST_AVAILABILITY_STAGE;
+    else process.env.DRAFTFORGE_PERSIST_AVAILABILITY_STAGE = previousPersistence;
+  }
+});
+
+test("newer valid staging wins when an older valid request finishes parsing later", async () => {
+  const previousPersistence = process.env.DRAFTFORGE_PERSIST_AVAILABILITY_STAGE;
+  process.env.DRAFTFORGE_PERSIST_AVAILABILITY_STAGE = "1";
+  resetAvailabilityStageMemoryForTesting();
+  await clearPersistedAvailabilityStage();
+  try {
+    const olderArtifact = currentArtifact({ records: [] });
+    const newerArtifact = currentArtifact({
+      generatedAt: timestamp(-20_000),
+      records: [],
+    });
+    const delayed = delayedPost({ policy, artifact: olderArtifact });
+    const olderResponse = POST(delayed.request);
+    const newerResponse = await post({ policy, artifact: newerArtifact });
+    assert.equal(newerResponse.status, 200);
+
+    delayed.release();
+    const superseded = await olderResponse;
+    assert.equal(superseded.status, 409);
+    assert.equal((await superseded.json()).code, "AVAILABILITY_STAGE_SUPERSEDED");
+
+    const current = await GET(new Request("http://127.0.0.1:3000/api/availability"));
+    assert.deepEqual((await current.json()).artifact, newerArtifact);
+    resetAvailabilityStageMemoryForTesting();
+    const recovered = await GET(new Request("http://127.0.0.1:3000/api/availability"));
+    assert.deepEqual((await recovered.json()).artifact, newerArtifact, "disk and memory retain the same newest request");
+  } finally {
+    resetAvailabilityStageMemoryForTesting();
+    await clearPersistedAvailabilityStage();
+    if (previousPersistence === undefined) delete process.env.DRAFTFORGE_PERSIST_AVAILABILITY_STAGE;
+    else process.env.DRAFTFORGE_PERSIST_AVAILABILITY_STAGE = previousPersistence;
+  }
+});
+
+test("an older malformed request cannot clear a newer valid staged authorization", async () => {
+  resetAvailabilityStageMemoryForTesting();
+  const delayed = delayedPost("{not-json");
+  const olderResponse = POST(delayed.request);
+  const artifact = currentArtifact({ records: [] });
+  const recorded = await post({ policy, artifact });
+  assert.equal(recorded.status, 200);
+
+  delayed.release();
+  const rejected = await olderResponse;
+  assert.equal(rejected.status, 400);
+  assert.equal((await rejected.json()).code, "INVALID_JSON");
+
+  const current = await GET(new Request("http://127.0.0.1:3000/api/availability"));
+  assert.equal(current.status, 200);
+  assert.deepEqual((await current.json()).artifact, artifact);
+  resetAvailabilityStageMemoryForTesting();
 });
 
 test("invalid, stale, oversized, or non-JSON staging attempts clear prior authorization without echoing input", async () => {

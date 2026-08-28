@@ -5,12 +5,15 @@ export function liveControlFixturePayload({
   now = Date.now(),
   since = 0,
   events,
+  operator = null,
   overrides = {},
 } = {}) {
   const capturedAt = new Date(now).toISOString();
+  const earliestRetainedSequence = sequence === 0 ? 0 : Math.max(1, sequence - 255);
+  const firstResponseSequence = Math.max(since + 1, earliestRetainedSequence);
   const resolvedEvents = events ?? Array.from(
-    { length: Math.max(0, sequence - since) },
-    (_, index) => ({ sequence: since + index + 1 }),
+    { length: Math.max(0, sequence - firstResponseSequence + 1) },
+    (_, index) => ({ sequence: firstResponseSequence + index }),
   );
   return {
     ok: true,
@@ -21,6 +24,8 @@ export function liveControlFixturePayload({
       schemaVersion: 1,
       sessionId: "release-gate-fixture",
       sequence,
+      earliestRetainedSequence,
+      truncated: earliestRetainedSequence > 0 && since + 1 < earliestRetainedSequence,
       unchanged: sequence <= since,
       pendingActionCount: 0,
       historicalAutopickDetected: false,
@@ -30,12 +35,15 @@ export function liveControlFixturePayload({
       freshness: {
         espnContextAt: capturedAt,
         pickFeedAt: capturedAt,
+        pickFeedObservedAt: capturedAt,
+        pickFeedLagging: false,
         sourceSnapshotAt: capturedAt,
         lastActionAt: null,
       },
       agesMs: {
         espnContext: 0,
         pickFeed: 0,
+        pickFeedObserved: 0,
         sourceSnapshot: 0,
         lastAction: null,
       },
@@ -43,6 +51,7 @@ export function liveControlFixturePayload({
       events: resolvedEvents,
       ...overrides,
     },
+    operator,
     evaluation: {
       complete: false,
       finalReady: false,

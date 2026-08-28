@@ -12,6 +12,7 @@ For implementation history and exclusions, see [AGENT_HANDOFF.md](AGENT_HANDOFF.
 | DraftForge dashboard | Command center: show the exact action, clock, bid ceiling, protected reserve, roster needs, alternatives, source health, and safety state. |
 | Authenticated ESPN tab | Execution surface: provide authoritative rules, room state, player availability, bids, picks, roster confirmation, sound state, and Autopick state. |
 | Chrome companion | Narrow enforcement layer: act only in the exact imported tab, league, team, clock, player/nominee, and offer state. |
+| `draft-day:status` | Read-only chat view: exactly one bounded (750 ms, 64 KiB) loopback GET for one atomic control-and-board snapshot; no Chrome/CDP, POST, source refresh, engine call, or ESPN action. A stale or unsafe snapshot returns blocked with no recommendation. |
 
 Keep Codex open in the desktop app and exactly two controlled Chrome tabs: `http://127.0.0.1:3000` and the one authenticated ESPN lobby or live room. During the live draft, keep those as the active tab in separate Chrome windows so Chrome cannot background-throttle ESPN's exact action timers. Do not use a development server, multiple ESPN draft rooms, or a stale dashboard on draft day.
 
@@ -22,7 +23,7 @@ Keep Codex open in the desktop app and exactly two controlled Chrome tabs: `http
 - Never act with stale or incomplete source coverage.
 - Never act on an unverified, short, opponent, or changed clock.
 - Never act in the wrong league, team, tab, player, nominee, or offer state.
-- ESPN sound must remain muted and ESPN Autopick must remain off.
+- ESPN Autopick must remain off. ESPN sound is an observed operator preference; muted is recommended for testing, but on/off state does not authorize or block an action.
 - Salary-cap bids may not exceed the exact live ceiling or consume the $1-per-open-slot reserve.
 - No bidding wars, duplicate players, position-cap violations, or unnecessary second K/DST.
 - Mandatory starter and specialist completion overrides discretionary depth in the endgame.
@@ -35,16 +36,16 @@ Last updated: 2026-08-28.
 
 | Gate | State |
 | --- | --- |
-| v0.2.26 post-live hardening | Local GO: build/typecheck/lint/audit; 279/279 full tests; deterministic 20+20 drafts; fresh five-seed 10,000-draft two-format matrix with zero failures/hard violations; 121/121 live-control release tests; 9/9 chaos; 1,000 status reads with zero failures at p95 2.52 ms/p99 3.20 ms; bounded soak passed; ten-scenario visual gate passed; independent P0/P1 re-review GO. Package SHA-256 `96acc8438a0f5ca2e66bd780afe7432581f95198ff0c5a8cd943b6318b478791`. The authenticated 2026-08-28 no-click Chrome preflight reproduced league `44050`, team `7` as 12-team PPR, $200 salary cap, 14 slots, QB plus OP, with exactly two tabs and all actions locked. Authenticated certification and current 5/5 data remain NO-GO until a server-only `TRADYR_API_KEY` is configured and a fresh complete snapshot is captured. |
-| Local release gate | v0.2.24: 201/201 tests, lint, typecheck, production build, UI, extension safety, replay, managed workspace cleanup, recovery targeting, and latency passing; visual certification covers pre-room plus snake/salary command centers at 390, 1440, 1728, and 2560 widths with nine zero-distance captures and one accepted one-pixel mobile distance |
-| Deterministic drafts | 20/20 snake and 20/20 salary-cap complete and legal |
-| Live-snapshot Monte Carlo | Fresh seed `20260820`: 10,000 snake + 10,000 salary-cap, including 4,000 exposed holdouts; zero failures, hard violations, or simulation errors |
-| Overnight battle qualification | Four 5-draft batches per format: 20/20 snake + 20/20 salary cap, exact holdout replay, zero hard violations |
+| 2026-08-28 post-live control release | Local mechanics gate **PASS** for companion v0.2.27: 594/594 full-suite tests; 417 focused live-control tests plus chaos/load/contention/production probes; lint; ten-viewport visual certification; two-minute soak; zero dependency vulnerabilities; and 10,000 snake plus 10,000 salary-cap schema-v3 synthetic drafts with zero errors or hard violations. Two independent 1,000-draft current-code replays matched exactly. Current authenticated arming remains **NO-GO** because `TRADYR_API_KEY` is absent, no fresh authenticated source snapshot/availability artifact exists, and the exact two-tab no-click/live-format certification is still required from the committed revision. Synthetic evidence does not certify current rankings or a room. |
+| Historical local release gate | v0.2.24: 201/201 tests, lint, typecheck, production build, UI, extension safety, replay, managed workspace cleanup, recovery targeting, and latency passing; visual certification covered pre-room plus snake/salary command centers at 390, 1440, 1728, and 2560 widths with nine zero-distance captures and one accepted one-pixel mobile distance. This does not certify the current working tree. |
+| Historical deterministic drafts | 20/20 snake and 20/20 salary-cap complete and legal under the recorded candidate |
+| Historical live-snapshot Monte Carlo | Seed `20260820`: 10,000 snake + 10,000 salary-cap, including 4,000 exposed holdouts; zero failures, hard violations, or simulation errors under that snapshot |
+| Historical overnight battle qualification | Four 5-draft batches per format: 20/20 snake + 20/20 salary cap, exact holdout replay, zero hard violations |
 | Historical post-sleeper authenticated ledger | 19/20 snake and 15/20 salary-cap; retained as historical evidence |
-| Current clean-room authenticated campaign | 20/20 snake and 20/20 salary-cap; every countable room final-audited; contaminated and incomplete rooms excluded |
-| Final authenticated latency | Snake 16/16: submit p95 1.140s, p99 1.175s, max 1.184s; salary cap 14/14: submit p95 0.720s, p99 1.414s, max 1.717s |
-| Cold-start and recovery | Server, tab, extension, source, stale-action, and ESPN-Autopick recovery paths passed fail-closed checks; contaminated recovery room `1446060763` remains excluded |
-| One-command READY gates | Saved snake and salary-cap profiles both return `DRAFT_DAY_READY` with every exact setting/source/tab/safety check true |
+| Historical final clean-room authenticated campaign | 20/20 snake and 20/20 salary-cap; every countable room final-audited under its immutable release; contaminated and incomplete rooms excluded |
+| Historical authenticated latency | Snake 16/16: submit p95 1.140s, p99 1.175s, max 1.184s; salary cap 14/14: submit p95 0.720s, p99 1.414s, max 1.717s |
+| Historical cold-start and recovery | Server, tab, extension, source, stale-action, and ESPN-Autopick recovery paths passed fail-closed checks; contaminated recovery room `1446060763` remains excluded |
+| Historical 2026-08-21 READY gates | Saved snake and salary-cap profiles returned `DRAFT_DAY_READY` under that release's then-current exact settings and sources. This does not satisfy the 2026-08-28 keyed/schema-v3 source gate. |
 | v0.2.17 authenticated pre-room | League `44050`, team `7`: exact QB+OP salary-cap rules, two-QB intelligence profile, 5/5 sources, exactly two Chrome tabs, companion v0.2.17, settings confirmed, Auto-Draft off, and `DRAFT_DAY_READY` |
 | v0.2.17 authenticated recovery and completion | Salary-cap room `1778564226`: deliberate dashboard-reload recovery, exact two-window/two-tab workspace, 14/14 ESPN/app player-and-price parity, $182 spent/$18 remaining, K/DST complete, zero violations, muted sound, ESPN Autopick off, automatic shutdown, and `DRAFT_AUDIT_READY` |
 | v0.2.22 authenticated cold-start and server recovery | Snake room `1221310079`: one-shot pre-room watch bound before the opening slot, first pick submitted with 27 seconds left, deliberate server outage at 2/16 recovered without reloading ESPN, exact 16/16 parity, zero violations, muted sound, ESPN Autopick off, automatic shutdown, and `DRAFT_AUDIT_READY` |
@@ -54,7 +55,7 @@ Last updated: 2026-08-28.
 | Excluded v0.2.24 recovery drill | Snake room `290283938` was deliberately excluded: an optional recovery was started after ESPN had already advanced to the team's 30-second clock; DraftForge refused the unsafe late action, ESPN timed out and enabled its own Autopick, and the exact room was closed. Never schedule an optional recovery during or immediately before an own-turn window. |
 | Deterministic holdout replay | 2,000 snake + 2,000 salary-cap records replayed byte-for-byte with zero mismatches |
 
-Do not advance an authenticated count without a complete final-ready loopback audit. Current evidence is machine-readable in `simulation/evidence/authenticated-certification-20260818.json`; older excluded rooms remain historical and must not be retroactively counted.
+Do not advance an authenticated count without a complete final-ready loopback audit. Historical evidence is machine-readable in `simulation/evidence/authenticated-certification-20260818.json`; it does not certify the current working tree or current sources, and older excluded rooms must not be retroactively counted.
 
 ## T-24-hour preparation
 
@@ -62,14 +63,14 @@ Do not advance an authenticated count without a complete final-ready loopback au
 2. Pull and verify the merged release outside the live-draft window:
 
    ```bash
-   cd /Users/chris/draftforge-ai
+   cd /Users/chris/github/draftforge-ai
    git switch main
    git pull --ff-only
    npm install
    npm run check
    ```
 
-3. Confirm the unpacked Chrome companion is version `0.2.26` and loaded from this repository's `extension/` directory. The packaged zip SHA-256 is `96acc8438a0f5ca2e66bd780afe7432581f95198ff0c5a8cd943b6318b478791`. The older authenticated rooms remain regression evidence, but v0.2.26 must receive its own authenticated no-click and salary-cap certification after the current keyed source gate passes. The dashboard preflight must also report companion-managed workspace cleanup ready.
+3. Confirm the unpacked Chrome companion version and packaged zip SHA-256 exactly match `config/draft-day-release.json` from the final committed candidate and that Chrome loaded this repository's `extension/` directory. Older authenticated rooms and package digests remain historical regression evidence; the current candidate must receive its own authenticated no-click and salary-cap certification after the keyed schema-v3 source gate passes. The dashboard preflight must also report companion-managed workspace cleanup ready.
 4. Run one cold-start, no-click rehearsal for the exact league. Do not wait until the real room opens to discover an ESPN login, extension, source, firewall, or Chrome-control problem.
 5. Keep the companion zip digest and current release evidence in [AGENT_HANDOFF.md](AGENT_HANDOFF.md).
 
@@ -79,7 +80,7 @@ Do not advance an authenticated count without a complete final-ready loopback au
 2. Start one production server:
 
    ```bash
-   cd /Users/chris/draftforge-ai
+   cd /Users/chris/github/draftforge-ai
    npm run start
    ```
 
@@ -93,10 +94,12 @@ Do not advance an authenticated count without a complete final-ready loopback au
 7. Configure the free Tradyr key only in the production server environment as `TRADYR_API_KEY`; never place it in a URL, browser, snapshot, log, or Git. Warm the five sources with the imported scoring and league size. League `44050`, team `7`, currently uses:
 
    ```bash
-   npm run draft-day:warm -- --league 44050 --team 7 --scoring PPR --teams 12 --season 2026
+   npm run draft-day:warm -- --scoring PPR --teams 12 --season 2026 --qbs 2
    ```
 
-8. Require `FIVE_SOURCE_READY` before room creation. A cold warmup may take about 20 seconds.
+   This command warms only the exact scoring/team-count/season/QB source profile. Authenticated league and team proof comes from the dashboard audit and the subsequent `draft-day:ready` gate; unsupported flags fail instead of being ignored.
+
+8. Require `FIVE_SOURCE_READY` before room creation. The WARM response and live dashboard audit must match on exact scoring/team-count/season/QB profile, canonical UTC generation timestamp, and lowercase `sha256:<64 hex>` snapshot ID. An older profile, stale timestamp, schema-v1 artifact, or dashboard loaded before the current production-server instance must fail. Reload the dashboard after a server restart and rerun the gate. A cold warmup may take about 20 seconds.
 9. Require the exact saved-profile gate before creating the room:
 
    ```bash
@@ -130,7 +133,7 @@ Verify the complete live-room dry run:
 
 - one exact ESPN draft tab matches league and team;
 - live pool, roster, clock, and action controls resolve;
-- ESPN sound is muted;
+- ESPN sound state is visible as operator-preference telemetry; either on or muted is legal;
 - ESPN Autopick is off;
 - five sources remain fresh;
 - the no-click engine returns one legal recommendation;
@@ -156,6 +159,26 @@ Routine recovery is Codex-owned. The user should not have to reload the extensio
 
 Use armed auto with chat supervision when the clock is short. Use Guided mode when there is enough time for per-action approval.
 
+The exact successful live doctor gate automatically creates an ignored local code-freeze record bound to the clean, upstream-matched Git revision, saved source league, team, and exact ESPN room:
+
+```bash
+npm run draft-day:doctor -- --format snake --phase live --league <exactLiveRoomId> --team <teamId>
+# or use --format salary-cap
+```
+
+There is no manual arm command. While this record is active, npm lifecycle guards reject dev/hot reload, builds, tests and simulations, source snapshot/warm commands, and companion packaging. `npm start` deliberately remains available so the already-certified production artifact can restart without rebuilding it. `npm run draft-day:freeze -- status` reports the exact frozen identity and revision.
+
+The exact `draft-day:audit --require-complete` command in the completion section automatically clears the freeze only after the requested room/team returns a final-ready, complete, parity-matched audit on the same revision. An emergency clear is not a normal recovery step. If the frozen artifact cannot safely continue, first disarm live actions, then copy the identity-bound confirmation token from `draft-day:freeze -- status` and provide all exact fields plus a 20–500 character incident reason:
+
+```bash
+npm run draft-day:freeze -- clear \
+  --league <savedSourceLeagueId> --team <teamId> --room <exactLiveRoomId> \
+  --emergency-reason "<why the certified artifact cannot safely continue>" \
+  --confirm-emergency "<exact token from freeze status>"
+```
+
+Emergency clear writes a local hashed-reason receipt under `.draftforge/`; it does not authorize a hurried rebuild or re-arm inside an unsafe action window.
+
 Short chat commands:
 
 - `status` — report clock, action, roster needs, budget/reserve, and next targets;
@@ -169,6 +192,14 @@ During a live clock, Codex should report only the decision-critical line, for ex
 
 > BID $28 — ceiling $31 · reserve safe · TE starter open · 18 seconds
 
+For a read-only query that cannot dispatch a browser action, use:
+
+```bash
+npm run draft-day:status -- --league <exactLiveRoomId> --team <teamId>
+```
+
+The command reads one atomic server snapshot rather than joining different publisher moments. It is safe to run alongside live execution because it performs exactly one bounded loopback GET and has no writer capability; any stale or unsafe observer-health dimension returns blocked with no recommendation.
+
 Do not refresh source truth in the middle of a decision. For material late news, hold, refresh all five sources between action windows, verify the new coherent snapshot, and then resume. ESPN availability and exact action state are still revalidated immediately before every click.
 
 ## Stop conditions
@@ -178,7 +209,7 @@ DraftForge must fail closed and Codex must report the exact reason for any of th
 - source degradation;
 - Chrome or companion disconnect;
 - wrong or ambiguous tab/league/team;
-- sound on or ESPN Autopick active;
+- ESPN Autopick active or unknown;
 - short, missing, opponent, or changed clock;
 - changed player, nominee, bid, pick, or action control;
 - missing roster confirmation;
@@ -195,18 +226,18 @@ DraftForge must shut itself off after roster completion. Then run:
 npm run draft-day:audit -- --league <liveLeagueId> --team <teamId> --require-complete
 ```
 
-Count the room only when the audit proves exact ESPN/app roster parity, exact salary-cap prices, legal completion, mandatory K/DST, position caps, reserve and max-bid compliance, five-source readiness, muted sound, ESPN Autopick off, exact tab binding, and automatic DraftForge shutdown.
+Count the room only when the audit proves exact ESPN/app roster parity, exact salary-cap prices, legal completion, mandatory K/DST, position caps, reserve and max-bid compliance, five-source readiness, recorded sound telemetry, ESPN Autopick off, exact tab binding, and automatic DraftForge shutdown. Sound on versus muted is not a pass/fail criterion.
 
 Record the room ID, format, roster, prices/budget when applicable, audit result, exercised retries, source coverage, and count change in [AGENT_HANDOFF.md](AGENT_HANDOFF.md). Update the ledger in this document in the same commit. Close the completed ESPN tab and leave no stale room open.
 
 ## Known launch risks
 
-- Current authenticated launch is blocked until `TRADYR_API_KEY` is present and a new complete keyed snapshot passes coverage, pagination, freshness, and QB-profile checks. Tradyr's unkeyed bulk response is capped at 50 and may contain decoys; the old unkeyed snapshot is regression-only evidence and must never arm a draft.
+- Current authenticated launch is blocked until `TRADYR_API_KEY` is present and a fresh authenticated schema-v3 snapshot passes exact profile, canonical timestamp, authenticated ESPN provenance, coverage, pagination, and digest checks. Tradyr's unkeyed bulk response is capped at 50 and may contain decoys; the stale schema-v1 salary capture is regression-only evidence and must never arm a draft.
 
 - Chrome-control recovery is no longer an untested blocker: a clean two-tab cold start and a deliberate in-room dashboard reload both passed, including Auto-Draft resetting off, exact-room re-import, full revalidation, safe re-arming, 16/16 parity, and automatic shutdown. ESPN/Chrome drift can still recur, so every real draft must run both READY gates.
 - The expanded 2026-08-19 snapshot improved player-level coverage to 60.12% at four or more sources and 47.62% at all five, but GNG remains the shortest model board at 150 rows and not every late player can be corroborated. Treat confidence and sleeper labels accordingly.
 - The immutable expanded snapshot produced zero production-qualified sleeper signals. The latest fresh saved-snake pre-room state now produces two unchanged-threshold, five-source candidates (Jalen Hurts and Kyler Murray), while salary cap produces none. Treat these as current recommendation evidence, not authenticated sleeper-acquisition outcome evidence, until countable rooms exercise them.
-- Fresh room imports forcibly reset Auto-Draft and old-room telemetry. The one-shot pre-room watch now carries explicit arm intent into exactly one rule-matching room and revalidates the live tab before enabling Auto-Draft. Any missed identity, source, sound, Autopick, player-pool, roster, clock, or action-surface check leaves it off; any ESPN Autopick contamination excludes that room.
+- Fresh room imports forcibly reset Auto-Draft and old-room telemetry. The one-shot pre-room watch now carries explicit arm intent into exactly one rule-matching room and revalidates the live tab before enabling Auto-Draft. Any missed identity, source, Autopick, player-pool, roster, clock, or action-surface check leaves it off; sound state remains visible telemetry. Any ESPN Autopick contamination excludes that room.
 - Rebuilding `dist` invalidates a running vinext process. Release work must stop the production server before build and start exactly one new server afterward. The authenticated interruption rehearsal separately proves that stopping and restarting the server without a rebuild does not require reloading the ESPN room.
 - The final v0.2.16 authenticated snake room removed the repeated late-round submit tail without weakening identity or clock checks: p95 1.140 seconds, p99 1.175 seconds, and maximum 1.184 seconds. The bounded profile activates only after ten confirmed snake roster slots; early snake, salary-cap, and mandatory K/DST paths are unchanged.
 - ESPN practice rooms may disappear after completion; the loopback audit must be captured before the tab is closed or ESPN deletes the state.

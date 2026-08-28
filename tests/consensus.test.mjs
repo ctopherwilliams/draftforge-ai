@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { intelligenceQuarterbackMode, mergeConsensus, normalizePlayerName } from "../app/lib/consensus.ts";
+import {
+  classifyPlayerConsensusCorroboration,
+  intelligenceQuarterbackMode,
+  isCompleteFreshIntelligenceSnapshot,
+  mergeConsensus,
+  normalizePlayerName,
+} from "../app/lib/consensus.ts";
 
 const espn = [
   { id: 1, name: "Ja'Marr Chase", team: "CIN", pos: "WR", rank: 1, adp: 2, auction: 60, projected: 300 },
@@ -53,6 +59,68 @@ test("source payload metadata cannot alter the fixed five-source weights", () =>
     weight: index === 0 ? 1000 : -1000,
   })));
   assert.deepEqual(tampered, canonical);
+});
+
+test("a globally healthy five-source snapshot cannot inflate an ESPN-only player to a perfect score", () => {
+  const positions = ["QB", "RB", "WR", "TE"];
+  const healthyBoards = ["ffc", "mfl", "tradyr", "gng"].map((id) => ({
+    id,
+    name: id.toUpperCase(),
+    kind: id === "ffc" || id === "mfl" ? "market" : "model",
+    weight: 999,
+    status: "ok",
+    updatedAt: null,
+    attribution: id,
+    players: Array.from({ length: 28 }, (_, index) => ({
+      name: `${id} Filler ${index}`,
+      team: `T${index}`,
+      pos: positions[index % positions.length],
+      rank: index + 1,
+      adp: index + 1,
+    })),
+  }));
+  const target = { id: 901, name: "ESPN Only Target", team: "ONE", pos: "WR", rank: 1, adp: 1, auction: 20, projected: 250 };
+
+  assert.equal(isCompleteFreshIntelligenceSnapshot(healthyBoards), true);
+  const [merged] = mergeConsensus([target], healthyBoards);
+  assert.equal(merged.sourceCount, 1);
+  assert.deepEqual(merged.sourceRanks, { espn: 1 });
+  assert.equal(merged.consensusScore, 30);
+  assert.equal(classifyPlayerConsensusCorroboration(merged).corroborated, false);
+});
+
+test("player corroboration metadata preserves the specialist exception without becoming an action gate", () => {
+  assert.deepEqual(classifyPlayerConsensusCorroboration({
+    pos: "WR",
+    sourceRanks: { espn: 10, ffc: 12, mfl: 11, tradyr: 9 },
+  }), {
+    corroborated: true,
+    sourceCount: 4,
+    minimumSourceCount: 4,
+    specialist: false,
+  });
+  assert.deepEqual(classifyPlayerConsensusCorroboration({
+    pos: "WR",
+    sourceRanks: { espn: 10, ffc: 12, mfl: 11 },
+  }), {
+    corroborated: false,
+    sourceCount: 3,
+    minimumSourceCount: 4,
+    specialist: false,
+  });
+  assert.deepEqual(classifyPlayerConsensusCorroboration({
+    pos: "DST",
+    sourceRanks: { espn: 1, mfl: 2 },
+  }), {
+    corroborated: true,
+    sourceCount: 2,
+    minimumSourceCount: 2,
+    specialist: true,
+  });
+  assert.equal(classifyPlayerConsensusCorroboration({
+    pos: "K",
+    sourceRanks: { mfl: 1, ffc: 2 },
+  }).corroborated, false, "ESPN identity must remain part of every classification");
 });
 
 test("duplicate ESPN rows cannot inflate a real player's consensus rank", () => {

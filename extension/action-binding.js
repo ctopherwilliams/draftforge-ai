@@ -31,6 +31,27 @@ export function validCommandCenterSessionId(value) {
     && /^[A-Za-z0-9._:-]+$/.test(value);
 }
 
+export function actionDeadlineStatus(payload, now = Date.now(), maxFutureMs = 10_000) {
+  const notAfter = Number(payload?.notAfter);
+  if (!Number.isSafeInteger(notAfter) || notAfter <= 0) return "ACTION_DEADLINE_INVALID";
+  if (!Number.isFinite(now) || now >= notAfter) return "ACTION_EXPIRED";
+  if (notAfter - now > maxFutureMs) return "ACTION_DEADLINE_INVALID";
+  return "ACTION_DEADLINE_VALID";
+}
+
+export function actionAvailabilityDeadlineStatus(payload, now = Date.now()) {
+  const notAfter = Number(payload?.notAfter);
+  const availabilityNotAfter = Number(payload?.availabilityNotAfter);
+  if (!Number.isSafeInteger(availabilityNotAfter) || availabilityNotAfter <= 0) {
+    return "AVAILABILITY_DEADLINE_INVALID";
+  }
+  if (!Number.isSafeInteger(notAfter) || notAfter <= 0 || notAfter > availabilityNotAfter) {
+    return "ACTION_AFTER_AVAILABILITY";
+  }
+  if (!Number.isFinite(now) || now >= availabilityNotAfter) return "AVAILABILITY_EXPIRED";
+  return "AVAILABILITY_DEADLINE_VALID";
+}
+
 export function contextMatchesActionBinding(binding, context, expectedTabId = binding?.tabId) {
   return validActionBinding(binding)
     && Number(expectedTabId) === binding.tabId

@@ -21,7 +21,7 @@ export function parseLiveControlSoakArguments(argv) {
   let fixture = false;
   const allowed = new Set([
     "--origin", "--league", "--team", "--minutes", "--interval-ms", "--timeout-ms",
-    "--max-rss-mb", "--max-rss-growth-percent",
+    "--max-bytes", "--max-rss-mb", "--max-rss-growth-percent",
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -48,6 +48,7 @@ export function parseLiveControlSoakArguments(argv) {
     polls,
     intervalMs,
     timeoutMs: integer(values.get("--timeout-ms") || 1_000, "--timeout-ms", 50, 10_000),
+    maxBytes: integer(values.get("--max-bytes") || 131_072, "--max-bytes", 256, 262_144),
     maxRssMb: finite(values.get("--max-rss-mb") || 300, "--max-rss-mb", 16, 2_048),
     maxRssGrowthPercent: finite(values.get("--max-rss-growth-percent") || 10, "--max-rss-growth-percent", 0, 100),
   };
@@ -69,9 +70,9 @@ export async function runLiveControlSoak(options, { signal } = {}) {
       polls: 20,
       intervalMs: Math.min(options.intervalMs, 100),
       timeoutMs: options.timeoutMs,
-      maxBytes: 16_384,
+      maxBytes: options.maxBytes,
       maxContextAgeMs: 1_000,
-      maxPickAgeMs: 2_500,
+      maxPickAgeMs: 4_000,
       maxSourceAgeMs: 900_000,
       quiet: true,
     }, { signal });
@@ -84,9 +85,9 @@ export async function runLiveControlSoak(options, { signal } = {}) {
       polls: options.polls,
       intervalMs: options.intervalMs,
       timeoutMs: options.timeoutMs,
-      maxBytes: 16_384,
+      maxBytes: options.maxBytes,
       maxContextAgeMs: 1_000,
-      maxPickAgeMs: 2_500,
+      maxPickAgeMs: 4_000,
       maxSourceAgeMs: 900_000,
       quiet: true,
     }, {

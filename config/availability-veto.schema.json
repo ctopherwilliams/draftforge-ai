@@ -4,10 +4,11 @@
   "title": "DraftForge sanitized player availability artifact",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "generatedAt", "records"],
+  "required": ["schemaVersion", "generatedAt", "scanReceipt", "records"],
   "properties": {
     "schemaVersion": { "const": "draftforge.availability/v1" },
     "generatedAt": { "$ref": "#/$defs/timestamp" },
+    "scanReceipt": { "$ref": "#/$defs/scanReceipt" },
     "records": {
       "type": "array",
       "maxItems": 512,
@@ -39,6 +40,56 @@
         "rumor",
         "opinion"
       ]
+    },
+    "scanReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["completedAt", "feeds"],
+      "properties": {
+        "completedAt": { "$ref": "#/$defs/timestamp" },
+        "feeds": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "allOf": [
+            {
+              "contains": {
+                "type": "object",
+                "required": ["id", "url"],
+                "properties": {
+                  "id": { "const": "authenticated_espn_player_news" },
+                  "url": { "pattern": "^https://fantasy\\.espn\\.com/football/players/news/?$" }
+                }
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": ["id", "url"],
+                "properties": {
+                  "id": { "const": "official_nfl_news" },
+                  "url": { "pattern": "^https://www\\.nfl\\.com/news(?:/[^?#]*)?/?$" }
+                }
+              },
+              "minContains": 1,
+              "maxContains": 1
+            }
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "url", "retrievedAt", "status"],
+            "properties": {
+              "id": { "enum": ["authenticated_espn_player_news", "official_nfl_news"] },
+              "url": { "type": "string", "format": "uri", "pattern": "^https://", "maxLength": 2048 },
+              "retrievedAt": { "$ref": "#/$defs/timestamp" },
+              "status": { "enum": ["ok", "failed"] }
+            }
+          }
+        }
+      }
     },
     "identity": {
       "type": "object",

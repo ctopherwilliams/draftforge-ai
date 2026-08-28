@@ -1,8 +1,8 @@
 # DraftForge draft-day release candidate — 2026-08-19
 
-## Release decision
+## Historical release decision
 
-The candidate is qualified for supervised ESPN draft-day use in snake and salary-cap formats. This is not a claim of perfect or globally optimal drafting. It is a bounded release decision supported by authenticated ESPN rehearsals, deterministic simulation, exact holdout replay, fail-closed safety checks, and an explicit record of remaining data limitations.
+This document records the candidate decision made on 2026-08-19 for revision `af06f0d64343f9a601c3ec803d913483e0f5a352`. It is not a certification of the current tree. The authenticated ESPN room evidence remains historical evidence, but the mixed-profile captured-snapshot simulations below predate strict scoring/team-count/season/QB binding and are non-certifying under the current validator. A current release must regenerate valid exact-profile snapshots and rerun the replacement commands in the reproduction section; synthetic adversarial variants remain a separate campaign.
 
 Release branch revision at live certification: `af06f0d64343f9a601c3ec803d913483e0f5a352`.
 
@@ -30,9 +30,9 @@ The final fresh salary-cap release room completed 14/14 with exact player/price 
 
 The snake latency correction is intentionally narrow. Once ESPN confirms ten rostered players, ordinary snake search retains deterministic candidate order and exact identity but uses a bounded 1.24-second resolution profile. Early snake picks, salary-cap actions, mandatory K/DST filtering, the ten-second snake clock floor, confirmation-before-advance, and all fail-closed checks are unchanged.
 
-## Final Monte Carlo and holdout regression
+## Historical Monte Carlo and holdout regression (superseded evidence boundary)
 
-Seed `20260820` ran one frozen 10,000-draft campaign per format. Each used 6,000 discovery, 2,000 validation, and 2,000 holdout trials, with 80% saved authenticated settings and 20% seeded ESPN-compatible adversarial variants.
+Seed `20260820` historically ran one frozen 10,000-draft campaign per format. Each used 6,000 discovery, 2,000 validation, and 2,000 holdout trials, with 80% saved authenticated settings and 20% seeded ESPN-compatible adversarial variants. Those figures are retained for audit history, not as current source-provenance evidence: one captured source profile may no longer be replayed across a different scoring, team-count, season, QB, or draft-format profile.
 
 | Format | Immutable snapshot | Drafts | Failures | Hard violations | Determinism digest |
 | --- | --- | ---: | ---: | ---: | --- |
@@ -75,22 +75,28 @@ The release runtime passed cold-start, exact two-tab launch, dashboard reload re
 - Salary-cap nomination counterfactuals remain noisier than acquired-player decisions. Mixed evidence did not justify a broad strategy retune.
 - A cold five-source warmup can take about 16–20 seconds. It must finish before room creation; a room contaminated by setup delay or ESPN Autopick is excluded.
 
-## Exact reproduction commands
+## Current replacement reproduction commands
 
 ```bash
 # Full local gate
 npm run check
 npm audit --audit-level=high
 
-# Final snake campaign
-npm run simulate:monte-carlo -- --drafts 10000 --seed 20260820 --formats snake --snapshot snapshots/intelligence/source-v1-2026-08-19-standard-10t-rc.json --expose-holdout --counterfactual-cases 10 --output outputs/monte-carlo/draft-day-rc-snake-seed-20260820-10000
+# Capture fresh snapshots from each exact authenticated profile first. Old local
+# 2026-08-19 artifacts do not satisfy the current QB/coverage schema.
+npm run snapshot:capture -- --espn outputs/source-capture/exact-snake-profile.json
+npm run snapshot:capture -- --espn outputs/source-capture/exact-salary-cap-profile.json
 
-# Final salary-cap campaign
-npm run simulate:monte-carlo -- --drafts 10000 --seed 20260820 --formats salary-cap --snapshot snapshots/intelligence/source-v1-2026-08-19T02-35-00.000Z-ppr-12t-expanded-tradyr-final.json --expose-holdout --counterfactual-cases 10 --output outputs/monte-carlo/draft-day-rc-salary-cap-seed-20260820-10000
+# Exact-profile player evidence. The snapshot selects and binds its own format.
+npm run simulate:monte-carlo -- --drafts 10000 --seed 20260820 --snapshot <current-snake-snapshot.json> --expose-holdout --counterfactual-cases 10 --output outputs/monte-carlo/current-exact-snake-seed-20260820-10000
+npm run simulate:monte-carlo -- --drafts 10000 --seed 20260820 --snapshot <current-salary-cap-snapshot.json> --expose-holdout --counterfactual-cases 10 --output outputs/monte-carlo/current-exact-salary-cap-seed-20260820-10000
 
-# Deterministic holdout replays
-npm run simulate:monte-carlo -- --drafts 10000 --seed 20260820 --formats snake --phases holdout --snapshot snapshots/intelligence/source-v1-2026-08-19-standard-10t-rc.json --expose-holdout --skip-counterfactuals --output outputs/monte-carlo/draft-day-rc-snake-holdout-replay-seed-20260820-10000
-npm run simulate:monte-carlo -- --drafts 10000 --seed 20260820 --formats salary-cap --phases holdout --snapshot snapshots/intelligence/source-v1-2026-08-19T02-35-00.000Z-ppr-12t-expanded-tradyr-final.json --expose-holdout --skip-counterfactuals --output outputs/monte-carlo/draft-day-rc-salary-cap-holdout-replay-seed-20260820-10000
+# Separate synthetic/authenticated-settings-fixture + adversarial stress campaign.
+npm run simulate:monte-carlo -- --drafts 10000 --seed 20260820 --expose-holdout --skip-counterfactuals --output outputs/monte-carlo/current-synthetic-adversarial-seed-20260820-10000
+
+# Deterministic exact-profile holdout replays.
+npm run simulate:monte-carlo -- --drafts 10000 --seed 20260820 --phases holdout --snapshot <current-snake-snapshot.json> --expose-holdout --skip-counterfactuals --output outputs/monte-carlo/current-exact-snake-holdout-seed-20260820-10000
+npm run simulate:monte-carlo -- --drafts 10000 --seed 20260820 --phases holdout --snapshot <current-salary-cap-snapshot.json> --expose-holdout --skip-counterfactuals --output outputs/monte-carlo/current-exact-salary-cap-holdout-seed-20260820-10000
 ```
 
-Generated trial ledgers and reports remain under ignored `outputs/monte-carlo/`. Durable sanitized evidence is in `simulation/evidence/authenticated-certification-20260818.json`.
+Generated trial ledgers and reports remain under ignored `outputs/monte-carlo/`. Every replacement command must complete its exact requested count with zero failure seeds; paired comparisons additionally require one-to-one seed/split/scenario/league/source identity. Durable historical sanitized evidence remains in `simulation/evidence/authenticated-certification-20260818.json` and must not be relabeled as current strict-profile evidence.

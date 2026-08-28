@@ -4,8 +4,48 @@ import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSyn
 import { once } from "node:events";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { renderMarkdownReport, runCounterfactuals, runMonteCarlo, simulateDraft } from "../simulation/monte-carlo.mjs";
-import { replayConsensusSnapshot, sourceSnapshotDigest, validateSourceSnapshot } from "../simulation/source-snapshot.mjs";
+import {
+  assertCompleteMonteCarloRun,
+  assertCurrentSourceMonteCarloRun,
+  renderMarkdownReport,
+  runCounterfactuals,
+  runMonteCarlo,
+  simulateDraft,
+} from "../simulation/monte-carlo.mjs";
+import {
+  replayConsensusSnapshot,
+  sourceSnapshotDigest,
+  sourceSnapshotFormat,
+  validateSourceSnapshot,
+} from "../simulation/source-snapshot.mjs";
+
+const PAIRED_IDENTITY_FIELDS = [
+  "format",
+  "trialIndex",
+  "trialSeed",
+  "split",
+  "scenario",
+  "leagueSize",
+  "rosterSize",
+  "sourceSnapshotDigest",
+  "productionCodeDigest",
+  "evidenceIdentityDigest",
+];
+const VALUE_ARGUMENTS = new Set([
+  "--drafts",
+  "--seed",
+  "--formats",
+  "--phases",
+  "--output",
+  "--label",
+  "--compare",
+  "--evidence",
+  "--replay",
+  "--counterfactual-replay",
+  "--snapshot",
+  "--counterfactual-cases",
+  "--progress-every",
+]);
 
 function parseArguments(argv) {
   const config = {
@@ -17,10 +57,14 @@ function parseArguments(argv) {
     counterfactualCases: 10,
     progressEvery: 250,
     label: "baseline",
+    formatsExplicit: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     const value = argv[index + 1];
+    if (VALUE_ARGUMENTS.has(argument) && (value === undefined || value.startsWith("--"))) {
+      throw new Error(`${argument} requires a value`);
+    }
     if (argument === "--drafts") {
       config.drafts = Number(value);
       index += 1;
@@ -29,6 +73,7 @@ function parseArguments(argv) {
       index += 1;
     } else if (argument === "--formats") {
       config.formats = value.split(",").map((item) => item.trim());
+      config.formatsExplicit = true;
       index += 1;
     } else if (argument === "--phases") {
       config.phases = value.split(",").map((item) => item.trim());
@@ -63,6 +108,7 @@ function parseArguments(argv) {
     }
     else if (argument === "--expose-holdout") config.exposeHoldout = true;
     else if (argument === "--skip-counterfactuals") config.skipCounterfactuals = true;
+    else if (argument === "--require-current-source") config.requireCurrentSource = true;
     else throw new Error(`unknown argument: ${argument}`);
   }
   if (!Number.isInteger(config.drafts) || config.drafts < 1) throw new Error("--drafts must be a positive integer");
@@ -70,9 +116,11 @@ function parseArguments(argv) {
   if (!config.formats.length || config.formats.some((format) => !["snake", "salary-cap"].includes(format))) {
     throw new Error("--formats must contain snake and/or salary-cap");
   }
+  if (new Set(config.formats).size !== config.formats.length) throw new Error("--formats must be unique");
   if (!config.phases.length || config.phases.some((phase) => !["discovery", "validation", "holdout"].includes(phase))) {
     throw new Error("--phases must contain discovery, validation, and/or holdout");
   }
+  if (new Set(config.phases).size !== config.phases.length) throw new Error("--phases must be unique");
   if (!Number.isInteger(config.counterfactualCases) || config.counterfactualCases < 0 || config.counterfactualCases > 100) {
     throw new Error("--counterfactual-cases must be an integer from 0 to 100");
   }
@@ -94,6 +142,8 @@ function compactTrialRecord(record) {
     violations: record.violations,
     draftDigest: record.draftDigest,
     sourceSnapshotDigest: record.sourceSnapshotDigest,
+    productionCodeDigest: record.productionCodeDigest,
+    evidenceIdentityDigest: record.evidenceIdentityDigest,
   };
 }
 
@@ -112,10 +162,18 @@ async function writeJsonLine(stream, value) {
 
 async function loadBaseline(directory) {
   const records = new Map();
-  const add = (record) => records.set(`${record.format}:${record.trialIndex}`, record);
+  const add = (record) => {
+    const key = `${record?.format}:${record?.trialIndex}`;
+    if (records.has(key)) throw new Error(`PAIRED_BASELINE_DUPLICATE_RECORD:${key}`);
+    records.set(key, record);
+  };
   await readJsonLines(join(directory, "trial-metrics.jsonl"), add);
   await readJsonLines(join(directory, "sealed-holdout.jsonl"), add);
   return records;
+}
+
+function pairedIdentityMismatch(current, baseline) {
+  return PAIRED_IDENTITY_FIELDS.find((field) => (current?.[field] ?? null) !== (baseline?.[field] ?? null)) || null;
 }
 
 function pairedSummary(values) {
@@ -141,7 +199,10 @@ function comparisonMarkdown(comparison) {
     totalProjection: "Total projection",
     vorp: "VORP",
     seasonWinProbability: "Season win probability",
+    seasonStrengthPercentile: "Season strength percentile",
+    tailStrengthMargin: "Upper-quartile strength margin",
     decisionRegret: "Decision regret",
+    missedBidOpportunityRegret: "Missed bid-opportunity regret",
     rosterFragility: "Roster fragility",
     objective: "Composite objective",
   };
@@ -160,6 +221,11 @@ async function main() {
     const validation = validateSourceSnapshot(config.sourceSnapshot);
     if (!validation.valid) throw new Error(`source snapshot invalid: ${validation.errors.join(" ")}`);
     replayConsensusSnapshot(config.sourceSnapshot);
+    const capturedFormat = sourceSnapshotFormat(config.sourceSnapshot);
+    if (!config.formatsExplicit) config.formats = [capturedFormat];
+    if (config.formats.length !== 1 || config.formats[0] !== capturedFormat) {
+      throw new Error(`--snapshot requires exactly --formats ${capturedFormat}`);
+    }
   }
   if (config.replay) {
     const [format, trialValue] = config.replay.split(":");
@@ -184,11 +250,9 @@ async function main() {
   }
 
   const output = resolve(config.output || join("outputs", "monte-carlo", `${config.label}-seed-${config.seed}-${config.drafts}`));
-  mkdirSync(output, { recursive: true });
-  const publicStream = createWriteStream(join(output, "trial-metrics.jsonl"), { encoding: "utf8" });
-  const sealedStream = createWriteStream(join(output, "sealed-holdout.jsonl"), { encoding: "utf8" });
-  const failureStream = createWriteStream(join(output, "failed-seeds.jsonl"), { encoding: "utf8" });
-  const baseline = config.compare ? await loadBaseline(resolve(config.compare)) : null;
+  const baselineDirectory = config.compare ? resolve(config.compare) : null;
+  if (baselineDirectory === output) throw new Error("--compare and --output must be different directories");
+  const baseline = baselineDirectory ? await loadBaseline(baselineDirectory) : null;
   if (baseline) {
     const expectedDigest = config.sourceSnapshot?.digest || null;
     const baselineDigests = new Set([...baseline.values()].map((record) => record.sourceSnapshotDigest || null));
@@ -196,15 +260,24 @@ async function main() {
       throw new Error("paired comparison requires the exact same source snapshot digest");
     }
   }
+  mkdirSync(output, { recursive: true });
+  const publicStream = createWriteStream(join(output, "trial-metrics.jsonl"), { encoding: "utf8" });
+  const sealedStream = createWriteStream(join(output, "sealed-holdout.jsonl"), { encoding: "utf8" });
+  const failureStream = createWriteStream(join(output, "failed-seeds.jsonl"), { encoding: "utf8" });
   const pairedValues = Object.fromEntries([
     "startingLineupProjection",
     "totalProjection",
     "vorp",
     "seasonWinProbability",
+    "seasonStrengthPercentile",
+    "tailStrengthMargin",
     "decisionRegret",
+    "missedBidOpportunityRegret",
     "rosterFragility",
     "objective",
   ].map((key) => [key, []]));
+  const currentPairKeys = new Set();
+  const pairingErrors = [];
 
   const summary = await runMonteCarlo(config, {
     async onTrial(record) {
@@ -212,7 +285,19 @@ async function main() {
       if (record.split === "holdout" && !config.exposeHoldout) await writeJsonLine(sealedStream, compact);
       else await writeJsonLine(publicStream, compact);
       const baselineRecord = baseline?.get(`${record.format}:${record.trialIndex}`);
-      if (baselineRecord) {
+      if (baseline) {
+        const key = `${record.format}:${record.trialIndex}`;
+        if (currentPairKeys.has(key)) pairingErrors.push(`duplicate-current:${key}`);
+        currentPairKeys.add(key);
+        if (!baselineRecord) pairingErrors.push(`missing-baseline:${key}`);
+        const mismatch = baselineRecord ? pairedIdentityMismatch(compact, baselineRecord) : null;
+        if (mismatch) pairingErrors.push(`identity-mismatch:${key}:${mismatch}`);
+        const invalidMetric = baselineRecord ? Object.keys(pairedValues).find((metric) => (
+          !Number.isFinite(Number(record.metrics?.[metric]))
+          || !Number.isFinite(Number(baselineRecord.metrics?.[metric]))
+        )) : null;
+        if (invalidMetric) pairingErrors.push(`invalid-metric:${key}:${invalidMetric}`);
+        if (!baselineRecord || mismatch || invalidMetric) return;
         for (const key of Object.keys(pairedValues)) pairedValues[key].push(Number(record.metrics[key]) - Number(baselineRecord.metrics[key]));
       }
     },
@@ -228,10 +313,28 @@ async function main() {
     stream.end(resolveStream);
   })));
 
+  if (baseline) {
+    for (const key of baseline.keys()) {
+      if (!currentPairKeys.has(key)) pairingErrors.push(`extra-baseline:${key}`);
+    }
+    if (!summary.complete || summary.completedDrafts !== summary.requestedDrafts) {
+      pairingErrors.push(`current-incomplete:${summary.completedDrafts}/${summary.requestedDrafts}`);
+    }
+    if (baseline.size !== summary.requestedDrafts || currentPairKeys.size !== summary.requestedDrafts) {
+      pairingErrors.push(`coverage:${baseline.size}/${currentPairKeys.size}/${summary.requestedDrafts}`);
+    }
+    if (Object.values(pairedValues).some((values) => values.length !== summary.requestedDrafts)) {
+      pairingErrors.push("paired-metric-coverage");
+    }
+    if (pairingErrors.length) {
+      throw new Error(`PAIRED_COMPARISON_INVALID:${pairingErrors.slice(0, 10).join(",")}`);
+    }
+  }
+
   let comparison = null;
   if (baseline) {
     comparison = {
-      baselineDirectory: resolve(config.compare),
+      baselineDirectory,
       metrics: Object.fromEntries(Object.entries(pairedValues).map(([key, values]) => [key, pairedSummary(values)])),
     };
     summary.pairedComparison = comparison;
@@ -245,9 +348,19 @@ async function main() {
   writeFileSync(reportPath, renderMarkdownReport(summary, comparison ? comparisonMarkdown(comparison) : null));
   writeFileSync(join(output, "replay-seeds.json"), `${JSON.stringify({
     failed: summary.failureSeeds,
-    highRegret: summary.topRegretCases.map(({ format, trialIndex, trialSeed, decisionNumber, regret }) => ({ format, trialIndex, trialSeed, decisionNumber, regret })),
+    highRegret: summary.topRegretCases.map(({ format, trialIndex, trialSeed, decisionNumber, regret, counterfactualClass }) => ({
+      format, trialIndex, trialSeed, decisionNumber, regret, counterfactualClass,
+    })),
+    underbids: summary.topUnderbidCases.map(({ format, trialIndex, trialSeed, eventId, decisionNumber, regret, approvedCeiling, evidenceOnlyCeiling, priceToWin }) => ({
+      format, trialIndex, trialSeed, eventId, decisionNumber, regret, approvedCeiling, evidenceOnlyCeiling, priceToWin,
+    })),
   }, null, 2)}\n`);
   process.stdout.write(`Summary: ${summaryPath}\nReport: ${reportPath}\nDigest: ${summary.determinismDigest}\n`);
+  if (!summary.certification.currentSource) {
+    process.stderr.write(`NON_CURRENT_SOURCE_EVIDENCE:${summary.certification.status}:${summary.certification.blockers.join(",")}\n`);
+  }
+  if (config.requireCurrentSource) assertCurrentSourceMonteCarloRun(summary, config.sourceSnapshot);
+  else assertCompleteMonteCarloRun(summary);
 }
 
 main().catch((error) => {

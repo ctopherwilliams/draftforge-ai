@@ -1,5 +1,12 @@
 {
   "schemaVersion": "draftforge.availability/v1",
   "generatedAt": "2026-08-27T22:00:00.000Z",
+  "scanReceipt": {
+    "completedAt": "2026-08-27T21:59:30.000Z",
+    "feeds": [
+      { "id": "authenticated_espn_player_news", "url": "https://fantasy.espn.com/football/players/news", "retrievedAt": "2026-08-27T21:59:00.000Z", "status": "ok" },
+      { "id": "official_nfl_news", "url": "https://www.nfl.com/news/", "retrievedAt": "2026-08-27T21:59:00.000Z", "status": "ok" }
+    ]
+  },
   "records": []
 }

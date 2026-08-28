@@ -35,6 +35,9 @@ export function evaluateDraftDayReadiness(input: {
   const expected = input.expected;
   const ageMs = now - Date.parse(snapshot.capturedAt);
   const exactLeague = snapshot.league;
+  const availability = snapshot.availability;
+  const availabilityEvaluatedAt = Date.parse(String(availability?.evaluatedAt || ""));
+  const availabilityFreshUntil = Date.parse(String(availability?.freshUntil || ""));
   const checks: Record<string, boolean> = {
     snapshotFresh: Number.isFinite(ageMs) && ageMs >= -5_000 && ageMs <= maxAgeMs,
     exactLeague: String(exactLeague.id) === String(expected.id),
@@ -61,11 +64,22 @@ export function evaluateDraftDayReadiness(input: {
     actionHealthy: !/stopped|excluded|autopick|fatal/i.test(snapshot.safety.actionState),
     telemetryValid: snapshot.telemetry.actions.length <= MAX_DRAFT_ACTION_TELEMETRY_EVENTS,
     sleeperEvidenceValid: snapshot.sleeperEvidence.candidateCount === snapshot.sleeperEvidence.candidates.length,
+    availabilityReady: Boolean(availability
+      && availability.status === "READY"
+      && /^sha256:[a-f0-9]{64}$/.test(String(availability.digest || ""))
+      && Number.isFinite(availabilityEvaluatedAt)
+      && availabilityEvaluatedAt <= now + 5_000
+      && Number.isFinite(availabilityFreshUntil)
+      && availabilityFreshUntil > now
+      && Array.isArray(availability.blockingReasons)
+      && availability.blockingReasons.length === 0
+      && Array.isArray(availability.vetoedPlayerIds)
+      && availability.vetoedPlayerIds.every((id) => Number.isInteger(id) && id !== 0)
+      && new Set(availability.vetoedPlayerIds).size === availability.vetoedPlayerIds.length),
   };
   if (phase === "live" || phase === "complete") {
     checks.liveChecklistReady = snapshot.safety.liveChecklistReady === true;
     checks.inDraftRoom = snapshot.safety.inDraftRoom === true;
-    checks.soundMuted = snapshot.safety.soundMuted === true;
   }
   if (phase === "complete") {
     checks.completeAudit = evaluateDraftAuditSnapshot(snapshot).finalReady === true;

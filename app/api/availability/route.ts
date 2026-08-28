@@ -5,6 +5,11 @@ import {
   type AvailabilityArtifact,
   type AvailabilityPolicy,
 } from "../../lib/availability-veto.ts";
+import {
+  clearPersistedAvailabilityStage,
+  loadPersistedAvailabilityStage,
+  persistAvailabilityStage,
+} from "../../lib/availability-stage-store.ts";
 
 const LOCAL_ORIGINS = new Set(["http://127.0.0.1:3000", "http://localhost:3000"]);
 const MAX_STAGE_BODY_BYTES = 256 * 1024;
@@ -16,6 +21,47 @@ type StagedAvailability = Readonly<{
 }>;
 
 let stagedAvailability: StagedAvailability | null = null;
+let availabilityMutationTail: Promise<void> = Promise.resolve();
+let nextAvailabilityPostSequence = 0;
+let latestAppliedAvailabilityPostSequence = 0;
+
+function serializeAvailabilityMutation<T>(operation: () => Promise<T>): Promise<T> {
+  const scheduled = availabilityMutationTail.then(operation, operation);
+  availabilityMutationTail = scheduled.then(() => undefined, () => undefined);
+  return scheduled;
+}
+
+function beginAvailabilityPost() {
+  nextAvailabilityPostSequence += 1;
+  return nextAvailabilityPostSequence;
+}
+
+async function serializeAvailabilityPostMutation<T>(
+  postSequence: number,
+  operation: () => Promise<T>,
+): Promise<{ applied: true; value: T } | { applied: false }> {
+  return serializeAvailabilityMutation(async () => {
+    // Request arrival order, rather than body-read or fsync completion order,
+    // determines which staging attempt owns the final authorization state.
+    // A slow older request may still receive its own validation response, but
+    // it can never erase or replace a newer request that already committed.
+    if (postSequence < latestAppliedAvailabilityPostSequence) return { applied: false };
+    latestAppliedAvailabilityPostSequence = postSequence;
+    return { applied: true, value: await operation() };
+  });
+}
+
+function persistenceEnabled() {
+  return process.env.DRAFTFORGE_PERSIST_AVAILABILITY_STAGE === "1";
+}
+
+export function resetAvailabilityStageMemoryForTesting() {
+  if (!process.env.NODE_TEST_CONTEXT) throw new Error("TEST_CONTEXT_REQUIRED");
+  stagedAvailability = null;
+  availabilityMutationTail = Promise.resolve();
+  nextAvailabilityPostSequence = 0;
+  latestAppliedAvailabilityPostSequence = 0;
+}
 
 function isLoopbackRequest(request: Request) {
   try {
@@ -44,9 +90,47 @@ function response(origin: string | null, body: unknown, status = 200) {
   return Response.json(body, { status, headers: headers(origin) });
 }
 
-function failClosed(origin: string | null, code: string, status: number, details: unknown = undefined) {
-  stagedAvailability = null;
+async function failClosed(
+  origin: string | null,
+  code: string,
+  status: number,
+  postSequence: number,
+  details: unknown = undefined,
+) {
+  await serializeAvailabilityPostMutation(postSequence, async () => {
+    stagedAvailability = null;
+    if (persistenceEnabled()) await clearPersistedAvailabilityStage().catch(() => {});
+  });
   return response(origin, { ok: false, code, ...(details === undefined ? {} : { details }) }, status);
+}
+
+async function currentStagedState(evaluatedAt: string) {
+  return serializeAvailabilityMutation(async () => {
+    let recovery: "MEMORY" | "RECOVERED" | "MISSING" | "INVALID" = stagedAvailability ? "MEMORY" : "MISSING";
+    if (!stagedAvailability && persistenceEnabled()) {
+      const recovered = await loadPersistedAvailabilityStage();
+      if (!recovered.ok) {
+        if (recovered.code === "AVAILABILITY_STAGE_PERSISTED_INVALID") {
+          await clearPersistedAvailabilityStage().catch(() => {});
+          recovery = "INVALID";
+        }
+      } else {
+        stagedAvailability = Object.freeze({
+          stagedAt: recovered.value.stagedAt,
+          artifact: recovered.value.artifact,
+          policy: recovered.value.policy,
+        });
+        recovery = "RECOVERED";
+      }
+    }
+    if (!stagedAvailability) return { recovery, state: null };
+    const state = stagedPublicState(stagedAvailability, evaluatedAt);
+    if (state.status !== "READY") {
+      stagedAvailability = null;
+      if (persistenceEnabled()) await clearPersistedAvailabilityStage().catch(() => {});
+    }
+    return { recovery, state };
+  });
 }
 
 function strictStageBody(value: unknown): value is { policy: unknown; artifact: unknown } {
@@ -126,8 +210,13 @@ export async function GET(request: Request) {
     return response(origin, { ok: false, code: "ORIGIN_FORBIDDEN" }, 403);
   }
   if (new URL(request.url).search) return response(origin, { ok: false, code: "QUERY_NOT_SUPPORTED" }, 400);
-  if (!stagedAvailability) return response(origin, { ok: false, code: "AVAILABILITY_STAGE_MISSING" }, 404);
-  const state = stagedPublicState(stagedAvailability, new Date().toISOString());
+  const { recovery, state } = await currentStagedState(new Date().toISOString());
+  if (!state) {
+    return response(origin, {
+      ok: false,
+      code: recovery === "INVALID" ? "AVAILABILITY_STAGE_RECOVERY_INVALID" : "AVAILABILITY_STAGE_MISSING",
+    }, recovery === "INVALID" ? 409 : 404);
+  }
   return response(origin, {
     ok: state.status === "READY",
     code: state.status === "READY" ? "AVAILABILITY_STAGE_READY" : "AVAILABILITY_STAGE_BLOCKED",
@@ -140,21 +229,22 @@ export async function POST(request: Request) {
   if (!isLoopbackRequest(request) || !requestOriginAllowed(origin)) {
     return response(origin, { ok: false, code: "ORIGIN_FORBIDDEN" }, 403);
   }
+  const postSequence = beginAvailabilityPost();
   const contentType = request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
-  if (contentType !== "application/json") return failClosed(origin, "CONTENT_TYPE_REQUIRED", 415);
+  if (contentType !== "application/json") return await failClosed(origin, "CONTENT_TYPE_REQUIRED", 415, postSequence);
 
   let body: unknown;
   try {
     body = await readBoundedJson(request);
   } catch (error) {
-    return failClosed(origin, error instanceof Error && error.message === "BODY_TOO_LARGE" ? "STAGE_BODY_TOO_LARGE" : "INVALID_JSON", 400);
+    return await failClosed(origin, error instanceof Error && error.message === "BODY_TOO_LARGE" ? "STAGE_BODY_TOO_LARGE" : "INVALID_JSON", 400, postSequence);
   }
-  if (!strictStageBody(body)) return failClosed(origin, "STAGE_BODY_INVALID", 400);
+  if (!strictStageBody(body)) return await failClosed(origin, "STAGE_BODY_INVALID", 400, postSequence);
 
   const policyResult = parseAvailabilityPolicy(body.policy);
   const artifactResult = parseAvailabilityArtifact(body.artifact);
   if (!policyResult.ok || !artifactResult.ok) {
-    return failClosed(origin, "AVAILABILITY_STAGE_INVALID", 422, [
+    return await failClosed(origin, "AVAILABILITY_STAGE_INVALID", 422, postSequence, [
       ...policyResult.errors,
       ...artifactResult.errors,
     ]);
@@ -168,9 +258,23 @@ export async function POST(request: Request) {
     evaluatedAt: stagedAt,
   });
   if (!evaluation.armingAllowed) {
-    return failClosed(origin, "AVAILABILITY_STAGE_NOT_FRESH", 422, evaluation.blockingReasons);
+    return await failClosed(origin, "AVAILABILITY_STAGE_NOT_FRESH", 422, postSequence, evaluation.blockingReasons);
   }
-  stagedAvailability = Object.freeze({ stagedAt, artifact: artifactResult.value, policy: policyResult.value });
+  const nextStage = Object.freeze({ stagedAt, artifact: artifactResult.value, policy: policyResult.value });
+  let staged;
+  try {
+    staged = await serializeAvailabilityPostMutation(postSequence, async () => {
+      if (persistenceEnabled()) {
+        await persistAvailabilityStage(nextStage);
+      }
+      stagedAvailability = nextStage;
+    });
+  } catch {
+    return await failClosed(origin, "AVAILABILITY_STAGE_PERSIST_FAILED", 500, postSequence);
+  }
+  if (!staged.applied) {
+    return response(origin, { ok: false, code: "AVAILABILITY_STAGE_SUPERSEDED" }, 409);
+  }
   return response(origin, {
     ok: true,
     code: "AVAILABILITY_STAGE_RECORDED",
@@ -181,4 +285,3 @@ export async function POST(request: Request) {
     unresolvedCount: evaluation.unresolved.length,
   });
 }
-

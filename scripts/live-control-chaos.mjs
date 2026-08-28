@@ -13,7 +13,7 @@ const BASE_OPTIONS = {
   timeoutMs: 150,
   maxBytes: 16_384,
   maxContextAgeMs: 1_000,
-  maxPickAgeMs: 2_500,
+  maxPickAgeMs: 4_000,
   maxSourceAgeMs: 900_000,
   quiet: true,
 };

@@ -1,5 +1,54 @@
 # DraftForge Monte Carlo stress tests
 
+> Historical tuning record: captured-snapshot campaigns in this document predate exact scoring/team-count/season/QB/format replay binding. Their mixed-profile commands and figures are retained for audit history and are not current certification evidence. Use the exact-profile and separate synthetic/adversarial commands in the README for new runs.
+
+## Current evidence semantics (schema v3)
+
+The current harness keeps production strategy code unchanged while making the audit layer more discriminating:
+
+- a captured five-source snapshot now supplies immutable player truth to both the exact authenticated league (80% of trials) and clearly labeled ESPN-compatible rules variants (20%); variant trials never claim that the sources were fetched for the alternate profile;
+- salary-cap acquisitions are evaluated as price decisions through bounded `BID`, `PASS`, and alternate-ceiling continuations, rather than against unrelated raw player ranks;
+- counterfactual candidates have independent snake-pick, acquired-player, underbid, target-nomination, and drain-nomination queues, preventing deliberate drain nominations from crowding out other decision classes;
+- auction outcomes are streamed into bounded strata for source count, price-input coverage, consensus confidence, price tier, and positional-run intensity;
+- the old 64-sample zero-heavy title indicator is replaced by a smooth deterministic static-roster title estimate, plus season-strength percentile and upper-quartile opponent-strength margin. These are paired evidence signals, not claims about in-season management.
+
+All evidence and ordered-outcome digest domains were versioned forward. Digests from schema-v2 runs remain valid historical artifacts but are not expected to match schema-v3 replays.
+
+## 2026-08-28 post-live synthetic regression matrix
+
+The post-live working candidate completed two separate five-seed matrices:
+
+| Format | Requested | Completed | Failures | Hard invariant counts |
+| --- | ---: | ---: | ---: | ---: |
+| Snake | 10,000 | 10,000 | 0 | 0 across all 11 recorded classes |
+| Salary cap | 10,000 | 10,000 | 0 | 0 across all 11 recorded classes |
+
+Each format ran 2,000 drafts for seeds `20260828`, `18472631`, `73190422`, `41586703`, and `96724011`. The zero classes were duplicate players, unavailable selections, invalid keeper count, invalid keeper price, incomplete rosters, unnecessary second specialist, position cap, salary cap, one-dollar reserve, max bid, and missing mandatory starter.
+
+The separate 2,000-draft snake replay for seed `20260828` matched both baseline identities exactly:
+
+- determinism digest: `b5dc2cf5c84f35000a45256e10838d9d09e5bee7bb069ff464c2d966171ba695`;
+- ordered outcome digest: `e82d110285ff2133a749cf083ef8da2d409ce8abed252db463ff50f1ed05a63a`.
+
+The independent 2,000-draft salary-cap replay for seed `20260828` also matched both baseline identities exactly:
+
+- determinism digest: `6305a5b2cbe02c61a8751a99270559d31b341854634939009a4ebaefc0c6ef06`;
+- ordered outcome digest: `279251a06f49915e3e69f6859d5cf65b4fab520b0731d95cf486250dc9306ebd`.
+
+Its production-code and evidence-identity digests also matched the original run. This proves deterministic replay of the modeled salary-cap mechanics; it does not upgrade the synthetic evidence to current or authenticated player truth.
+
+```bash
+npm run simulate:matrix -- --drafts 2000 --seeds 20260828,18472631,73190422,41586703,96724011 --formats snake --output outputs/monte-carlo/final-postfix-snake-20260828
+
+npm run simulate:matrix -- --drafts 2000 --seeds 20260828,18472631,73190422,41586703,96724011 --formats salary-cap --output outputs/monte-carlo/final-postfix-salary-cap-20260828
+
+npm run simulate:matrix -- --drafts 2000 --seeds 20260828 --formats snake --output outputs/monte-carlo/final-postfix-snake-replay-20260828
+
+npm run simulate:matrix -- --drafts 2000 --seeds 20260828 --formats salary-cap --output outputs/monte-carlo/final-postfix-salary-cap-replay-20260828
+```
+
+Both baseline summaries explicitly report `sourceSnapshotDigest: null`, evidence class `synthetic-mechanics-only`, status `SYNTHETIC_NON_CERTIFYING`, and blocker `CURRENT_SOURCE_FORMAT_EXACT_V2_SNAPSHOT_REQUIRED`. These runs support deterministic mechanics and safety-invariant regression only. They do not certify current rankings, current player availability, source freshness, or authenticated ESPN control.
+
 ## 2026-08-18 overnight 20+20 battle qualification
 
 DraftForge completed four bounded five-draft batches per format against one frozen authenticated ESPN five-source snapshot: **20 accepted snake drafts and 20 accepted salary-cap drafts**. Each format used 16 saved authenticated-settings trials and four seeded ESPN-compatible adversarial trials, split into 12 discovery, four validation, and four holdout drafts. Every roster completed with zero duplicate-player, incomplete-roster, duplicate-specialist, position-cap, salary-cap, reserve, max-bid, mandatory-starter, or simulation violations.

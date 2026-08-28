@@ -104,7 +104,12 @@ export type LiveRosterAttribution = {
 
 export type LiveControlFreshness = {
   espnContextAt: string | null;
+  /** Last authoritative pick/sale identity advance; diagnostic only. */
   pickFeedAt: string | null;
+  /** Last accepted exact-room reconciled feed response, even when unchanged. */
+  pickFeedObservedAt: string | null;
+  /** True only when visible completed draft progress is ahead of that feed. */
+  pickFeedLagging: boolean;
   sourceSnapshotAt: string | null;
   lastActionAt: string | null;
 };
@@ -127,6 +132,10 @@ export type LiveControlCompactView = {
   schemaVersion: typeof LIVE_CONTROL_SCHEMA_VERSION;
   sessionId: string;
   sequence: number;
+  /** Oldest event still present in the bounded ledger, or zero before the first event. */
+  earliestRetainedSequence: number;
+  /** True when the requested delta begins before the bounded ledger. */
+  truncated: boolean;
   unchanged: boolean;
   pendingActionCount: number;
   historicalAutopickDetected: boolean;
@@ -137,6 +146,7 @@ export type LiveControlCompactView = {
   agesMs: {
     espnContext: number | null;
     pickFeed: number | null;
+    pickFeedObserved: number | null;
     sourceSnapshot: number | null;
     lastAction: number | null;
     decision: number | null;
@@ -366,6 +376,7 @@ function decisionMatchesObservedLifecycle(
   actions: Map<string, ObservedActionLifecycle>,
 ) {
   const matching = [...actions.values()].filter((action) => action.decisionId === decision.decisionId);
+  if (!matching.length) return false;
   return matching.every((action) => (
     action.operation === decision.operation
     && (!action.intendedPlayer || sameValue(action.intendedPlayer, decision.intendedPlayer))
@@ -389,6 +400,8 @@ export function isLiveControlState(value: unknown): value is LiveControlState {
     || !isRecord(value.freshness)
     || !isNullableTimestamp(value.freshness.espnContextAt)
     || !isNullableTimestamp(value.freshness.pickFeedAt)
+    || !isNullableTimestamp(value.freshness.pickFeedObservedAt)
+    || typeof value.freshness.pickFeedLagging !== "boolean"
     || !isNullableTimestamp(value.freshness.sourceSnapshotAt)
     || !isNullableTimestamp(value.freshness.lastActionAt)
     || !Array.isArray(value.rosterAttributions)
@@ -429,6 +442,8 @@ export function createLiveControlState(sessionId: string, freshness?: Partial<Li
     freshness: {
       espnContextAt: freshness?.espnContextAt ?? null,
       pickFeedAt: freshness?.pickFeedAt ?? null,
+      pickFeedObservedAt: freshness?.pickFeedObservedAt ?? null,
+      pickFeedLagging: freshness?.pickFeedLagging ?? false,
       sourceSnapshotAt: freshness?.sourceSnapshotAt ?? null,
       lastActionAt: freshness?.lastActionAt ?? null,
     },
@@ -510,7 +525,14 @@ function decisionTransitionIsValid(previous: LiveDecisionEnvelope | null, next: 
 }
 
 function freshnessRegressed(previous: LiveControlFreshness, next: LiveControlFreshness) {
-  return (Object.keys(previous) as Array<keyof LiveControlFreshness>).some((key) => {
+  const timestampKeys: Array<Exclude<keyof LiveControlFreshness, "pickFeedLagging">> = [
+    "espnContextAt",
+    "pickFeedAt",
+    "pickFeedObservedAt",
+    "sourceSnapshotAt",
+    "lastActionAt",
+  ];
+  return timestampKeys.some((key) => {
     const previousAt = previous[key];
     const nextAt = next[key];
     return Boolean(previousAt && (!nextAt || Date.parse(nextAt) < Date.parse(previousAt)));
@@ -593,7 +615,7 @@ export function validateLiveControlTransition(
 function ageMs(timestamp: string | null, now: number) {
   if (!timestamp) return null;
   const age = now - Date.parse(timestamp);
-  return Number.isFinite(age) ? Math.max(0, age) : null;
+  return Number.isFinite(age) ? age : null;
 }
 
 export function buildLiveControlCompactView(
@@ -603,10 +625,13 @@ export function buildLiveControlCompactView(
 ): LiveControlCompactView {
   if (!isLiveControlState(state)) throw new Error("INVALID_LIVE_CONTROL_STATE");
   if (!isNonNegativeInteger(sinceSequence)) throw new Error("INVALID_LIVE_CONTROL_SEQUENCE");
+  const earliestRetainedSequence = state.events[0]?.sequence ?? 0;
   return {
     schemaVersion: LIVE_CONTROL_SCHEMA_VERSION,
     sessionId: state.sessionId,
     sequence: state.sequence,
+    earliestRetainedSequence,
+    truncated: earliestRetainedSequence > 0 && sinceSequence + 1 < earliestRetainedSequence,
     unchanged: sinceSequence >= state.sequence,
     pendingActionCount: state.pendingActionCount,
     historicalAutopickDetected: state.historicalAutopickDetected,
@@ -617,6 +642,7 @@ export function buildLiveControlCompactView(
     agesMs: {
       espnContext: ageMs(state.freshness.espnContextAt, now),
       pickFeed: ageMs(state.freshness.pickFeedAt, now),
+      pickFeedObserved: ageMs(state.freshness.pickFeedObservedAt, now),
       sourceSnapshot: ageMs(state.freshness.sourceSnapshotAt, now),
       lastAction: ageMs(state.freshness.lastActionAt, now),
       decision: ageMs(state.decision?.decidedAt ?? null, now),

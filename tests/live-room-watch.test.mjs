@@ -21,18 +21,34 @@ const sourceContext = { leagueId: sourceLeague.id, teamId: 6, season: 2026, tabI
 
 test("one exact authenticated source arms a bounded live-room watch", () => {
   const sourcePlayers = [{ id: 1, name: "Player One" }];
-  const watch = createLiveRoomWatch({ appTabId: 7, sourceContext, sourceLeague, sourcePlayers, autoArmRequested: true, now: 1000, windowMs: 5000 });
+  const sourcePlayersFetchedAt = "2026-08-28T12:00:00.000Z";
+  const watch = createLiveRoomWatch({ appTabId: 7, sourceContext, sourceLeague, sourcePlayers, sourcePlayersFetchedAt, autoArmRequested: true, now: 1000, windowMs: 5000 });
   assert.equal(watch.appTabId, 7);
   assert.equal(watch.sourceTabId, 41);
   assert.equal(watch.expiresAt, 6000);
   assert.equal(watch.rules, liveRoomRuleSignature(sourceLeague));
   assert.deepEqual(watch.sourcePlayers, sourcePlayers);
+  assert.equal(watch.sourcePlayersFetchedAt, sourcePlayersFetchedAt);
+  assert.deepEqual(watch.sourcePlayerEnvelope, {
+    fetchedAt: sourcePlayersFetchedAt,
+    leagueId: sourceLeague.id,
+    teamId: sourceLeague.teamId,
+    season: sourceLeague.season,
+    playerCount: 1,
+  });
+  assert.equal(Object.isFrozen(watch.sourcePlayerEnvelope), true);
   assert.equal(watch.autoArmRequested, true);
 });
 
 test("a source draft room or mismatched source identity cannot arm", () => {
   assert.equal(createLiveRoomWatch({ appTabId: 7, sourceContext: { ...sourceContext, inDraftRoom: true }, sourceLeague }), null);
   assert.equal(createLiveRoomWatch({ appTabId: 7, sourceContext: { ...sourceContext, leagueId: "other" }, sourceLeague }), null);
+  assert.equal(createLiveRoomWatch({
+    appTabId: 7,
+    sourceContext,
+    sourceLeague,
+    sourcePlayers: [{ id: 1, name: "Unstamped player pool" }],
+  }), null, "a nonempty player pool may never receive a synthetic fresh timestamp");
 });
 
 test("only one exact team, season, live room, and unexpired watch can trigger", () => {

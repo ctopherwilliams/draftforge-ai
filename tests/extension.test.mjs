@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { createHash, webcrypto } from "node:crypto";
+import { readFile, readdir } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import vm from "node:vm";
 import { actionPayloadMatchesBinding, validCommandCenterSessionId } from "../extension/action-binding.js";
 import { authorizeRuntimeMessage } from "../extension/origin-policy.js";
+import {
+  computeExtensionDirectoryIntegrity,
+  computeExtensionZipIntegrity,
+} from "../scripts/release-integrity-lib.mjs";
 
 const root = new URL("../extension/", import.meta.url);
 
@@ -13,10 +18,20 @@ test("extension is a narrowly scoped Manifest V3 ESPN companion", async () => {
   const release = JSON.parse(await readFile(new URL("../config/draft-day-release.json", import.meta.url), "utf8"));
   const companionZip = await readFile(new URL("../public/draftforge-espn-companion.zip", import.meta.url));
   assert.equal(manifest.manifest_version, 3);
+  assert.equal(release.schemaVersion, 2);
+  assert.match(release.extensionSourceSha256, /^[a-f0-9]{64}$/);
+  assert.equal(release.extensionSourceFileCount, 18);
   assert.deepEqual([...manifest.permissions].sort(), ["storage", "tabs"]);
   assert.equal(manifest.version, release.extensionVersion);
   assert.equal(createHash("sha256").update(companionZip).digest("hex"), release.extensionPackageSha256);
-  assert.ok(manifest.host_permissions.every((host) => /espn\.com/.test(host)));
+  const packaged = computeExtensionZipIntegrity(fileURLToPath(new URL("../public/draftforge-espn-companion.zip", import.meta.url)));
+  assert.equal(packaged.sha256, release.extensionSourceSha256);
+  assert.equal(packaged.fileCount, release.extensionSourceFileCount);
+  assert.deepEqual(manifest.host_permissions, [
+    "http://127.0.0.1:3000/*",
+    "https://fantasy.espn.com/*",
+    "https://lm-api-reads.fantasy.espn.com/*",
+  ]);
   assert.ok(manifest.content_scripts.some((script) => script.matches.includes("https://fantasy.espn.com/*")));
   const appMatches = manifest.content_scripts.find((script) => script.js.includes("app-bridge.js")).matches;
   assert.deepEqual(appMatches, [
@@ -26,11 +41,42 @@ test("extension is a narrowly scoped Manifest V3 ESPN companion", async () => {
   ]);
 });
 
+test("installed companion diagnostics hash the complete extension source tree", async () => {
+  const background = await readFile(new URL("background.js", root), "utf8");
+  const block = background.match(/const EXTENSION_SOURCE_FILES = Object\.freeze\(\[([\s\S]*?)\]\);/)?.[1] || "";
+  const declared = [...block.matchAll(/"([^"]+)"/g)].map((match) => match[1]).sort();
+  const actual = (await readdir(root, { withFileTypes: true }))
+    .filter((entry) => entry.isFile() && !entry.name.startsWith("."))
+    .map((entry) => entry.name)
+    .sort();
+  assert.deepEqual(declared, actual);
+  assert.match(background, /draftforge-extension-tree-v1/);
+  assert.match(background, /crypto\.subtle\.digest\("SHA-256"/);
+  assert.match(background, /extensionSourceSha256: extensionIntegrity\.sha256/);
+  assert.match(background, /extensionSourceFileCount: extensionIntegrity\.fileCount/);
+
+  const runtimeSource = background.match(/const EXTENSION_INTEGRITY_DOMAIN[\s\S]+?(?=\nconst installedExtensionIntegrityPromise)/)?.[0];
+  assert.ok(runtimeSource);
+  const sandbox = {
+    chrome: { runtime: { getURL: (path) => new URL(path, root).href } },
+    crypto: webcrypto,
+    fetch: async (url) => new Response(await readFile(new URL(url)), { status: 200 }),
+    TextEncoder,
+    Uint8Array,
+  };
+  vm.runInNewContext(`${runtimeSource}\nglobalThis.computeInstalled = computeInstalledExtensionIntegrity;`, sandbox);
+  const installed = await sandbox.computeInstalled();
+  const directory = computeExtensionDirectoryIntegrity(fileURLToPath(root));
+  assert.equal(installed.sha256, directory.sha256);
+  assert.equal(installed.fileCount, directory.fileCount);
+});
+
 test("privileged runtime messages require the exact DraftForge or ESPN sender origin", () => {
   const production = "https://draftforge-ai.workspace-231977.chatgpt.site/draft";
   const localhost = "http://localhost:3000/?reloadCompanion=1";
   const espn = "https://fantasy.espn.com/football/draft?leagueId=44050";
   assert.equal(authorizeRuntimeMessage("APP_HELLO", production).ok, true);
+  assert.equal(authorizeRuntimeMessage("APP_HELLO", production).senderKind, "app-observer");
   assert.equal(authorizeRuntimeMessage("GET_RUNTIME_DIAGNOSTICS", production).ok, true);
   assert.equal(authorizeRuntimeMessage("RELOAD_EXTENSION", localhost).ok, true);
   assert.equal(authorizeRuntimeMessage("CLOSE_PRACTICE_ROOM", localhost).ok, true);
@@ -45,21 +91,48 @@ test("privileged runtime messages require the exact DraftForge or ESPN sender or
   assert.equal(authorizeRuntimeMessage("SUBMIT_ACTION", "http://localhost:3000.attacker.example/").ok, false);
   assert.equal(authorizeRuntimeMessage("SUBMIT_ACTION", "not a URL").ok, false);
   assert.equal(authorizeRuntimeMessage("FUTURE_UNCLASSIFIED_ACTION", production).code, "UNKNOWN_MESSAGE");
+  for (const type of [
+    "RELOAD_EXTENSION",
+    "ARM_LIVE_ROOM_WATCH",
+    "CLOSE_PRACTICE_ROOM",
+    "CLEAN_LOCAL_WORKSPACE",
+    "RECOVER_LIVE_WORKSPACE",
+    "REFRESH_ESPN_CONTEXT",
+    "CONNECT_ESPN",
+    "CANCEL_PENDING_ACTIONS",
+    "SUBMIT_ACTION",
+    "DISABLE_ESPN_AUTOPICK",
+  ]) {
+    assert.deepEqual(authorizeRuntimeMessage(type, production), {
+      ok: false,
+      code: "APP_WRITER_ORIGIN_REQUIRED",
+    }, `${type} must remain loopback-writer-only`);
+  }
 });
 
 test("bound draft actions require the exact tab, league, team, and season", async () => {
   const background = await readFile(new URL("background.js", root), "utf8");
-  const helpers = background.match(/function bindDraftActions[\s\S]+?(?=\nfunction originForTab)/)?.[0];
+  const bindHelper = background.match(/function proposedDraftActionBinding[\s\S]+?\n\}/)?.[0];
+  const matchHelper = background.match(/function actionMatchesBinding[\s\S]+?\n\}/)?.[0];
+  const helpers = bindHelper && matchHelper ? `${bindHelper}\n${matchHelper}` : "";
   assert.ok(helpers, "background should expose the pure action-binding helpers");
   const sandbox = { actionPayloadMatchesBinding, validCommandCenterSessionId };
-  vm.runInNewContext(`let actionBinding = null;\n${helpers}\nglobalThis.bind = bindDraftActions; globalThis.matches = actionMatchesBinding;`, sandbox);
-  sandbox.bind(
+  vm.runInNewContext(`let actionBinding = null;\n${helpers}\nglobalThis.bind = (...args) => { actionBinding = proposedDraftActionBinding(...args); return actionBinding; }; globalThis.matches = actionMatchesBinding;`, sandbox);
+  const bound = sandbox.bind(
     { leagueId: "701", teamId: 5, season: 2026, tabId: 41 },
     { id: "701", teamId: 5, season: 2026 },
     41,
     17,
     "command-center-test",
   );
+  assert.deepEqual({ ...bound }, {
+    leagueId: "701",
+    teamId: 5,
+    season: 2026,
+    tabId: 41,
+    appTabId: 17,
+    commandCenterSessionId: "command-center-test",
+  });
   const payload = { expectedLeagueId: "701", expectedTeamId: 5, expectedSeason: 2026, commandCenterSessionId: "command-center-test" };
   const context = { leagueId: "701", teamId: 5, season: 2026, tabId: 41, inDraftRoom: true };
 
@@ -117,7 +190,9 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(background, /CLEAN_LOCAL_WORKSPACE/);
   assert.match(workspaceLifecycle, /LOCAL_WORKSPACE_CLEAN/);
   assert.match(background, /selectManagedWorkspaceCleanup/);
-  assert.match(background, /electNewest: true/);
+  assert.match(background, /authorization\.senderKind === "app"\s*\? await reconcileWorkspaceHello\(sender\.tab\?\.id\)/);
+  assert.match(background, /authorizeWorkspaceMessage/);
+  assert.match(workspaceLifecycle, /WORKSPACE_OBSERVER_READ_ONLY/);
   assert.match(background, /completedAuditProvesPracticeRoom/);
   assert.match(background, /practiceWorkspaceCleanupTabIds/);
   assert.match(background, /recoverExactDraftRoomContext\(\{/);
@@ -132,7 +207,7 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(background, /DF_DISABLE_AUTOPICK/);
   assert.match(content, /MIN_ACTION_WINDOW_SECONDS = 5/);
   assert.match(content, /AUTOPICK_ACTIVE/);
-  assert.match(content, /SOUND_NOT_MUTED/);
+  assert.doesNotMatch(content, /SOUND_NOT_MUTED/);
   assert.match(content, /const season = Number\(url\.searchParams\.get\("seasonId"\)/);
   assert.match(content, /autopickActive/);
   assert.match(content, /snakeClockOwnMarker/);
@@ -142,7 +217,7 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(content, /SELECT_ACTION_BUDGET_MS = 4500/);
   assert.match(content, /NOMINATION_CONFIRMATION_WINDOW_MS = 4000/);
   assert.match(content, /MAX_MANDATORY_SEARCH_CANDIDATES = 18/);
-  assert.match(content, /MAX_AUCTION_SETTLEMENT_RECOVERY_POLLS = 5/);
+  assert.match(content, /AUCTION_SETTLEMENT_DEADLINE_MS = 5000/);
   assert.match(content, /MANDATORY_CANDIDATE_SEARCH_WINDOW_MS = 120/);
   assert.match(content, /MANDATORY_POSITION_FILTER_WINDOW_MS = 1800/);
   assert.match(content, /function buildMandatoryPositionPlan\(candidates\)/);
@@ -161,6 +236,8 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(content, /HOLD_LEADING_BID/);
   assert.match(content, /WALK_AWAY/);
   assert.match(content, /BID_ACK_UNCERTAIN/);
+  assert.match(content, /ACTION_EXPIRED/);
+  assert.match(content, /actionDeadlineFailure\(action\)/);
   assert.match(content, /NOMINATION_ACK_UNCERTAIN/);
   assert.match(content, /actionExecutionTail/);
   assert.match(content, /inFlightActionResults/);
@@ -168,8 +245,8 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(content, /expectedSeason/);
   assert.match(content, /BUDGET_RESERVE/);
   assert.match(content, /#icon__controls__volume_mute/);
-  assert.match(content, /function enforceMutedDraftSound\(context\)/);
-  assert.match(content, /enforceMutedDraftSound\(context\);/);
+  assert.doesNotMatch(content, /function enforceMutedDraftSound\(context\)/);
+  assert.doesNotMatch(content, /enforceMutedDraftSound\(context\);/);
   assert.match(content, /new MutationObserver\(/);
   assert.match(content, /CONTEXT_WATCHDOG_MS = 2000/);
   assert.doesNotMatch(content, /ESPN_POLL/);
@@ -178,7 +255,10 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(bridge, /function announceReady\(\)/);
   assert.match(bridge, /event\.data\.type === "APP_HELLO"/);
   assert.match(bridge, /commandType: event\.data\.type/);
-  assert.match(page, /sendToExtension\("APP_HELLO"\)/);
+  assert.match(page, /sendToExtension\("APP_HELLO", \{ commandCenterSessionId: COMMAND_CENTER_PUBLISHER\.sessionId \}\)/);
+  assert.match(page, /workspaceRoleRef\.current !== "writer"/);
+  assert.match(page, /if \(workspaceRole !== "writer"\) return;/);
+  assert.match(page, /Read-only observer: this tab cannot submit picks, nominations, or bids/);
   assert.match(page, /runtimeDiagnostics\?\.managedCleanupReady === true/);
   assert.match(page, /sendToExtension\("CLOSE_PRACTICE_ROOM"/);
   assert.match(page, /resolvePracticeRoomCleanupRequest/);
@@ -194,10 +274,12 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(page, /LIVE_ROOM_WATCH_ARMED/);
   assert.match(page, /expectedCurrentBid: resolvedOperation === "BID"/);
   assert.match(page, /maxApprovedBid: resolvedOperation === "BID"/);
-  assert.match(page, /fillsMandatoryStarter: candidate\.fillsMandatoryStarter/);
+  assert.match(page, /notAfter/);
+  assert.match(page, /fillsMandatoryStarter: player\.fillsMandatoryStarter/);
   assert.match(page, /ACTION_CANDIDATE_LIMIT = 64/);
-  assert.match(page, /position: candidate\.pos/);
-  assert.match(page, /RETRIABLE_BID_CODES = new Set\(\[\.\.\.RETRIABLE_TURN_CODES, "ACTION_TIMEOUT", "NOMINEE_MISMATCH", "NOMINEE_UNKNOWN"\]\)/);
+  assert.match(page, /position: player\.pos/);
+  assert.match(page, /const RETRIABLE_BID_CODES = new Set/);
+  assert.match(page, /"AUCTION_SETTLEMENT_PENDING"/);
   assert.match(page, /RETRIABLE_NOMINATION_CODES = new Set\(\["NOT_ON_CLOCK", "CLOCK_TOO_SHORT", "NOMINATION_ACTIVE"\]\)/);
   assert.match(page, /nominated \|\| context\.nominatedPlayer \|\| Number\(context\.currentBid \|\| 0\) > 0/);
   assert.match(content, /code: "NOMINATION_ACTIVE"/);
@@ -241,5 +323,13 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(page, /captureRequested.*capture.*sanitized/);
   assert.match(page, /draftforge-sanitized-capture/);
   assert.match(page, /\["localhost", "127\.0\.0\.1"\]/);
-  assert.match(page, /delete safeLeague\.rawSettings/);
+  assert.match(page, /sanitizeAuthenticatedEspnLeague\(league\)/);
+  assert.match(page, /sanitizeAuthenticatedEspnPlayers\(espnPlayers\)/);
+  assert.match(page, /buildAuthenticatedEspnCaptureAttestation/);
+  assert.match(page, /capturedAt: authenticatedImportAt/);
+  assert.match(page, /authenticatedEspnCapture/);
+  assert.match(page, /ISSUE_ESPN_CAPTURE_RECEIPT/);
+  assert.match(page, /captureIssueToken/);
+  assert.match(page, /extension !== "connected"/);
+  assert.match(page, /isCanonicalDraftAuditUtcTimestamp\(authenticatedImportAt\)/);
 });

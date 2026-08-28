@@ -1,5 +1,26 @@
 const DEFAULT_WATCH_WINDOW_MS = 15 * 60 * 1000;
 
+export function createLiveRoomHandoffCoordinator() {
+  let active = null;
+  return {
+    run(watch, operation) {
+      if (!watch || typeof operation !== "function") return Promise.resolve(null);
+      if (active) return active.watch === watch ? active.promise : Promise.resolve(null);
+      let claimedPromise;
+      claimedPromise = Promise.resolve()
+        .then(operation)
+        .finally(() => {
+          if (active?.promise === claimedPromise) active = null;
+        });
+      active = { watch, promise: claimedPromise };
+      return claimedPromise;
+    },
+    active() {
+      return active !== null;
+    },
+  };
+}
+
 function stableNumberMap(value) {
   return Object.fromEntries(Object.entries(value || {})
     .map(([key, amount]) => [String(key), Number(amount || 0)])
@@ -21,10 +42,13 @@ export function liveRoomRuleSignature(league) {
   });
 }
 
-export function createLiveRoomWatch({ appTabId, sourceContext, sourceLeague, sourcePlayers = [], autoArmRequested = false, now = Date.now(), windowMs = DEFAULT_WATCH_WINDOW_MS }) {
+export function createLiveRoomWatch({ appTabId, sourceContext, sourceLeague, sourcePlayers = [], sourcePlayersFetchedAt, autoArmRequested = false, now = Date.now(), windowMs = DEFAULT_WATCH_WINDOW_MS }) {
   const sourceLeagueId = String(sourceLeague?.id || "");
   const teamId = Number(sourceContext?.teamId || sourceLeague?.teamId || 0);
   const season = Number(sourceLeague?.season || sourceContext?.season || 0);
+  const playerCount = Array.isArray(sourcePlayers) ? sourcePlayers.length : 0;
+  const exactPlayersFetchedAt = String(sourcePlayersFetchedAt || (playerCount === 0 ? new Date(now).toISOString() : ""));
+  const playersFetchedAtMs = Date.parse(exactPlayersFetchedAt);
   if (!Number.isInteger(appTabId)
     || !Number.isInteger(Number(sourceContext?.tabId))
     || !sourceLeagueId
@@ -32,6 +56,9 @@ export function createLiveRoomWatch({ appTabId, sourceContext, sourceLeague, sou
     || teamId <= 0
     || !Number.isInteger(season)
     || season <= 0
+    || (playerCount > 0 && !sourcePlayersFetchedAt)
+    || !Number.isFinite(playersFetchedAtMs)
+    || new Date(playersFetchedAtMs).toISOString() !== exactPlayersFetchedAt
     || sourceContext?.inDraftRoom === true
     || String(sourceContext?.leagueId || "") !== sourceLeagueId) return null;
   return {
@@ -43,6 +70,14 @@ export function createLiveRoomWatch({ appTabId, sourceContext, sourceLeague, sou
     season,
     rules: liveRoomRuleSignature(sourceLeague),
     sourcePlayers: Array.isArray(sourcePlayers) ? sourcePlayers : [],
+    sourcePlayersFetchedAt: exactPlayersFetchedAt,
+    sourcePlayerEnvelope: Object.freeze({
+      fetchedAt: exactPlayersFetchedAt,
+      leagueId: sourceLeagueId,
+      teamId,
+      season,
+      playerCount,
+    }),
     autoArmRequested: autoArmRequested === true,
     armedAt: now,
     expiresAt: now + Math.max(1, Number(windowMs || DEFAULT_WATCH_WINDOW_MS)),

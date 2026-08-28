@@ -147,10 +147,36 @@ test("a decision is write-once while resolved identity may be filled exactly onc
   assert.deepEqual(validateLiveControlTransition(resolved, mutated), { ok: false, code: "LIVE_CONTROL_DECISION_MUTATED" });
 });
 
+test("a published decision requires an observed matching PLANNED lifecycle event", () => {
+  const empty = createLiveControlState("decision-publication-session");
+  const orphaned = { ...empty, decision: decision() };
+  assert.deepEqual(validateLiveControlTransition(undefined, orphaned), {
+    ok: false,
+    code: "LIVE_CONTROL_DECISION_EVENT_MISMATCH",
+  });
+
+  const planned = {
+    ...append(empty, {
+      kind: "ACTION_LIFECYCLE",
+      actionId: "action-14",
+      decisionId: "decision-14",
+      operation: "SELECT",
+      phase: "PLANNED",
+      intendedPlayer: player(101, "Intended Receiver"),
+    }),
+    decision: decision(),
+  };
+  assert.deepEqual(validateLiveControlTransition(undefined, planned), {
+    ok: true,
+    code: "LIVE_CONTROL_ACCEPTED",
+  });
+});
+
 test("compact control polling returns only events after the requested sequence and computed ages", () => {
   let control = createLiveControlState("poll-session", {
     espnContextAt: at(),
     pickFeedAt: at(1_000),
+    pickFeedObservedAt: at(1_500),
     sourceSnapshotAt: at(2_000),
     lastActionAt: null,
   });
@@ -174,6 +200,7 @@ test("compact control polling returns only events after the requested sequence a
   assert.deepEqual(view.agesMs, {
     espnContext: 5_000,
     pickFeed: 4_000,
+    pickFeedObserved: 3_500,
     sourceSnapshot: 3_000,
     lastAction: null,
     decision: null,
@@ -181,6 +208,39 @@ test("compact control polling returns only events after the requested sequence a
   });
   assert.equal(buildLiveControlCompactView(control, 2).unchanged, true);
   assert.deepEqual(buildLiveControlCompactView(control, 2).events, []);
+});
+
+test("compact control publishes explicit truncation metadata with sticky incident state", () => {
+  let control = createLiveControlState("rolled-poll-session");
+  control = append(control, {
+    kind: "SAFETY",
+    condition: "ESPN_AUTOPICK",
+    active: true,
+    code: "AUTOPICK_DETECTED",
+  });
+  for (let index = 0; index < MAX_LIVE_CONTROL_EVENTS; index += 1) {
+    control = append(control, {
+      kind: "SAFETY",
+      condition: "CLOCK",
+      active: false,
+      code: "CLOCK_VERIFIED",
+    });
+  }
+
+  const earliestRetainedSequence = control.sequence - MAX_LIVE_CONTROL_EVENTS + 1;
+  const bootstrap = buildLiveControlCompactView(control, 0);
+  assert.equal(bootstrap.earliestRetainedSequence, earliestRetainedSequence);
+  assert.equal(bootstrap.truncated, true);
+  assert.equal(bootstrap.events[0].sequence, earliestRetainedSequence);
+  assert.equal(bootstrap.events.at(-1).sequence, control.sequence);
+  assert.equal(bootstrap.historicalAutopickDetected, true);
+
+  const exactDelta = buildLiveControlCompactView(control, earliestRetainedSequence - 1);
+  assert.equal(exactDelta.truncated, false);
+  assert.equal(exactDelta.events[0].sequence, earliestRetainedSequence);
+
+  const staleDelta = buildLiveControlCompactView(control, earliestRetainedSequence - 2);
+  assert.equal(staleDelta.truncated, true);
 });
 
 test("same-sequence control mutations and sticky-state regressions are rejected", () => {

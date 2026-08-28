@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "DraftForge ESPN Companion",
-  "version": "0.2.26",
+  "version": "0.2.27",
   "description": "Securely connects DraftForge to your signed-in ESPN Fantasy draft room.",
   "permissions": ["tabs", "storage"],
   "host_permissions": [
+    "http://127.0.0.1:3000/*",
     "https://fantasy.espn.com/*",
     "https://lm-api-reads.fantasy.espn.com/*"
   ],

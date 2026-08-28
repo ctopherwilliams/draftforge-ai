@@ -6,6 +6,20 @@ DraftForge is an ESPN-only fantasy football draft copilot. The primary cockpit i
 
 Post-draft league management is intentionally out of scope.
 
+## Current post-live candidate boundary
+
+The 2026-08-28 working candidate hardens the control plane without changing the fixed source weights or adding a sixth ranking source:
+
+- The dashboard and Chrome companion remain the only action writer. `npm run draft-day:status` performs exactly one bounded (750 ms, 64 KiB), loopback-only GET for one atomic control-and-board snapshot; it never calls Chrome, the extension, the engine, or an action route. The server rejects stale audit, context, pick-feed, source, availability, room, Autopick, attribution, or checklist state before publishing a live-ready recommendation.
+- Every decision binds the exact five-source profile, canonical generation timestamp, and lowercase `sha256:<64 hex>` snapshot identity. The READY path requires the WARM response and active dashboard audit to publish the same tuple. A stale dashboard loaded before a restarted production server is rejected until the dashboard is reloaded and republishes from that server instance.
+- ESPN opponent reconciliation requires one unique normalized name or abbreviation. Ambiguous snake opponents receive a deterministic non-team placeholder identity; ambiguous salary-cap opponent ownership is omitted and therefore cannot authorize a bid.
+- Salary-cap offer and sale settlement compares exact nonzero ESPN player IDs first. Players with the same display name but different ESPN IDs settle independently; normalized-name fallback is allowed only when at least one exact ID is unavailable.
+- ESPN sound is observed and reported as operator-preference telemetry. Muted sound is preferred for testing and may be chosen on draft day, but sound state does not authorize or block a selection, nomination, bid, readiness result, or final audit. ESPN Autopick remains a hard safety gate.
+
+The v0.2.27 post-live mechanics gate passes 594/594 repository tests and 417 focused live-control tests plus chaos, load, contention, production-path, visual, soak, lint, and dependency checks. Its final schema-v3 Monte Carlo run completed 10,000 snake plus 10,000 salary-cap drafts with zero errors or hard violations. Two independent 1,000-draft current-code replays produced identical aggregate and ordered-outcome digests. These browser-free runs test deterministic mechanics against seeded five-source-calibrated inputs; they are not current player advice or authenticated ESPN certification.
+
+Current authenticated arming is intentionally **NO-GO**. `TRADYR_API_KEY` is not configured and no fresh authenticated schema-v3 source snapshot exists. The older `outputs/source-capture/release-salary-source-20260827.json` artifact is schema v1, stale, profile-bound historical evidence and cannot satisfy the current gate. Official availability news remains a separate short-lived hold/veto overlay and never changes consensus scores or weights.
+
 ## Implemented availability-veto contract
 
 This section is retained as the auditable contract for the implemented availability veto. The current baseline reads ESPN's authenticated `injuryStatus`, removes definitive inactive designations, and stages recent credible external evidence through a sanitized, loopback-only, short-lived artifact. External news is a safety overlay, never a sixth ranking source.
@@ -112,7 +126,7 @@ node --check extension/app-bridge.js
 git diff --check
 ```
 
-After the VM branch is reviewed on the Mac, perform one no-click authenticated pre-room rehearsal for each saved ESPN format. Both must return `DRAFT_DAY_READY`, show the exact imported league rules, five fresh consensus sources, a fresh availability digest, muted sound, ESPN Autopick off, DraftForge Auto-Draft off, and exactly one DraftForge dashboard plus one authenticated ESPN tab. Until that happens, Grok's report must end with `MAC_AUTHENTICATED_CERTIFICATION_PENDING`. Do not enter or operate a real league draft, and do not count simulations as authenticated certification.
+After the VM branch is reviewed on the Mac, perform one no-click authenticated pre-room rehearsal for each saved ESPN format. Both must return `DRAFT_DAY_READY`, show the exact imported league rules, five fresh consensus sources, a fresh availability digest, observed sound preference, ESPN Autopick off, DraftForge Auto-Draft off, and exactly one DraftForge dashboard plus one authenticated ESPN tab. Until that happens, Grok's report must end with `MAC_AUTHENTICATED_CERTIFICATION_PENDING`. Do not enter or operate a real league draft, and do not count simulations as authenticated certification.
 
 ### Definition of done
 
@@ -128,6 +142,7 @@ The work is complete only when the full gate passes, deterministic replay is pro
 - Deterministic, inspectable consensus using ESPN, Fantasy Football Calculator, MyFantasyLeague, Tradyr, and The GNG
 - Corroborated value, sleeper, and deep-stash signals derived from model-versus-market disagreement within those same five sources
 - Source health, weights, timestamps, and player-level provenance in the UI
+- A compact GET-only chat status command that reads one coherent control-and-board capture without touching the action path
 - Companion-managed one-dashboard election and final-audit cleanup for exact generated practice workspaces
 - ESPN credentials remain in the browser and are never persisted by DraftForge
 
@@ -144,7 +159,7 @@ npm run dev
 
 Open `http://localhost:3000`, install the extension from `extension/` using Chrome's **Load unpacked** flow, sign in to ESPN, and keep exactly one ESPN league or draft-room tab beside the dashboard. Codex uses those two Chrome tabs as the observable draft-day workspace.
 
-The optional single-tab recovery path can reuse an authenticated in-app-browser ESPN tab, but it must pass the same league, source, sound, Autopick, clock, roster, ceiling, and reserve checks.
+The optional single-tab recovery path can reuse an authenticated in-app-browser ESPN tab, but it must pass the same league, source, Autopick, clock, roster, ceiling, and reserve checks and must still publish the observed sound preference as telemetry.
 
 For local development after the companion has been loaded once from this repository's `extension/` directory, opening `http://localhost:3000/?reloadCompanion=1` reloads the unpacked companion from disk. The command is rejected from non-localhost pages. Reload the ESPN and dashboard tabs after it runs; never invoke it during an active action window.
 
@@ -180,11 +195,12 @@ Draft day is a cold-start workflow, not a continuation of whatever tabs or serve
    npm run draft-day:ready -- --format salary-cap --phase pre-room
    ```
 
-   This gate compares the live loopback audit with the exact saved ESPN settings, tab binding, publisher session, five-source set, source freshness, extension state, telemetry schema, and Auto-Draft/ESPN-Autopick safety state. It exits nonzero on any mismatch.
-4. Before creating the room, use **Confirm + arm live draft** once. The companion stores a bounded one-shot watch for the exact authenticated league, team, season, rules, and draft type. When ESPN creates the room, it binds only one exact match, reuses the authenticated player pool, verifies the generated room's rules, mutes sound, requires ESPN Autopick off, and revalidates the exact tab and action surface before Auto-Draft can turn on.
-   For a regulation-timer room, also rerun the command with `--phase live`; it requires the second live-room checklist, muted sound, and resolved ESPN action surface. A short practice room may use the dashboard's equivalent in-process checklist so terminal startup does not consume the opening clock.
+   This gate compares the live loopback audit with the exact saved ESPN settings, tab binding, publisher session, five-source set, source freshness, extension state, telemetry schema, and Auto-Draft/ESPN-Autopick safety state. It first primes the bounded source cache, then leases the audit's exact `sourceSnapshotId`/`sourceGeneratedAt`, performs a lookup-only exact WARM, and re-reads the audit. It exits nonzero if that identity is absent, stale, substituted, or changes during the gate.
+4. Before creating the room, use **Confirm + arm live draft** once. The companion stores a bounded one-shot watch for the exact authenticated league, team, season, rules, and draft type. When ESPN creates the room, it binds only one exact match, reuses the authenticated player pool, verifies the generated room's rules, observes the sound preference, requires ESPN Autopick off, and revalidates the exact tab and action surface before Auto-Draft can turn on.
+   For a regulation-timer room, also rerun the command with `--phase live`; it requires the second live-room checklist, explicit sound telemetry, and a resolved ESPN action surface. Sound may remain on or muted without changing action authority. A short practice room may use the dashboard's equivalent in-process checklist so terminal startup does not consume the opening clock.
+   A successful terminal `--phase live` doctor automatically freezes the exact clean, upstream-matched revision and room identity. There is intentionally no manual freeze-arm command. Until the exact final-ready completion audit clears that record, npm rejects dev, build, test/simulation, source warm/capture, and extension-package operations; `npm start` remains available to restart only the already-built certified artifact. Inspect the state with `npm run draft-day:freeze -- status`. The status output also supplies the identity-bound confirmation token required for the documented emergency clear procedure in [DRAFT_DAY_HANDOVER.md](DRAFT_DAY_HANDOVER.md).
 5. Only then start the guarded loop. It polls cheap DOM state off-clock, calls the production engine only for an own snake turn or active salary-cap decision, submits through the shared action implementation, and requires ESPN roster confirmation.
-6. At completion, verify the exact roster, prices/budget, mandatory slots, position caps, one-dollar reserve, Autopick-off state, and muted sound. After the final-ready parity audit, the companion closes only the exact generated practice room, its matching source-league tab, and stale DraftForge dashboards. It never treats unrelated ESPN or user tabs as cleanup targets.
+6. At completion, verify the exact roster, prices/budget, mandatory slots, position caps, one-dollar reserve, Autopick-off state, and recorded sound preference. After the final-ready parity audit, the companion closes only the exact generated practice room, its matching source-league tab, and stale DraftForge dashboards. It never treats unrelated ESPN or user tabs as cleanup targets.
 
    The dashboard also keeps a sanitized, in-memory final-certification snapshot for up to 24 hours. It is reachable only through loopback and contains no cookies, member IDs, or opponent identities. Require independent final proof with:
 
@@ -192,7 +208,7 @@ Draft day is a cold-start workflow, not a continuation of whatever tabs or serve
    npm run draft-day:audit -- --league <leagueId> --team <teamId> --require-complete
    ```
 
-   The command exits nonzero unless the exact ESPN/app roster (including auction prices) is complete and legal, the live checklists and five-source gate passed, sound remained muted, ESPN Autopick remained off, and DraftForge shut itself down.
+   The command exits nonzero unless the exact ESPN/app roster (including auction prices) is complete and legal, the live checklists and five-source gate passed, ESPN Autopick remained off, and DraftForge shut itself down. Sound state is retained in the audit as operator-preference telemetry and is not a pass/fail condition. On that exact final-ready result it also clears the matching live code freeze; a latest-room or mismatched-room audit can never clear it.
 
 Any failed check stops DraftForge from clicking. A cold source refresh may take roughly 20 seconds because MFL is intentionally queried sequentially under its public rate limit; that work must finish before room launch.
 
@@ -216,17 +232,17 @@ For bounded, seeded strategy stress testing without opening ESPN, run:
 npm run simulate:monte-carlo -- --drafts 10000 --seed 20260820
 ```
 
-The command runs the requested number of trials per format, keeps the production decision engine as the single strategy implementation, streams per-trial summaries, and writes machine-readable and Markdown output under `outputs/monte-carlo/`. See [the draft-day release-candidate report](docs/draft-day-release-candidate-20260819.md) for current authenticated, holdout, latency, reproduction, and limitation evidence; [docs/monte-carlo-report.md](docs/monte-carlo-report.md) retains the earlier tuning-cycle history.
+The command runs the requested number of synthetic trials per format, keeps the production decision engine as the single strategy implementation, uses an 80% authenticated-settings fixture / 20% ESPN-compatible adversarial-variant mix, streams per-trial summaries, and writes machine-readable and Markdown output under `outputs/monte-carlo/`. Captured player evidence is deliberately not reused across those different source profiles. See [the historical draft-day release-candidate report](docs/draft-day-release-candidate-20260819.md) for the prior authenticated, latency, and limitation record; its legacy mixed-profile simulation figures are not current certification evidence. [docs/monte-carlo-report.md](docs/monte-carlo-report.md) retains the earlier tuning-cycle history.
 
-For current player-specific evidence, first capture an immutable five-source snapshot from a sanitized authenticated ESPN profile, then replay that exact digest across independent seed families:
+For current player-specific evidence, first import the exact ESPN league through the authenticated companion. On the same loopback dashboard, `?capture=sanitized` exposes JSON only after a current server-recorded audit grants a short-lived one-time receipt. Canonical SHA-256 binds the full sanitized rules fingerprint, exact ESPN player/status bytes, and original player-fetch timestamp. Save that JSON immediately; the CLI recomputes its digest and consumes the matching loopback receipt before contacting any public provider. Edits, replay, expiry, wrong identity, and server restart fail closed. The receipt is an in-process evidence anchor, not a cryptographic extension signature. The resulting schema-v3 snapshot keeps capture and public-source provenance inside its digest:
 
 ```bash
 npm run snapshot:capture -- --espn outputs/source-capture/espn-profile.json
-npm run simulate:monte-carlo -- --drafts 10000 --seed 20260814 --snapshot snapshots/intelligence/source-v1-....json
-npm run simulate:matrix -- --drafts 1000 --snapshot snapshots/intelligence/source-v1-....json
+npm run simulate:monte-carlo -- --drafts 10000 --seed 20260814 --snapshot snapshots/intelligence/source-v3-....json
+npm run simulate:matrix -- --drafts 1000 --snapshot snapshots/intelligence/source-v3-....json
 ```
 
-Snapshot capture fails closed unless ESPN, FFC, MFL, Tradyr, and GNG are healthy and fresh. Snapshots are content-addressed, replay freshness at their capture time, and are ignored by Git because they contain large third-party datasets. The matrix runs independent seed families sequentially to bound CPU and memory.
+Snapshot capture fails closed unless ESPN, FFC, MFL, Tradyr, and GNG are healthy and fresh and the draftable ESPN pool can fill every roster and mandatory starter slot. A snapshot-backed command automatically selects its one captured snake or salary-cap format and runs every seed against that exact scoring, team-count, season, QB, roster, and budget profile. Explicit cross-format reuse is rejected. Run the browser-free command above without `--snapshot` for the separate synthetic/adversarial stress campaign; never borrow one profile's player evidence for another league. Snapshots are content-addressed, replay freshness at their capture time, and are ignored by Git because they contain large third-party datasets. The matrix runs exact-profile seed families sequentially to bound CPU and memory. Every command exits nonzero if even one requested draft is missing or fails.
 
 ## Data and decision model
 

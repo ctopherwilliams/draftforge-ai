@@ -20,6 +20,8 @@ function audit(overrides = {}) {
     runtime: {
       capturedAt: "2026-08-18T12:00:00.000Z",
       extensionVersion: "0.2.12",
+      extensionSourceSha256: "a".repeat(64),
+      extensionSourceFileCount: 18,
       browserTabCount: 2,
       draftForgeTabCount: 1,
       espnTabCount: 1,
@@ -40,6 +42,14 @@ function audit(overrides = {}) {
     draft: { totalPicks: 0, appRoster: [], espnRoster: [] },
     telemetry: { actions: [] },
     sleeperEvidence: { candidateCount: 0, candidates: [] },
+    availability: {
+      status: "READY",
+      digest: `sha256:${"a".repeat(64)}`,
+      evaluatedAt: "2026-08-18T12:00:00.000Z",
+      freshUntil: "2026-08-18T12:30:00.000Z",
+      blockingReasons: [],
+      vetoedPlayerIds: [],
+    },
     ...overrides,
   };
 }
@@ -56,7 +66,7 @@ test("authenticated pre-room gate requires exact fresh settings and stays fail-c
   assert.ok(stale.blockers.includes("snapshotFresh"));
 });
 
-test("live gate detects extension, source, tab, sound, autopick, and markup recovery failures", () => {
+test("live gate detects extension, source, tab, autopick, and markup recovery failures", () => {
   const unsafe = audit({
     binding: { tabId: 0 },
     safety: {
@@ -72,9 +82,10 @@ test("live gate detects extension, source, tab, sound, autopick, and markup reco
   });
   const result = evaluateDraftDayReadiness({ snapshot: unsafe, expected, phase: "live", now: Date.parse("2026-08-18T12:00:05.000Z") });
   assert.equal(result.ready, false);
-  for (const blocker of ["exactTabBound", "extensionConnected", "fiveSources", "espnAutopickOff", "actionHealthy", "liveChecklistReady", "inDraftRoom", "soundMuted"]) {
+  for (const blocker of ["exactTabBound", "extensionConnected", "fiveSources", "espnAutopickOff", "actionHealthy", "liveChecklistReady", "inDraftRoom"]) {
     assert.ok(result.blockers.includes(blocker), blocker);
   }
+  assert.equal(result.blockers.includes("soundMuted"), false);
 });
 
 test("readiness rejects a companion without managed workspace cleanup", () => {
@@ -84,8 +95,31 @@ test("readiness rejects a companion without managed workspace cleanup", () => {
   assert.ok(result.blockers.includes("managedWorkspaceCleanup"));
 });
 
+test("pre-room and live readiness reject missing, blocked, malformed, or stale availability truth", () => {
+  const now = Date.parse("2026-08-18T12:00:05.000Z");
+  for (const candidate of [
+    audit({ availability: undefined }),
+    audit({ availability: { ...audit().availability, status: "BLOCKED", blockingReasons: ["NEWS_SCAN_FAILED"] } }),
+    audit({ availability: { ...audit().availability, digest: "invalid" } }),
+    audit({ availability: { ...audit().availability, freshUntil: "2026-08-18T12:00:04.000Z" } }),
+    audit({ availability: { ...audit().availability, vetoedPlayerIds: [12, 12] } }),
+  ]) {
+    const preRoom = evaluateDraftDayReadiness({ snapshot: candidate, expected, now });
+    assert.equal(preRoom.ready, false);
+    assert.ok(preRoom.blockers.includes("availabilityReady"));
+  }
+
+  const live = audit({
+    safety: { ...audit().safety, liveChecklistReady: true, inDraftRoom: true, soundMuted: true },
+    availability: { ...audit().availability, freshUntil: "2026-08-18T12:00:04.000Z" },
+  });
+  const liveResult = evaluateDraftDayReadiness({ snapshot: live, expected, phase: "live", now });
+  assert.equal(liveResult.ready, false);
+  assert.ok(liveResult.blockers.includes("availabilityReady"));
+});
+
 test("live and complete phases cannot be confused", () => {
-  const live = audit({ safety: { ...audit().safety, liveChecklistReady: true, inDraftRoom: true, soundMuted: true } });
+  const live = audit({ safety: { ...audit().safety, liveChecklistReady: true, inDraftRoom: true, soundMuted: false } });
   assert.equal(evaluateDraftDayReadiness({ snapshot: live, expected, phase: "live", now: Date.parse("2026-08-18T12:00:05.000Z") }).ready, true);
   const complete = evaluateDraftDayReadiness({ snapshot: live, expected, phase: "complete", now: Date.parse("2026-08-18T12:00:05.000Z") });
   assert.equal(complete.ready, false);

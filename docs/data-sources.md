@@ -10,12 +10,22 @@ DraftForge uses five complementary signals. ESPN remains the source of league tr
 | Tradyr | Independent redraft-PPR composite | Server-only bearer-authenticated bounded pages from `GET https://api.tradyr.app/v1/players?format=redraft&numQbs={1\|2}&limit=50&offset={n}` | Daily | 20% |
 | The GNG Pigskin Rankings | Model ranking, tiers, movement, and projected PPG | `GET https://www.thegng.us/api/rankings.json?profile={standard|half_ppr|ppr}` | Source-generated timestamp; six-hour cache | 20% |
 
+## Current certification boundary — 2026-08-28
+
+Current authenticated source certification is **NO-GO**. The server-only `TRADYR_API_KEY` is not configured and no fresh authenticated schema-v3 snapshot exists. `outputs/source-capture/release-salary-source-20260827.json` is schema v1, was captured at `2026-08-28T03:13:30.425Z`, contains only 50 unkeyed Tradyr rows, and is historical regression evidence only. Its age, schema, profile identity, and missing authenticated ESPN provenance must prevent it from satisfying current readiness.
+
+A current capture requires a fresh authenticated ESPN artifact with a canonical UTC `capturedAt`, exact scoring/team-count/season/QB/format profile, and matching sanitized authentication attestation. Snapshot construction then requires all five providers and binds the exact profile plus provider data to its digest. Missing credentials, a stale or future timestamp, a profile mismatch, a stale ESPN player pool, an old schema, incomplete provider coverage, or a digest mismatch is fatal. Never rewrite an old artifact's timestamp or metadata to make it appear current.
+
+The live WARM and READY path adds a shorter authorization window: WARM and the active dashboard audit must publish the same exact source profile, canonical generation timestamp, and lowercase `sha256:<64 hex>` identity. The doctor uses a retained exact tuple and must not refetch or silently replace source truth during verification or an active decision.
+
+Official availability news is intentionally outside this weighted table. Authenticated ESPN Player News plus official NFL/team/league evidence may populate the separate short-lived hold/veto artifact. Definitive, exactly resolved events can block a player; advisories, legal allegations, rumors, ambiguous identities, contradictions, or stale evidence cannot change a rank, projection, sleeper label, or bid ceiling. The overlay is never a sixth source.
+
 ## Combination method
 
 1. Normalize names, suffixes, punctuation, teams, and positions. A one-character fuzzy match is allowed only when team and position also agree.
 2. Convert each source's overall rank into a 0–100 percentile so differently sized boards remain comparable.
-3. Compute a weighted percentile consensus. Missing-player and failed-source weights are removed and the remaining weights are renormalized.
-4. Reject a source snapshot older than 14 days. Show source coverage and rank dispersion for every recommendation.
+3. Compute the rank consensus against the fixed 100% weight budget above. A source that does not match a player contributes zero rather than transferring its weight to another source; a failed or stale source locks the five-source gate. Field-specific ADP and auction-price blends normalize only among the market sources that actually publish that field.
+4. Reject provider-authored source data older than 14 days, and reject a current certification artifact more than 30 minutes after its authenticated ESPN capture. Show source coverage and rank dispersion for every recommendation.
 5. Blend ESPN, FFC, and MFL ADP into the market-availability estimate. Blend ESPN and MFL auction values into the initial salary-cap market price.
 6. Feed consensus, ESPN league-specific projected points, value over replacement, tier scarcity, roster construction, and selected strategy into the deterministic draft score.
 
@@ -25,7 +35,9 @@ Tradyr pagination is sequential, capped at 1,000 rows, and remains one 20% sourc
 
 ## Immutable simulation snapshots
 
-Player-specific Monte Carlo evidence uses a schema-versioned, content-addressed snapshot containing a sanitized ESPN league/player profile and the four public responses retrieved at the same capture time. Capture fails closed when any public source is failed, stale, or empty. Replay verifies the SHA-256 digest and evaluates source freshness relative to `capturedAt`, so the same saved input cannot change merely because wall-clock time advances.
+Player-specific Monte Carlo evidence uses a schema-versioned, content-addressed snapshot containing a sanitized ESPN league/player profile and the four public responses retrieved for that capture. The loopback dashboard computes canonical SHA-256 over the exact sanitized league rules, player/status bytes, and original player-fetch timestamp, then obtains a bounded one-time receipt tied to its current server-recorded audit. The CLI must recompute the digest and consume that unexpired receipt before any public request. Schema v3 includes the capture digest, consumed-receipt assertion, full rules fingerprint, and exact public-consensus identity in its own digest; it rechecks freshness after provider I/O and before atomic write. The receipt is an in-process evidence anchor rather than a cryptographic extension signature, so it prevents offline artifact relabeling/replay but does not claim to secure a compromised local host.
+
+Capture also fails closed when any public source is failed, stale, or empty. Replay verifies the SHA-256 digest and evaluates provider freshness relative to the preserved `capturedAt`, so the same saved input cannot change merely because wall-clock time advances. Re-import ESPN to produce a new authenticated artifact if the 30-minute input window expires; editing or re-wrapping an old JSON file is not certification evidence.
 
 ESPN negative D/ST IDs are preserved; placeholder IDs `0` and `-1`, raw settings, member identifiers, authentication data, and real team names are excluded. Source truth remains fixed during a simulated decision. Seeded projection uncertainty and late-news removals affect hidden outcomes or availability only, never the five-source recommendation input.
 

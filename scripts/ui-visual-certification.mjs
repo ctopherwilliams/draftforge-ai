@@ -161,7 +161,18 @@ try {
   const origin = `http://127.0.0.1:${port}`;
   temporaryDirectory = await mkdtemp(join(tmpdir(), "draftforge-ui-cert-"));
   await mkdir(outputDirectory, { recursive: true });
-  serverProcess = spawn("npm", ["run", "start", "--", "--port", String(port)], {
+  // The production entrypoint intentionally forbids caller-controlled ports
+  // and requires a clean, upstream-synchronized release. Visual certification
+  // runs against the artifact built by its own npm lifecycle instead, on an
+  // isolated ephemeral loopback port that can never displace port 3000.
+  serverProcess = spawn(process.execPath, [
+    resolve("node_modules/vinext/dist/cli.js"),
+    "start",
+    "--hostname",
+    "127.0.0.1",
+    "--port",
+    String(port),
+  ], {
     cwd: process.cwd(),
     env: { ...process.env, WRANGLER_LOG_PATH: ".wrangler/wrangler.log" },
     stdio: ["ignore", "pipe", "pipe"],

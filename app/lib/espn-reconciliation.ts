@@ -17,6 +17,22 @@ function defenseNickname(value: string | null | undefined) {
     ?.toLowerCase().replace(/[^a-z0-9]/g, "") || "";
 }
 
+function resolveUniqueEspnTeam(
+  value: string | null | undefined,
+  teams: LeagueSettings["teams"],
+) {
+  const identity = normalizeName(value);
+  if (!identity) return null;
+  const matches = teams.filter((candidate) => (
+    normalizeName(candidate.name) === identity
+    || normalizeName(candidate.abbrev) === identity
+  ));
+  // ESPN's rendered history can expose a display name or abbreviation, but
+  // neither is a stable team id. A duplicate name or a name/abbreviation
+  // collision is untrusted even when one candidate happens to be our team.
+  return matches.length === 1 ? matches[0] : null;
+}
+
 export function espnNameMatchesPlayer(value: string | null | undefined, player: DraftPlayer) {
   if (normalizeName(value) === normalizeName(player.name)) return true;
   if (player.pos !== "DST") return false;
@@ -65,11 +81,13 @@ export function liveEspnRecommendations(
 
 export function resolveOwnRoster(roomContext: EspnContext | undefined, players: DraftPlayer[]) {
   return (roomContext?.ownRoster || []).flatMap((entry, index) => {
-    // ESPN defense rows can expose a team/logo id rather than the draft-pool
-    // player id. The exact visible name is authoritative when it resolves.
-    const playerId = players.find((player) => espnNameMatchesPlayer(entry.name, player))?.id
-      || Number(entry.playerId)
-      || 0;
+    // Prefer ESPN's exact draft-pool identity whenever it resolves. Defense
+    // rows can expose a team/logo id instead, so use the visible name only when
+    // the supplied id is absent from the authenticated player pool.
+    const exactPlayer = players.find((player) => player.id === Number(entry.playerId));
+    const playerId = exactPlayer?.id
+      ?? players.find((player) => espnNameMatchesPlayer(entry.name, player))?.id
+      ?? 0;
     return playerId !== 0 && playerId !== -1
       ? [{ playerId, amount: Math.max(0, Number(entry.amount || 0)), index }]
       : [];
@@ -81,9 +99,7 @@ export function resolveAuctionSales(roomContext: EspnContext | undefined, league
   return (roomContext?.auctionSales || []).flatMap((sale, index) => {
     const player = players.find((candidate) => candidate.id === Number(sale.playerId))
       || players.find((candidate) => normalizeName(candidate.name) === normalizeName(sale.playerName));
-    const team = league.teams.find((candidate) =>
-      normalizeName(candidate.name) === normalizeName(sale.teamName)
-      || normalizeName(candidate.abbrev) === normalizeName(sale.teamName));
+    const team = resolveUniqueEspnTeam(sale.teamName, league.teams);
     const amount = Number(sale.amount || 0);
     if (!player || !team || amount < 1) return [];
     const overall = Math.max(1, Number(sale.sequence || index + 1));
@@ -95,10 +111,7 @@ export function resolveSnakeDraftPicks(roomContext: EspnContext | undefined, lea
   if (league.draftType !== "SNAKE" || !roomContext?.inDraftRoom || !Array.isArray(roomContext.snakePicks)) return [];
   return roomContext.snakePicks.flatMap((pick) => {
     const player = players.find((candidate) => espnNameMatchesPlayer(pick.playerName, candidate));
-    const team = league.teams.find((candidate) => (
-      normalizeName(candidate.name) === normalizeName(pick.teamName)
-      || normalizeName(candidate.abbrev) === normalizeName(pick.teamName)
-    ));
+    const team = resolveUniqueEspnTeam(pick.teamName, league.teams);
     const round = Number(pick.round);
     const roundPick = Number(pick.roundPick);
     if (!player || !Number.isInteger(round) || round < 1 || !Number.isInteger(roundPick) || roundPick < 1 || roundPick > league.size) return [];
@@ -127,9 +140,13 @@ export function reconcileEspnPicks(
   const byPlayer = new Map(
     [...picks, ...snakePicks].map((pick) => [pick.playerId, {
       ...pick,
+      // A live roster panel is a positive, append-only ownership signal. ESPN
+      // virtualizes and transiently tears down rows, so absence from one frame
+      // can never revoke an already confirmed team attribution. Authoritative
+      // pick/sale feeds may still correct ownership before entering this merge.
       teamId: ownIds.has(pick.playerId) && Number(teamId) > 0
         ? Number(teamId)
-        : Number(pick.teamId) === Number(teamId) ? OPPONENT_TEAM_ID : pick.teamId,
+        : pick.teamId,
     }]),
   );
   const maxOverall = Math.max(0, ...[...byPlayer.values()].map((pick) => Number(pick.overall || 0)));

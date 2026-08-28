@@ -6,16 +6,47 @@ import path from "node:path";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const testFiles = [
+  "tests/action-binding-recovery.test.mjs",
+  "tests/async-submit-authorization.test.mjs",
   "tests/auto-draft-safety.test.mjs",
+  "tests/availability-stage-store.test.mjs",
+  "tests/availability-staging.test.mjs",
+  "tests/availability-veto.test.mjs",
+  "tests/background-action-authorization.test.mjs",
+  "tests/background-import-deadlines.test.mjs",
+  "tests/background-polling.test.mjs",
+  "tests/draft-audit-publisher.test.mjs",
+  "tests/draft-audit-checkpoint-route.test.mjs",
+  "tests/draft-audit-checkpoint-store.test.mjs",
   "tests/draft-audit.test.mjs",
   "tests/draft-day-bridge.test.mjs",
+  "tests/draft-day-doctor.test.mjs",
+  "tests/draft-day-readiness.test.mjs",
   "tests/draft-day-runtime.test.mjs",
+  "tests/draft-day-status.test.mjs",
+  "tests/draft-day-warm.test.mjs",
   "tests/espn-clock-context.test.mjs",
   "tests/espn-context-state.test.mjs",
+  "tests/extension.test.mjs",
+  "tests/live-code-freeze.test.mjs",
   "tests/live-control.test.mjs",
+  "tests/live-control-production-path.test.mjs",
+  "tests/live-control-recovery-page.test.mjs",
+  "tests/live-control-recovery.test.mjs",
   "tests/live-control-sre-tools.test.mjs",
+  "tests/live-draft-orchestration.test.mjs",
   "tests/live-room-watch.test.mjs",
+  "tests/poll-coordinator.test.mjs",
+  "tests/producer-sequencing.test.mjs",
+  "tests/production-supervisor.test.mjs",
+  "tests/production-supervision.test.mjs",
+  "tests/rapid-auction-adversarial.test.mjs",
   "tests/recovery-context.test.mjs",
+  "tests/release-integrity.test.mjs",
+  "tests/roster-completion-feasibility.test.mjs",
+  "tests/server-dispatch-lease.test.mjs",
+  "tests/source-capture-auth.test.mjs",
+  "tests/workspace-lifecycle.test.mjs",
 ];
 
 function terminate(child, signal = "SIGTERM") {
@@ -89,11 +120,16 @@ async function main() {
       "--p99-ms", "50",
       "--require-stable-sequence",
     ], 45_000);
+    await runBoundedNode(["--expose-gc", "scripts/live-control-contention.mjs"], 40_000);
+    await runBoundedNode(["scripts/live-control-production-path.mjs"], 30_000);
     console.log(JSON.stringify({
       ok: true,
       code: "LIVE_CONTROL_RELEASE_GATE_PASSED",
       testFiles,
       boundedLoadRequests: 1_000,
+      contentionWarmSeconds: 5,
+      productionContentionSeconds: 25,
+      productionPathBidChurnMs: 75,
     }, null, 2));
   } catch (error) {
     console.error(JSON.stringify({ ok: false, code: "LIVE_CONTROL_RELEASE_GATE_FAILED", message: error instanceof Error ? error.message : String(error) }));

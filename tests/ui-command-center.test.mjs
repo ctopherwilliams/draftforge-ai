@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [page, css, presentation] = await Promise.all([
+const [page, css, presentation, auditPublisher, visualCertification] = await Promise.all([
   readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/draft-command.css", import.meta.url), "utf8"),
   readFile(new URL("../app/lib/draft-presentation.ts", import.meta.url), "utf8"),
+  readFile(new URL("../app/lib/draft-audit-publisher.ts", import.meta.url), "utf8"),
+  readFile(new URL("../scripts/ui-visual-certification.mjs", import.meta.url), "utf8"),
 ]);
 
 test("live decision precedes secondary player-board detail", () => {
@@ -34,11 +36,27 @@ test("live decision precedes secondary player-board detail", () => {
   assert.match(page, /function displayAuctionValue/);
   assert.match(page, /displayAuctionValue\(player\.id, league\.id, player\.fairValue\)/);
   assert.doesNotMatch(page, /displayAuctionValue\(player\.id, league\.id, player\.auction\)/);
-  assert.match(page, /draftAuditPendingRef/);
-  assert.match(page, /DRAFT_AUDIT_RECORDED/);
+  assert.match(page, /draftAuditPublisherRef/);
+  assert.match(page, /const DASHBOARD_LOADED_AT = new Date\(\)\.toISOString\(\)/);
+  assert.match(page, /dashboardLoadedAt: DASHBOARD_LOADED_AT/);
+  assert.match(auditPublisher, /DRAFT_AUDIT_RECORDED/);
+  assert.match(page, /isAuthorized\(publisherBinding/);
+  assert.match(page, /exact decision audit acknowledgment/);
+  assert.ok(
+    page.indexOf("waitUntilAuthorized(") < page.indexOf('sendToExtension("SUBMIT_ACTION"'),
+    "every ESPN action must wait for its exact recorded decision",
+  );
+  assert.match(page, /POST_AUDIT_CONTEXT_CHANGED/);
+  assert.match(page, /\[actionRetryNonce, actionInFlight, actionWindowOpen,/,
+    "the snake/nomination effect must wake when an old action becomes terminal");
+  assert.match(page, /\[actionRetryNonce, actionInFlight, autoDraft, settingsConfirmed, extension, league\.draftType/,
+    "the salary-cap bid effect must reconsider context that arrived before acknowledgement");
+  assert.match(auditPublisher, /Single-flight, latest-only audit publisher/);
+  assert.match(auditPublisher, /controller\.abort\("DRAFT_AUDIT_POST_TIMEOUT"\)/);
   assert.match(page, /ESPN roster confirmed/);
   assert.match(page, /rosterComplete: myPickCount >= league\.rosterSize/);
-  assert.match(page, /attempt < 3/);
+  assert.match(page, /enforceAvailabilityRosterFeasibility/);
+  assert.match(page, /evaluateRosterCompletionFeasibility/);
   assert.equal((page.match(/className="on-clock-card panel"/g) || []).length, 1, "connection status must render once");
 });
 
@@ -57,4 +75,11 @@ test("command-center styles preserve readable and responsive controls", () => {
   assert.match(css, /--blue:\s*#49b6ff/);
   assert.doesNotMatch(css, /--green|#4ee0a1|#6af2b6|#c5ff45|#9ed01b|#24a66e|#23b77b/i);
   assert.doesNotMatch(css, /font-size:\s*(?:[0-9]|1[0-3])px/);
+});
+
+test("visual certification serves its own built artifact without weakening production start", () => {
+  assert.match(visualCertification, /spawn\(process\.execPath/);
+  assert.match(visualCertification, /node_modules\/vinext\/dist\/cli\.js/);
+  assert.match(visualCertification, /"--hostname",\s*"127\.0\.0\.1"/);
+  assert.doesNotMatch(visualCertification, /spawn\("npm", \["run", "start"/);
 });

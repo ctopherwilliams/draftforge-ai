@@ -36,7 +36,7 @@ After updating an unpacked companion, reload both the local DraftForge tab and t
 
 ESPN authentication stays in Chrome. No ESPN cookies or credentials are present in this repository.
 
-The current companion release is v0.2.24. The packaged zip SHA-256 is `ff42c6a085f5973d35e34e9766ca1b90c563be6a337998c8d4a17069f1dbe3b1`; verify that digest after transfer before loading it.
+Do not copy a version or package digest from an older authenticated room. Read the candidate version and expected package SHA-256 from `config/draft-day-release.json` after the final package gate, then verify the transferred zip against that exact record before loading it. A working-tree package or an older v0.2.24/v0.2.26 digest is historical evidence, not a release artifact.
 
 ## 4. Move hosting to the new Codex account
 
@@ -53,16 +53,20 @@ The current extension supports localhost and the exact production origin `https:
 
 ## 5. Acceptance status
 
-The code, production build, public data adapters, and local tests pass. The issue #1 verification gate includes:
+Earlier immutable releases passed their recorded code, build, adapter, and local-test gates. The post-live working candidate has not completed its final full release gate or authenticated current-source certification. The issue #1 verification contract includes:
 
 - isolated authenticated imports for both ESPN leagues;
-- one complete authenticated snake mock with exact roster confirmation, explicitly armed auto mode, K/DST completion, muted sound, and no ESPN auto-pick fallback;
+- one complete authenticated snake mock with exact roster confirmation, explicitly armed auto mode, K/DST completion, recorded sound telemetry, and no ESPN auto-pick fallback;
 - one complete authenticated salary-cap mock covering nominations, strategic bids/walkaways, max-bid and one-dollar reserve enforcement; and
 - 20 complete deterministic full-draft simulations per format on the frozen candidate, plus fail-closed regression coverage for wrong league/tab, nominee, clock, player, pick, offer, budget, and changed controls.
 
-The current v0.2.24 gate passes 201/201 tests plus the ten-scenario visual certification with zero drift. Its exact live-room handoff, deliberate local-server interruption/recovery, 16/16 snake parity, and automatic shutdown were authenticated in practice room `1221310079`. The final lifecycle rehearsal also completed snake room `1586041611` at exact 16/16 parity and salary-cap room `1551126922` at exact 14/14 player-and-price parity; both returned `DRAFT_AUDIT_READY`, shut Auto-Draft off, and automatically closed the exact practice workspace. v0.2.24 preserves the live action and engine path while adding fail-closed one-dashboard election, exact owned-tab cleanup, healthy-room reuse, managed-cleanup readiness, and automatic practice-workspace closure only after a final-ready parity audit.
+The historical v0.2.24 gate passed 201/201 tests plus the ten-scenario visual certification with zero drift. Its exact live-room handoff, deliberate local-server interruption/recovery, 16/16 snake parity, and automatic shutdown were authenticated in practice room `1221310079`. The final lifecycle rehearsal also completed snake room `1586041611` at exact 16/16 parity and salary-cap room `1551126922` at exact 14/14 player-and-price parity; both returned `DRAFT_AUDIT_READY`, shut Auto-Draft off, and automatically closed the exact practice workspace. This record remains historical regression evidence and does not certify the current post-live working tree or current sources.
 
 The robustness gate also supports immutable live five-source capture/replay and sequential independent-seed matrices. Generated snapshot JSON and Monte Carlo outputs are intentionally ignored by Git; reproduce them from a fresh authenticated ESPN import rather than copying browser credentials or profiles.
+
+The 2026-08-28 post-live candidate adds four migration-critical boundaries: chat status is a bounded GET-only observer; WARM and the live dashboard must publish the same exact source profile, canonical generation timestamp, and `sha256:<64 hex>` identity; a dashboard loaded before a production-server restart cannot publish into that newer server instance; and ESPN sound is operator-preference telemetry rather than an action or audit gate. ESPN Autopick remains a hard gate. Ambiguous opponent identity still fails closed, and salary-cap settlements prefer exact ESPN player IDs so same-name players cannot collapse into one sale.
+
+Fresh browser-free evidence completed 10,000 snake and 10,000 salary-cap trials with zero recorded invariants. Independent 2,000-trial replays for both formats matched exactly. This is synthetic regression evidence only. On a migrated machine, authenticated arming remains **NO-GO** until `TRADYR_API_KEY` is available server-side and a fresh authenticated schema-v3 source snapshot passes exact profile, timestamp, authenticated ESPN provenance, coverage, and digest validation. The stale schema-v1 capture must never be promoted into the current gate.
 
 The release also includes a fail-closed readiness gate for the two saved authenticated league profiles:
 
@@ -89,8 +93,9 @@ The ledger is sanitized and in-memory only, expires after 24 hours, and is not a
 npm test
 npm run draft-day:ready -- --format snake --phase pre-room
 npm run draft-day:ready -- --format salary-cap --phase pre-room
-npm run snapshot:capture -- --validate snapshots/intelligence/source-v1-....json
-npm run simulate:matrix -- --drafts 1000 --snapshot snapshots/intelligence/source-v1-....json
+npm run draft-day:status -- --league <leagueId> --team <teamId>
+npm run snapshot:capture -- --validate snapshots/intelligence/source-v3-....json
+npm run simulate:matrix -- --drafts 1000 --snapshot snapshots/intelligence/source-v3-....json
 npm run draft-day:audit -- --league <leagueId> --team <teamId> --require-complete
 node --check extension/background.js
 node --check extension/espn-content.js

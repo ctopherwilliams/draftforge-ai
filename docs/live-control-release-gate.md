@@ -19,6 +19,34 @@ The installed Chrome companion and DraftForge dashboard are the only production
 action path. Chat and terminal monitors may only issue GET requests to the
 compact loopback control view.
 
+`npm run draft-day:status` is the preferred one-shot chat query. It performs
+exactly one loopback GET with a 750 ms timeout and 64 KiB response cap. The
+server publishes the control envelope, league board, and observer-health result
+from one atomic snapshot, so the reader cannot combine different publisher
+moments. Stale or unsafe audit, context, pick-feed, source, availability, room,
+Autopick, attribution, and checklist state yields `liveReady: false` with no
+recommendation. The command has no POST, Chrome/CDP, extension, engine,
+source-fetch, or ESPN action capability.
+
+The doctor also binds source readiness to content, not merely to five source
+names or a recent timestamp. The WARM response and active dashboard audit must
+publish the same lowercase `sha256:<64 hex>` `sourceSnapshotId`. The identity is
+computed over the exact source profile, generated time, fixed methodology and
+weights, provider freshness metadata, and normalized player rows. WARM and
+audit source-generation timestamps must both be canonical UTC values no more
+than ten minutes old, and must match exactly (with only five seconds of future
+clock skew tolerated).
+Absent, malformed, stale, replayed, or unequal identity evidence locks the
+doctor. This authorization digest does not change source weights and does not
+create a sixth ranking source.
+
+The audit also carries `binding.dashboardLoadedAt`. Each supervised production
+server child receives a canonical monotonic
+`DRAFTFORGE_SERVER_INSTANCE_STARTED_AT`; an audit from a dashboard loaded before
+that child is rejected. Recovery therefore requires reloading the dashboard and
+republishing from the new server instance, not accepting an old browser writer
+because its session still looks recent.
+
 `scripts/draft-day-browser-runtime.mjs` is an isolated-lab observer. Every
 builder requires the explicit `LAB_ONLY_COMPANION_DISABLED` mode and a positive
 assertion that the companion is disabled. The observer exposes context reads
@@ -84,9 +112,16 @@ npm run draft-day:monitor -- \
   --interval-ms 1000
 ```
 
-The monitor is bounded, loopback-only, GET-only, incremental by sequence, and
-rejects responses over 16 KiB. It makes no Chrome, engine, source, or action
-calls. It exits nonzero for stale or malformed control state.
+The production monitor is singleton-scoped to the exact loopback publisher,
+league, and team. Its default cadence is one second and the production CLI
+rejects intervals below 500 ms; faster cadence is reserved for explicit fixture
+test mode. It is GET-only and incremental by sequence, accepts the complete
+bounded 256-event rollover only within the 128 KiB response ceiling, and makes
+no Chrome, engine, source, or action calls. Output is a sanitized bounded record
+only when state changes, plus a compact health heartbeat every 30 seconds while
+unchanged. A dead process lock is recovered, while signals and normal exit clean
+the current owner token. The monitor exits nonzero for duplicate ownership,
+stale or malformed control state, identity drift, or an unsafe response.
 
 Run the parameterized soak only after the short release gate passes:
 
@@ -148,6 +183,12 @@ and the faster salary-cap variants:
 - Exact team, season, tab, league, player, pick, nominee, and bid identity.
 - WALK and leading-bid states never produce a bid.
 - Changed offers invalidate a planned bid.
+- Same-name salary-cap nominees with different nonzero ESPN IDs settle as
+  different players. Name fallback is legal only when at least one exact ID is
+  unavailable.
+- Non-unique normalized opponent names or abbreviations never resolve to an
+  actionable auction owner. Ambiguous auction identity is omitted/fail-closed;
+  snake may retain only a deterministic generic opponent placeholder.
 - Concurrent identical bids are single-flight and idempotent.
 - A clicked bid or nomination requires bounded ESPN acknowledgment and is never
   retried blindly when acknowledgment is uncertain.
@@ -163,7 +204,10 @@ and the faster salary-cap variants:
 ## Full release sequence
 
 1. Stop DraftForge, status monitors, and owned Chrome practice windows.
-2. Freeze the candidate commit; do not edit code while any certification draft
+2. Freeze the candidate commit. The exact successful `draft-day:doctor --phase
+   live` gate must automatically bind the ignored local freeze record to the
+   clean upstream-matched revision, saved source league, team, and exact room.
+   There is no manual arm path. Do not edit code while any certification draft
    is open.
 3. Run `git diff --check`, clean install, audit, lint, typecheck, full tests,
    visual certification, extension packaging, and package digest verification.
@@ -179,6 +223,12 @@ and the faster salary-cap variants:
    or contaminated run counted as a pass.
 9. Tag the immutable commit and verify that the served build and installed
    extension report the tagged artifact digests.
+
+The current-source portion is an explicit prerequisite, not an optional data
+refresh. It requires a server-only `TRADYR_API_KEY` and a fresh authenticated
+schema-v3 snapshot whose profile, canonical timestamp, authenticated ESPN provenance, provider coverage, and
+content digest match the live audit. The stale schema-v1 salary capture and any
+synthetic matrix with `sourceSnapshotDigest: null` must fail this step.
 
 ## Draft-day no-code-change model
 
@@ -200,5 +250,19 @@ and the faster salary-cap variants:
   before explicit rearm. Use an attributed manual ESPN fallback if the safe
   window cannot be restored.
 - **Completion:** wait for the final action to settle, verify roster parity and
-  complete attribution, stop the server and monitor, and confirm no owned tabs,
-  processes, sockets, or listeners remain.
+  complete attribution, run the exact `draft-day:audit --require-complete` gate
+  so its final-ready audit clears the matching freeze, stop the server and
+  monitor, and confirm no owned tabs, processes, sockets, or listeners remain.
+
+While the freeze is active, npm prehooks block dev, build, every release test or
+simulation, source warm/capture, and companion packaging. `npm start` is the
+only artifact lifecycle command intentionally left available because it starts
+the already-certified output without rewriting it. Emergency clear requires
+the exact source-league/team/room/revision-bound token printed by
+`draft-day:freeze -- status`, a substantive incident reason, and produces a
+local hashed-reason receipt. It is an incident action, not a shortcut around a
+failed release gate.
+
+Sound state in this sequence is observable operator-preference telemetry. Muted
+sound is useful during testing, but sound on/off is not an action, readiness, or
+final-audit gate. ESPN Autopick remains zero-tolerance.

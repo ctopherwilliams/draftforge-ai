@@ -14,10 +14,23 @@ This is the evidence-backed post-draft backlog from the real authenticated SOMFA
 - Manual re-arming restored the proven action path. DraftForge then selected A.J. Brown at 3.07 and Malik Nabers at 4.04; both were confirmed in 154 ms with 57 seconds showing.
 - The loopback audit exposes confirmed actions and roster parity, but it does not expose the pending recommendation early enough for chat to announce the intended player before an immediate automatic submission.
 - A completed preflight automation was deleted after its one-time job finished, but the product surfaced this as though the SOMFAB live monitor had been deleted. The live companion and room binding were unaffected; the wording created avoidable operator uncertainty.
-- ESPN sound is a hard Auto-Draft prerequisite and the companion enforces mute. A live request to unmute could not coexist with armed Auto-Draft, but the command center did not explain that tradeoff before the request.
+- In the served live release, ESPN sound was a hard Auto-Draft prerequisite, so a request to unmute could not coexist with armed mode. The post-live candidate supersedes that policy: sound is operator-preference telemetry and cannot authorize or block an action, readiness, or final audit. ESPN Autopick remains a hard gate.
 - The first DraftForge pick submitted at 57 seconds because the running certified build had no delayed snake-submit policy. A later dirty-worktree timing edit was not part of the served build and must not be counted as live evidence.
 - One fallback sequence displayed Chris Godwin Jr. while ESPN added the Rams D/ST, and the final sequence again displayed/submitted Chris Godwin Jr. while the authoritative roster added Bryce Young. The roster became legal and complete, but final action telemetry never proved either displayed identity. These additions are `UNKNOWN_EXTERNAL` unless a typed action lifecycle can attribute them.
 - The final audit returned ready from present-state parity even though the room contained the earlier Autopick pick and unresolved final-action identity. That result is invalid certification evidence; historical contamination and every pending/unattributed roster delta must remain fatal.
+
+## Post-live resolution status — 2026-08-28
+
+The current working candidate addresses the observed failure classes without changing ranking weights or broadly retuning strategy:
+
+- The companion/dashboard remain the only writer. `draft-day:status` reads the compact control envelope and league board using exactly one bounded (750 ms, 64 KiB) loopback GET for an atomic server snapshot and has no POST, Chrome/CDP, extension, source-fetch, engine, or action capability. Its observer-health gate withholds recommendations on stale or unsafe state, so chat queries cannot contend with or outlive the live writer.
+- Source authorization now binds the exact scoring/team-count/season/QB profile, canonical UTC generation timestamp, and lowercase `sha256:<64 hex>` snapshot ID across WARM and the dashboard audit. A stale dashboard loaded before a restarted production server is rejected until it reloads and republishes from that server instance.
+- Opponent identity must resolve uniquely by normalized team name or abbreviation. Ambiguous snake opponents receive a deterministic generic placeholder; ambiguous auction opponents are omitted, so an uncertain owner can never authorize a bid.
+- Auction offer transitions and completed sales compare exact nonzero ESPN player IDs before display names. Same-name players with different IDs settle independently; name fallback is allowed only if one side lacks an exact ID.
+- Sound is now telemetry only. The action path still fails closed on unknown/active ESPN Autopick, unsafe clocks, changed identity/action surfaces, source mismatch, post-click uncertainty, and incomplete attribution.
+- Fresh synthetic regression completed 10,000 snake and 10,000 salary-cap trials with zero recorded invariant failures. Independent 2,000-trial replays for both formats matched their run and ordered-outcome digests exactly. The final full repository/release gate remains pending.
+
+This is not an authenticated certification claim. Current source arming is **NO-GO** because `TRADYR_API_KEY` is absent and no fresh authenticated schema-v3 source snapshot exists. Official availability news remains a separate hold/veto overlay; the ranking consensus remains exactly ESPN/FFC/MFL/Tradyr/GNG at fixed weights.
 
 ## Prioritized backlog
 
@@ -67,9 +80,10 @@ This is the evidence-backed post-draft backlog from the real authenticated SOMFA
 
 ### P2 — Operator experience and release discipline
 
-8. **Show sound-policy conflicts before acting.**
-   - Explain that armed Auto-Draft requires muted ESPN sound and offer a clear choice between sound-on Guided mode and muted armed mode.
-   - Do not weaken the current sound guard without separate evidence and an explicit safety decision.
+8. **Record sound preference without coupling it to authority — resolved in the post-live candidate.**
+   - Report whether ESPN is muted or unmuted, and prefer muted audio during automated testing.
+   - Do not disarm, refuse, retry, or alter a selection, nomination, bid, readiness result, or final audit solely because sound is on.
+   - Keep ESPN Autopick as the independent hard gate.
 
 9. **Enforce a live-draft code freeze.**
    - The draft-day command should reject build, extension reload, dashboard hot-reload, or tracked-source modification while a real room is active unless an explicit emergency-release procedure is invoked.

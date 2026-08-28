@@ -39,4 +39,5 @@ yarn-error.log*
 /outputs/
 /work/
 /snapshots/intelligence/*.json
+/.draftforge/
 *.tsbuildinfo

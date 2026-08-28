@@ -94,11 +94,7 @@ test("chat bridge monitors safely and exposes deterministic five-source coverage
   assert.equal(decision.action, null);
 });
 
-test("chat bridge fails closed when sound, team, sources, or ESPN identity are unsafe", () => {
-  const muted = result({ room: { soundMuted: false } });
-  assert.equal(muted.ok, false);
-  assert.equal(muted.code, "ESPN_SOUND_NOT_MUTED");
-
+test("chat bridge keeps audio as telemetry while failing closed on team, sources, or ESPN identity", () => {
   const wrongTeam = result({ room: { teamId: 8 } });
   assert.equal(wrongTeam.ok, false);
   assert.ok(wrongTeam.blockers.includes("WRONG_ESPN_TEAM"));
@@ -114,6 +110,42 @@ test("chat bridge fails closed when sound, team, sources, or ESPN identity are u
   });
   assert.equal(stale.code, "FIVE_SOURCE_SNAPSHOT_NOT_READY");
   assert.equal(stale.action, null);
+
+  const unknownAutopick = result({ room: { onClock: true, autopickActive: undefined } });
+  assert.equal(unknownAutopick.ok, false);
+  assert.equal(unknownAutopick.code, "ESPN_AUTOPICK_STATE_UNKNOWN");
+  assert.deepEqual(unknownAutopick.blockers, ["ESPN_AUTOPICK_STATE_UNKNOWN"]);
+  assert.equal(unknownAutopick.action, null);
+});
+
+test("unmuted ESPN audio never blocks SELECT, BID, or NOMINATE", () => {
+  const select = result({ room: { soundMuted: false, onClock: true, currentPick: 9 } });
+  assert.equal(select.code, "SELECT_READY");
+  assert.equal(select.action?.operation, "SELECT");
+
+  const monitoring = result({ draftType: "AUCTION", room: { soundMuted: false } });
+  const nominee = monitoring.recommendations.find((player) => player.maxBid >= 2);
+  assert.ok(nominee, "fixture needs a legal salary-cap target");
+  const bid = result({
+    draftType: "AUCTION",
+    room: {
+      soundMuted: false,
+      nominatedPlayer: nominee.name,
+      nominatedPlayerId: nominee.id,
+      currentBid: 1,
+      maxLegalBid: 19,
+      leadingBid: false,
+    },
+  });
+  assert.equal(bid.code, "BID_READY");
+  assert.equal(bid.action?.operation, "BID");
+
+  const nominate = result({
+    draftType: "AUCTION",
+    room: { soundMuted: false, onClock: true, maxLegalBid: 19 },
+  });
+  assert.equal(nominate.code, "NOMINATION_READY");
+  assert.equal(nominate.action?.operation, "NOMINATE");
 });
 
 test("snake command is legal, ordered, clock-bound, and exact-pick-bound", () => {
@@ -133,6 +165,11 @@ test("snake command is legal, ordered, clock-bound, and exact-pick-bound", () =>
   const late = result({ room: { onClock: true, currentPick: 9, remainingSeconds: 4 } });
   assert.equal(late.code, "CLOCK_TOO_SHORT");
   assert.equal(late.action, null);
+
+  const nineSeconds = result({ room: { onClock: true, currentPick: 9, remainingSeconds: 9 } });
+  const tenSeconds = result({ room: { onClock: true, currentPick: 9, remainingSeconds: 10 } });
+  assert.equal(nineSeconds.code, "CLOCK_TOO_SHORT", "chat cannot report SELECT_READY below the actuator's ten-second floor");
+  assert.equal(tenSeconds.code, "SELECT_READY");
 });
 
 test("salary-cap bidding increments by one, respects both ceilings, and never raises our lead", () => {
@@ -155,6 +192,31 @@ test("salary-cap bidding increments by one, respects both ceilings, and never ra
   assert.equal(ready.action.maxApprovedBid, Math.min(nominee.maxBid, 19));
   assert.equal(ready.action.expectedTeamId, 7);
   assert.equal(ready.action.expectedSeason, 2026);
+
+  const fourSeconds = result({
+    draftType: "AUCTION",
+    room: {
+      nominatedPlayer: nominee.name,
+      nominatedPlayerId: nominee.id,
+      currentBid: 1,
+      maxLegalBid: 19,
+      leadingBid: false,
+      remainingSeconds: 4,
+    },
+  });
+  const fiveSeconds = result({
+    draftType: "AUCTION",
+    room: {
+      nominatedPlayer: nominee.name,
+      nominatedPlayerId: nominee.id,
+      currentBid: 1,
+      maxLegalBid: 19,
+      leadingBid: false,
+      remainingSeconds: 5,
+    },
+  });
+  assert.equal(fourSeconds.code, "CLOCK_TOO_SHORT");
+  assert.equal(fiveSeconds.code, "BID_READY");
 
   const walk = result({
     draftType: "AUCTION",
@@ -182,6 +244,21 @@ test("salary-cap bidding increments by one, respects both ceilings, and never ra
   assert.equal(leading.code, "HOLD_LEADING_BID");
   assert.equal(leading.action, null);
 
+  const unknownLeader = result({
+    draftType: "AUCTION",
+    room: {
+      nominatedPlayer: nominee.name,
+      nominatedPlayerId: nominee.id,
+      currentBid: 1,
+      maxLegalBid: 19,
+      leadingBid: null,
+    },
+  });
+  assert.equal(unknownLeader.ok, false);
+  assert.equal(unknownLeader.code, "LEADING_BID_UNKNOWN");
+  assert.deepEqual(unknownLeader.blockers, ["LEADING_BID_UNKNOWN"]);
+  assert.equal(unknownLeader.action, null);
+
   const mismatchedIdentity = result({
     draftType: "AUCTION",
     room: {
@@ -194,6 +271,56 @@ test("salary-cap bidding increments by one, respects both ceilings, and never ra
   });
   assert.equal(mismatchedIdentity.code, "PASS_UNRANKED_NOMINEE");
   assert.equal(mismatchedIdentity.action, null);
+});
+
+test("signed ESPN D/ST nominee ids reach the exact salary-cap ceiling decision", () => {
+  const defense = {
+    id: -16023,
+    name: "Pittsburgh Steelers D/ST",
+    team: "PIT",
+    pos: "DST",
+    rank: 5,
+    adp: 5,
+    auction: 1,
+    projected: 180,
+  };
+  const espnPlayers = [...players, defense];
+  const defenseSources = sources().map((source) => ({
+    ...source,
+    players: [...source.players, {
+      name: defense.name,
+      team: defense.team,
+      pos: defense.pos,
+      rank: defense.rank,
+      adp: defense.adp,
+      auction: defense.auction,
+    }],
+  }));
+  const defenseLeague = {
+    ...league("AUCTION"),
+    lineupSlotCounts: { "0": 1, "16": 1 },
+  };
+  const decision = buildDraftDayBridgeResult({
+    league: defenseLeague,
+    espnPlayers,
+    picks: [],
+    sources: defenseSources,
+    room: room({
+      nominatedPlayer: "Steelers Defense",
+      nominatedPlayerId: -16023,
+      currentBid: 1,
+      maxLegalBid: 19,
+      leadingBid: false,
+      availablePlayerIds: espnPlayers.map((player) => player.id),
+      availablePlayerNames: espnPlayers.map((player) => player.name),
+    }),
+    strategy: "BALANCED",
+  });
+  const exactDefense = decision.recommendations.find((player) => player.id === -16023);
+  assert.equal(exactDefense?.maxBid, 1);
+  assert.equal(decision.code, "WALK_AWAY");
+  assert.match(decision.actionReason, /Walk at \$1/);
+  assert.equal(decision.action, null);
 });
 
 test("salary-cap nomination uses the production strategy and ESPN reserve maximum", () => {

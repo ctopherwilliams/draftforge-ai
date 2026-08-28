@@ -1,5 +1,7 @@
 {
-  "schemaVersion": 1,
-  "extensionVersion": "0.2.26",
-  "extensionPackageSha256": "96acc8438a0f5ca2e66bd780afe7432581f95198ff0c5a8cd943b6318b478791"
+  "schemaVersion": 2,
+  "extensionVersion": "0.2.27",
+  "extensionPackageSha256": "526246b8a284422dfdc55d36dc57f6193a4b21a88018db2e3b511bcc4d12cc1d",
+  "extensionSourceSha256": "24ea97a33c669f6e97d355a45ae3a85cd9e20027e3c3c4616702e066b924c1d9",
+  "extensionSourceFileCount": 18
 }

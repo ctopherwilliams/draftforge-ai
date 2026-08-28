@@ -22,11 +22,14 @@ The dashboard and companion are the only production writer. Chat and terminal to
 - Custom bid and nomination controls require one unique visible form, an exact settled numeric value, a paired submit control, a final pre-click revalidation, and one visible identity-and-price-scoped confirmation dialog.
 - HOLD, WALK, and DRAIN outcomes are no-click terminal decisions. They never fabricate click lifecycle events or price-enforce a drain nomination.
 - Auction sales, tracked offers, own nominations, and clock caches are scoped to the exact draft instance and bounded. ESPN SPA navigation cannot import prior-room state.
+- Auction offer transitions and sales compare exact nonzero ESPN player IDs before display names. Two different players with the same normalized display name settle independently; name fallback is used only when at least one side lacks an exact ID.
+- Opponent identity is never inferred from a non-unique normalized name or abbreviation. Snake can retain a deterministic generic opponent placeholder; salary-cap ownership omits ambiguous teams and therefore cannot authorize a bid.
+- ESPN sound is operator-preference telemetry. It remains visible to chat and the audit, but it does not authorize or block SELECT, NOMINATE, BID, readiness, or final certification. ESPN Autopick remains a hard gate.
 - Final audit requires typed live-control evidence, fresh availability evidence, exact roster/price parity, complete legal roster construction, and full action attribution.
 
 ## Read-only chat/SRE path
 
-`npm run draft-day:monitor` issues GET requests only. It receives at most 256 incremental events, rejects a missing sequence, a session change, stale context/pick/source timestamps, oversized responses, identity mismatch, and transport timeout. It cannot call the extension or mutate ESPN.
+`npm run draft-day:monitor` issues GET requests only. It receives at most 256 incremental events, rejects a missing sequence, a session change, stale context/pick/source timestamps, oversized responses, identity mismatch, and transport timeout. `npm run draft-day:status` is the one-shot chat path: it performs exactly one bounded (750 ms, 64 KiB) loopback GET for an atomic control-and-board snapshot and returns blocked with no recommendation whenever the server's observer-health gate detects stale or unsafe state. Neither command can POST, call Chrome/CDP, invoke the extension or engine, refresh sources, or mutate ESPN.
 
 Release budgets:
 
@@ -51,9 +54,11 @@ Confirmed availability news is a separate hold/veto layer and never becomes a si
 
 Tradyr changed its access policy on 2026-08-15. Unkeyed bulk responses are capped at 50 rows, ignore pagination, and may contain decoy entries. DraftForge now requires a server-only `TRADYR_API_KEY`, sends it only as an Authorization header, and fails closed on limited access, ignored/mismatched offsets, duplicate pages, incomplete totals, or missing credentials. The key is never written to URLs, logs, snapshots, or browser storage. Snapshots also bind source truth to the authenticated one-QB or two-QB ESPN profile.
 
+Source readiness binds content, not only five provider names. WARM and the active audit must publish the same exact scoring/team-count/season/QB profile, canonical UTC generation timestamp, and lowercase `sha256:<64 hex>` snapshot ID. The server retains a bounded fresh snapshot set and uses the exact retained tuple without refetching providers during doctor verification. A stale/malformed timestamp, wrong profile, unknown digest, or schema-v1 capture fails. The production supervisor also gives each server child a monotonic instance-start timestamp; a dashboard loaded before that server instance is rejected until it reloads and republishes.
+
 ## Release evidence
 
-Completed for the local candidate:
+Historical pre-final-gate evidence retained from the earlier candidate:
 
 - production typecheck/build and full repository suite: 279/279;
 - deterministic engine regression: 20 complete snake plus 20 complete salary-cap drafts;
@@ -64,21 +69,54 @@ Completed for the local candidate:
 - ten-scenario visual certification: PASS across desktop, wide, ultrawide, and mobile;
 - lint and `git diff --check`: PASS; dependency audit: zero vulnerabilities;
 - independent P0/P1 review: GO after the stale/global auction-leader proof was removed;
-- five-seed synthetic matrix: 10,000/10,000 drafts across snake and salary cap, zero failures and zero hard violations. This matrix is deterministic engine-regression evidence and does not certify current source truth.
+- earlier five-seed synthetic matrix: 10,000 total drafts across its combined formats, zero failures and zero hard violations. This evidence predates the final exact-ID, source-binding, restart-fence, and sound-policy changes and must not substitute for the final full gate.
+
+Current post-fix synthetic evidence:
+
+- snake: 10,000/10,000 complete across seeds `20260828`, `18472631`, `73190422`, `41586703`, and `96724011`, with zero failures and zero hard violations;
+- salary cap: 10,000/10,000 complete across the same seed family, with zero failures and zero hard violations;
+- snake replay: the first 2,000-draft seed matched determinism digest `b5dc2cf5c84f35000a45256e10838d9d09e5bee7bb069ff464c2d966171ba695` and ordered outcome digest `e82d110285ff2133a749cf083ef8da2d409ce8abed252db463ff50f1ed05a63a` exactly;
+- salary-cap replay: 2,000/2,000 complete for seed `20260828`; determinism digest `6305a5b2cbe02c61a8751a99270559d31b341854634939009a4ebaefc0c6ef06` and ordered outcome digest `279251a06f49915e3e69f6859d5cf65b4fab520b0731d95cf486250dc9306ebd` match the baseline exactly;
+- all of these runs have `sourceSnapshotDigest: null` and are synthetic mechanics evidence, not current player-specific or authenticated ESPN certification.
+
+Final frozen-tree mechanics evidence:
+
+- full repository suite: 594/594 after typecheck and production build;
+- focused live-control suite: 417 tests plus chaos, load, contention, and production-path probes;
+- 1,000-request GET-only load: p95 6.21 ms, p99 12.10 ms, zero failures, and no sequence mutation;
+- 25-second writer/observer contention: observer p95 5.19 ms and p99 9.26 ms, writer p99 28.55 ms, zero errors, and bounded memory;
+- near-cap production path: 1,890,787-byte starting ledger, 12 rapid salary writes at 75 ms, 13/13 durable exact-digest acknowledgments, one writer, concurrent 1 Hz/4 Hz observers, and no lost decision;
+- two-minute soak: 480/480 polls, p95 7.37 ms, p99 28.58 ms, 59.42 MiB peak RSS, 0.956% RSS growth, and no safety incident;
+- ten-viewport visual certification, lint, `git diff --check`, and dependency audit: PASS, with zero dependency vulnerabilities;
+- one schema-v3 Monte Carlo run: 10,000 snake plus 10,000 salary-cap drafts, zero simulation errors, zero illegal/incomplete rosters, and zero duplicate-player, unavailable-player, specialist, position-cap, salary, reserve, max-bid, or mandatory-starter violations; determinism digest `7899ec6dea97ba0bcf677bdaba5f4b56e5fa8c2478f2889434125b3ded06dceb` and ordered-outcome digest `7b91eeebf380c55e872dfcb6c9ea67ef43010af7d704449d782c9e33b7efe9ed`;
+- two independent current-code 1,000-draft replays matched determinism digest `4ef2821114eaf6c5ad3699fe9d265b14e06ef56ef990c59d3b3c96d3231ff8c1` and ordered-outcome digest `e90aabc8d058cd39151f7f3a6de69013c74fd759f8ac713180d367979d711b92` exactly; and
+- exact duplicate replays of representative high-regret snake acquisition, salary underbid, and auction nomination cases were byte-identical.
+
+Independent release review found no P0/P1 defect in the unchanged mechanics release. Two retrospectively selected salary underbid tails remain a shadow-experiment candidate, not authority to raise live ceilings. They use synthetic hidden outcomes, have only two full paired continuations, and do not outweigh the negative acquired surplus observed across the general $25–49 tier. No production strategy change was made from this evidence.
 
 The exact depleted-TE adversarial failure at base seed `18472631`, trial `154`, was a harness inventory defect: the deepest 14-team variant exhausted all synthetic tight ends after two seeded news removals. The harness-only pool now covers every position cap plus a removal cushion. Exact replay is deterministic, and the full five-seed rerun passed without relaxing roster or nomination legality.
 
-Authenticated no-click Chrome evidence on 2026-08-28:
+Partial authenticated Chrome state observed on 2026-08-28:
 
 - exactly one DraftForge tab and one authenticated ESPN league tab;
 - exact league `44050`, team `7`, season 2026;
 - imported 12-team PPR salary-cap rules, $200 budget, 14 roster slots, QB plus OP;
-- short-lived availability artifact staged and the authenticated ESPN Player News feed reviewed;
 - DraftForge Auto-Draft remained off and every nomination/bid control remained disabled;
-- fresh FFC, MFL, and GNG feeds returned successfully; Tradyr returned `TRADYR_API_KEY_REQUIRED`;
-- both saved snake and salary-cap pre-room gates returned `SOURCE_WARMUP_FAILED` because five-source coverage was incomplete.
+- the current keyed five-source capture and an authenticated ESPN Player News review were not completed in this checkpoint and are not claimed;
+- the required server-only Tradyr key is absent, no fresh authenticated schema-v3 snapshot exists, and the saved schema-v1 salary artifact is stale and noncertifying.
 
-Therefore the local code candidate is GO, while authenticated current-source arming is intentionally **NO-GO** until a server-only Tradyr key is configured and a fresh complete 5/5 snapshot and no-click pre-room rehearsal pass. The companion package remains v0.2.26, SHA-256 `96acc8438a0f5ca2e66bd780afe7432581f95198ff0c5a8cd943b6318b478791`.
+### 2026-08-28 availability freshness review
+
+A read-only comparison against the official NFL news and transaction feeds found concrete evidence that the saved ESPN salary player pool is stale and must not authorize a draft:
+
+- Jayden Higgins and Calvin Austin III are still marked healthy in the saved pool although NFL.com reports season-ending torn ACLs;
+- Cedric Tillman remains attached to Cleveland although NFL.com reports that he is being released;
+- Tutu Atwell remains attached to Miami although the official transaction feed records the August 27 trade to the Rams;
+- Isiah Pacheco, Wan'Dale Robinson, and Cameron Dicker have new injury advisories that require current ESPN-news reconciliation, while Alec Pierce has been activated from PUP.
+
+The official references are `https://www.nfl.com/news/texans-wr-jayden-higgins-torn-acl-out-2026-season`, `https://www.nfl.com/news/nfl-news-roundup-latest-league-updates-from-wednesday-aug-26`, `https://www.nfl.com/news/nfl-news-roundup-latest-league-updates-from-thursday-aug-27`, and `https://www.nfl.com/transactions/`. This review is not a staged availability artifact: the required authenticated ESPN Player News scan could not be completed through the current Chrome controller, so the availability gate remains blocked. Confirmed availability news stays a separate veto/advisory layer and never becomes a sixth ranking source.
+
+The code and packaged companion are locally **GO for unchanged mechanics**. Authenticated current-source arming is intentionally **NO-GO** until a server-only Tradyr key is configured, a fresh authenticated schema-v3 5/5 snapshot with authenticated ESPN provenance and a separate availability artifact pass, and the committed/upstream-matched candidate passes its exact two-tab no-click and requested authenticated format certification. The final companion identity is v0.2.27 with packaged zip SHA-256 `526246b8a284422dfdc55d36dc57f6193a4b21a88018db2e3b511bcc4d12cc1d`.
 
 ## Rollback and no-go triggers
 

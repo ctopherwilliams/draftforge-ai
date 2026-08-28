@@ -69,7 +69,8 @@ export type DraftDayBridgeResult = {
   auctionPlan: ReturnType<typeof buildDraftDecision>["auctionPlan"];
 };
 
-const MIN_ACTION_SECONDS = 5;
+export const MIN_SNAKE_ACTION_SECONDS = 10;
+export const MIN_OTHER_ACTION_SECONDS = 5;
 const MAX_ACTION_CANDIDATES = 20;
 
 export function prepareDraftDayBridge(
@@ -98,8 +99,8 @@ function globalBlockers(input: DraftDayBridgeInput) {
   if (Number(room.teamId) !== Number(league.teamId)) blockers.push("WRONG_ESPN_TEAM");
   if (roomSeason !== Number(league.season)) blockers.push("WRONG_ESPN_SEASON");
   if (room.inDraftRoom !== true) blockers.push("NOT_IN_ESPN_DRAFT_ROOM");
-  if (room.soundMuted !== true) blockers.push("ESPN_SOUND_NOT_MUTED");
   if (room.autopickActive === true) blockers.push("ESPN_AUTOPICK_ACTIVE");
+  else if (room.autopickActive !== false) blockers.push("ESPN_AUTOPICK_STATE_UNKNOWN");
   if (duplicatePickIds(picks)) blockers.push("DUPLICATE_ESPN_PLAYER");
   return blockers;
 }
@@ -113,8 +114,9 @@ function candidate(player: Recommendation): DraftDayCandidate {
   };
 }
 
-function actionWindowReady(room: EspnContext) {
-  return Number.isFinite(room.remainingSeconds) && Number(room.remainingSeconds) >= MIN_ACTION_SECONDS;
+function actionWindowReady(room: EspnContext, draftType: LeagueSettings["draftType"]) {
+  const minimumSeconds = draftType === "SNAKE" ? MIN_SNAKE_ACTION_SECONDS : MIN_OTHER_ACTION_SECONDS;
+  return Number.isFinite(room.remainingSeconds) && Number(room.remainingSeconds) >= minimumSeconds;
 }
 
 export function buildDraftDayBridgeResult(input: DraftDayBridgeInput): DraftDayBridgeResult {
@@ -146,7 +148,7 @@ export function buildDraftDayBridgeResult(input: DraftDayBridgeInput): DraftDayB
   const league = input.league;
   if (league.draftType === "SNAKE") {
     if (!room.onClock) return { ok: true, code: "MONITORING", blockers: [], action: null, actionReason: "Waiting for ESPN to put this exact team on the clock.", ...base };
-    if (!actionWindowReady(room)) return { ok: false, code: "CLOCK_TOO_SHORT", blockers: ["CLOCK_TOO_SHORT"], action: null, actionReason: "The safe action window has closed.", ...base };
+    if (!actionWindowReady(room, league.draftType)) return { ok: false, code: "CLOCK_TOO_SHORT", blockers: ["CLOCK_TOO_SHORT"], action: null, actionReason: "The safe action window has closed.", ...base };
     if (room.actionSurfaceReady !== true) return { ok: false, code: "PLAYER_POOL_STALE", blockers: ["PLAYER_POOL_STALE"], action: null, actionReason: "ESPN's player surface is still changing.", ...base };
     const top = recommendations[0];
     if (!top) return { ok: false, code: "NO_LEGAL_PLAYER", blockers: ["NO_LEGAL_PLAYER"], action: null, actionReason: "No legal roster candidate remains.", ...base };
@@ -185,8 +187,11 @@ export function buildDraftDayBridgeResult(input: DraftDayBridgeInput): DraftDayB
       && Number(ownNomination.ownNominationPlayerId) === nominated.id) {
       return { ok: true, code: "PASS_DRAIN_NOMINEE", blockers: [], action: null, actionReason: "This is DraftForge's exact budget-drain nomination; never price-enforce or bid.", ...base };
     }
-    if (room.leadingBid) return { ok: true, code: "HOLD_LEADING_BID", blockers: [], action: null, actionReason: "Already leading; never raise our own offer.", ...base };
-    if (!actionWindowReady(room)) return { ok: false, code: "CLOCK_TOO_SHORT", blockers: ["CLOCK_TOO_SHORT"], action: null, actionReason: "The safe action window has closed.", ...base };
+    if (room.leadingBid === true) return { ok: true, code: "HOLD_LEADING_BID", blockers: [], action: null, actionReason: "Already leading; never raise our own offer.", ...base };
+    if (room.leadingBid !== false) {
+      return { ok: false, code: "LEADING_BID_UNKNOWN", blockers: ["LEADING_BID_UNKNOWN"], action: null, actionReason: "ESPN does not expose authoritative proof that another team leads, so no bid was prepared.", ...base };
+    }
+    if (!actionWindowReady(room, league.draftType)) return { ok: false, code: "CLOCK_TOO_SHORT", blockers: ["CLOCK_TOO_SHORT"], action: null, actionReason: "The safe action window has closed.", ...base };
     const nextOffer = Number(room.currentBid) + 1;
     const legalEspnMaximum = Number(room.maxLegalBid);
     if (!Number.isFinite(legalEspnMaximum) || legalEspnMaximum < 1) {
@@ -217,7 +222,7 @@ export function buildDraftDayBridgeResult(input: DraftDayBridgeInput): DraftDayB
   }
 
   if (room.onClock) {
-    if (!actionWindowReady(room)) return { ok: false, code: "CLOCK_TOO_SHORT", blockers: ["CLOCK_TOO_SHORT"], action: null, actionReason: "The safe nomination window has closed.", ...base };
+    if (!actionWindowReady(room, league.draftType)) return { ok: false, code: "CLOCK_TOO_SHORT", blockers: ["CLOCK_TOO_SHORT"], action: null, actionReason: "The safe nomination window has closed.", ...base };
     if (room.actionSurfaceReady !== true) return { ok: false, code: "PLAYER_POOL_STALE", blockers: ["PLAYER_POOL_STALE"], action: null, actionReason: "ESPN's nomination surface is still changing.", ...base };
     const nomination = chooseAuctionNomination(recommendations, league, decision.auctionPlan);
     if (!nomination) return { ok: false, code: "NO_LEGAL_NOMINATION", blockers: ["NO_LEGAL_NOMINATION"], action: null, actionReason: "No legal salary-cap nomination remains.", ...base };

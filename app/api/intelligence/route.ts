@@ -1,14 +1,31 @@
-import { fetchIntelligenceSnapshot } from "../../lib/intelligence-sources";
+import { fetchIntelligenceSnapshot, normalizeIntelligenceRequest } from "../../lib/intelligence-sources.ts";
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
-  const snapshot = await fetchIntelligenceSnapshot({
-    scoring: url.searchParams.get("scoring") || undefined,
-    teams: Number(url.searchParams.get("teams") || 12),
-    season: Number(url.searchParams.get("season") || 2026),
-    qbs: Number(url.searchParams.get("qbs") || 1) >= 2 ? 2 : 1,
-  });
-  return Response.json(snapshot, {
-    headers: { "Cache-Control": "public, max-age=900, s-maxage=21600, stale-while-revalidate=86400" },
-  });
+  if (["scoring", "teams", "season", "qbs"].some((key) => url.searchParams.getAll(key).length > 1)) {
+    return Response.json({ ok: false, code: "INTELLIGENCE_PROFILE_INVALID" }, {
+      status: 400,
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
+  try {
+    const profile = normalizeIntelligenceRequest({
+      scoring: url.searchParams.get("scoring") ?? undefined,
+      teams: url.searchParams.get("teams") ?? undefined,
+      season: url.searchParams.get("season") ?? undefined,
+      qbs: url.searchParams.get("qbs") ?? undefined,
+    });
+    const snapshot = await fetchIntelligenceSnapshot(profile);
+    return Response.json(snapshot, {
+      headers: { "Cache-Control": "no-store" },
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("INTELLIGENCE_PROFILE_")) {
+      return Response.json({ ok: false, code: error.message }, {
+        status: 400,
+        headers: { "Cache-Control": "no-store" },
+      });
+    }
+    throw error;
+  }
 }
