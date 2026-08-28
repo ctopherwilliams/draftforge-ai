@@ -1125,7 +1125,7 @@ export default function Home() {
       setActionState("Pre-draft rules, sources, roster, and strategy confirmed. Auto-Draft will arm only after the exact live room passes every safety check.");
       return;
     }
-    setActionState("Exact live-room rules, sound, Autopick, player pool, roster, clock, and no-click dry run confirmed.");
+    setActionState("Exact live-room rules, muted audio, player pool, roster, clock, and no-click dry run confirmed.");
   }
 
   const submit = useCallback((player: Recommendation | undefined, automatic = false, operation?: "SELECT" | "NOMINATE" | "BID", amount?: number, nominationIntent: "TARGET" | "DRAIN" = "TARGET") => {
