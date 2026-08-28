@@ -165,13 +165,39 @@ function walkFiles(root, current = root) {
 
 export function clientRuntimeAssetPaths(clientRoot) {
   return walkFiles(resolve(clientRoot)).filter((path) => {
-    if (path === RELEASE_MANIFEST_FILENAME || path === "_headers") return false;
+    if (path === RELEASE_MANIFEST_FILENAME
+      || path === "_headers"
+      || path === "vinext-client-entry-manifest.json") return false;
     return !path.split("/").some((part) => part.startsWith("."));
   });
 }
 
+export function clientInternalRuntimeAssetPaths(clientRoot) {
+  const exactClientRoot = resolve(clientRoot);
+  const served = new Set(clientRuntimeAssetPaths(exactClientRoot));
+  return walkFiles(exactClientRoot).filter((path) => (
+    path !== RELEASE_MANIFEST_FILENAME && !served.has(path)
+  ));
+}
+
 export function serverRuntimeAssetPaths(serverRoot) {
   return walkFiles(resolve(serverRoot));
+}
+
+export function computeServerRuntimeIntegrity(clientRoot, serverRoot) {
+  const exactClientRoot = resolve(clientRoot);
+  const exactServerRoot = resolve(serverRoot);
+  const records = [
+    ...serverRuntimeAssetPaths(exactServerRoot).map((path) => {
+      const bytes = fileBytes(resolve(exactServerRoot, path), exactServerRoot, SERVER_ASSET_TREE_DOMAIN);
+      return { path: `server/${path}`, bytes: bytes.length, sha256: sha256(bytes) };
+    }),
+    ...clientInternalRuntimeAssetPaths(exactClientRoot).map((path) => {
+      const bytes = fileBytes(resolve(exactClientRoot, path), exactClientRoot, SERVER_ASSET_TREE_DOMAIN);
+      return { path: `client/${path}`, bytes: bytes.length, sha256: sha256(bytes) };
+    }),
+  ];
+  return computeIntegrityTree(records, SERVER_ASSET_TREE_DOMAIN);
 }
 
 function assertRuntimeAssetTreeBounds(tree) {
@@ -196,11 +222,7 @@ export function buildServedReleaseManifest({
     clientRuntimeAssetPaths(clientRoot),
     CLIENT_ASSET_TREE_DOMAIN,
   );
-  const serverAssetTree = computeFileTreeIntegrity(
-    serverRoot,
-    serverRuntimeAssetPaths(serverRoot),
-    SERVER_ASSET_TREE_DOMAIN,
-  );
+  const serverAssetTree = computeServerRuntimeIntegrity(clientRoot, serverRoot);
   assertRuntimeAssetTreeBounds(clientAssetTree);
   assertRuntimeAssetTreeBounds(serverAssetTree);
   return {
@@ -224,7 +246,7 @@ export function buildServedReleaseManifest({
     },
     // Server paths are not web resources, so only the domain-separated exact
     // tree summary is published. Local doctor/start verification recomputes the
-    // complete dist/server tree, including hidden build metadata.
+    // complete dist/server tree plus Vinext's non-public dist/client metadata.
     serverAssets: {
       domain: serverAssetTree.domain,
       sha256: serverAssetTree.sha256,
@@ -373,11 +395,7 @@ export function verifyLocalServedRelease({
   }
 
   const exactServerRoot = resolve(serverRoot);
-  const serverAssetTree = computeFileTreeIntegrity(
-    exactServerRoot,
-    serverRuntimeAssetPaths(exactServerRoot),
-    SERVER_ASSET_TREE_DOMAIN,
-  );
+  const serverAssetTree = computeServerRuntimeIntegrity(exactClientRoot, exactServerRoot);
   try {
     assertRuntimeAssetTreeBounds(serverAssetTree);
   } catch {

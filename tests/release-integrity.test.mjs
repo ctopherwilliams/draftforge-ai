@@ -18,6 +18,8 @@ import {
   RELEASE_MANIFEST_PATH,
   SERVER_ASSET_TREE_DOMAIN,
   buildServedReleaseManifest,
+  clientInternalRuntimeAssetPaths,
+  clientRuntimeAssetPaths,
   computeExtensionDirectoryIntegrity,
   computeIntegrityTree,
   computeTrackedSourceIntegrity,
@@ -160,6 +162,44 @@ test("local release verification rejects entry, nested, added, and removed serve
     await rm(added);
 
     await rm(chunk);
+    assert.throws(verify, /LOCAL_SERVER_ASSET_MISMATCH/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Vinext private client metadata is locally bound but never treated as an HTTP asset", async () => {
+  const root = await mkdtemp(join(tmpdir(), "draftforge-client-runtime-metadata-"));
+  const clientRoot = join(root, "client");
+  const serverRoot = join(root, "server");
+  try {
+    await mkdir(join(clientRoot, ".vite"), { recursive: true });
+    await mkdir(serverRoot, { recursive: true });
+    await writeFile(join(clientRoot, "app.js"), "console.log('served');\n");
+    const viteManifest = join(clientRoot, ".vite", "manifest.json");
+    const entryManifest = join(clientRoot, "vinext-client-entry-manifest.json");
+    await writeFile(viteManifest, '{"entry":{"file":"app.js"}}\n');
+    await writeFile(entryManifest, '{"appBrowserEntry":"app.js"}\n');
+    await writeFile(join(clientRoot, "_headers"), "/*\n  Cache-Control: no-store\n");
+    await writeFile(join(serverRoot, "index.js"), "export const server = true;\n");
+
+    assert.deepEqual(clientRuntimeAssetPaths(clientRoot), ["app.js"]);
+    assert.deepEqual(clientInternalRuntimeAssetPaths(clientRoot), [
+      ".vite/manifest.json",
+      "_headers",
+      "vinext-client-entry-manifest.json",
+    ]);
+
+    const revision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+    writeServedReleaseManifest({ repoRoot, clientRoot, serverRoot, revision });
+    const verify = () => verifyLocalServedRelease({ repoRoot, clientRoot, serverRoot, expectedRevision: revision });
+    assert.doesNotThrow(verify);
+
+    await writeFile(entryManifest, '{"appBrowserEntry":"changed.js"}\n');
+    assert.throws(verify, /LOCAL_SERVER_ASSET_MISMATCH/);
+    await writeFile(entryManifest, '{"appBrowserEntry":"app.js"}\n');
+
+    await writeFile(viteManifest, '{"entry":{"file":"changed.js"}}\n');
     assert.throws(verify, /LOCAL_SERVER_ASSET_MISMATCH/);
   } finally {
     await rm(root, { recursive: true, force: true });
