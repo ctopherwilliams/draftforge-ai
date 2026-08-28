@@ -6,6 +6,7 @@ import {
   PRODUCTION_PATH_MEMORY_BUDGETS,
   evaluateProductionPathMemory,
   percentile,
+  runObserverCadence,
   runLiveControlProductionPath,
 } from "../scripts/live-control-production-path.mjs";
 import {
@@ -128,6 +129,62 @@ test("the production-path probe is a first-class package and release-gate comman
   assert.match(releaseGate, /"tests\/live-control-production-path\.test\.mjs"/);
   assert.match(releaseGate, /contentionWarmSeconds: 5/);
   assert.match(releaseGate, /productionContentionSeconds: 25/);
+});
+
+test("observer attribution isolates synchronous observer writes from concurrent action tracking", async () => {
+  let trackingRevision = 0;
+  const content = {
+    observe: () => ({ inDraftRoom: true }),
+    trackingFingerprint: () => String(trackingRevision),
+    hasCachedProducerContext: () => true,
+  };
+  const concurrentWriter = await runObserverCadence({
+    durationMs: 1,
+    intervalMs: 10,
+    content,
+    controlUrl: "http://127.0.0.1/control",
+    expectedSequence: 7,
+    readJsonImpl: async () => {
+      trackingRevision += 1;
+      return { status: 200, body: { control: { sequence: 7 } }, latencyMs: 1 };
+    },
+  });
+  assert.equal(trackingRevision, 1, "the fixture must advance tracking during the route await");
+  assert.equal(concurrentWriter.observerWrites, 0);
+  assert.deepEqual(concurrentWriter.errors, []);
+
+  trackingRevision = 0;
+  const mutatingObserver = await runObserverCadence({
+    durationMs: 1,
+    intervalMs: 10,
+    content: {
+      observe() {
+        trackingRevision += 1;
+        return { inDraftRoom: true };
+      },
+      trackingFingerprint: () => String(trackingRevision),
+      hasCachedProducerContext: () => true,
+    },
+    controlUrl: "http://127.0.0.1/control",
+    expectedSequence: 7,
+    readJsonImpl: async () => assert.fail("a mutating observer must fail before route I/O"),
+  });
+  assert.equal(mutatingObserver.observerWrites, 1);
+  assert.deepEqual(mutatingObserver.errors, ["OBSERVER_MUTATED_CONTENT_STATE"]);
+
+  const missingCache = await runObserverCadence({
+    durationMs: 1,
+    intervalMs: 10,
+    content: {
+      observe: () => assert.fail("an unprimed observer must fail before reading content"),
+      trackingFingerprint: () => assert.fail("an unprimed observer must fail before fingerprinting content"),
+    },
+    controlUrl: "http://127.0.0.1/control",
+    expectedSequence: 7,
+    readJsonImpl: async () => assert.fail("an unprimed observer must fail before route I/O"),
+  });
+  assert.equal(missingCache.observerWrites, 0);
+  assert.deepEqual(missingCache.errors, ["OBSERVER_PRODUCER_CACHE_MISSING"]);
 });
 
 test("the bounded production path covers snake and salary-cap actions under churn and observer pressure", async () => {

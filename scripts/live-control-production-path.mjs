@@ -326,8 +326,20 @@ async function createFakeAuctionContent() {
     },
   };
   vm.runInNewContext(`${source.slice(0, runtimeStart)}
-globalThis.produceContextForQa = () => { domRevision += 1; return getTrackedContext(domRevision); };
+globalThis.produceContextForQa = () => {
+  domRevision += 1;
+  const context = getTrackedContext(domRevision);
+  contextProducerRevision += 1;
+  latestProducerContext = {
+    ...context,
+    producerSessionId: contextProducerSessionId,
+    producerRevision: contextProducerRevision,
+    contextCapturedAt: new Date().toISOString(),
+  };
+  return context;
+};
 globalThis.observeContextForQa = () => getObservedContext();
+globalThis.hasCachedProducerContextForQa = () => latestProducerContext?.url === window.location.href;
 globalThis.executeActionForQa = (action) => executeAction(action);
 globalThis.trackingFingerprintForQa = () => JSON.stringify({
   auctionSales,
@@ -354,6 +366,7 @@ globalThis.executionMetricsForQa = () => ({
     },
     produce: () => sandbox.produceContextForQa(),
     observe: () => sandbox.observeContextForQa(),
+    hasCachedProducerContext: () => sandbox.hasCachedProducerContextForQa(),
     execute: (action) => sandbox.executeActionForQa(action),
     trackingFingerprint: () => sandbox.trackingFingerprintForQa(),
     executionMetrics: () => sandbox.executionMetricsForQa(),
@@ -720,8 +733,20 @@ async function createFakeActionContent({ mode, players, leagueId = LEAGUE_ID, se
     },
   };
   vm.runInNewContext(`${source.slice(0, runtimeStart)}
-globalThis.produceContextForQa = () => { domRevision += 1; return getTrackedContext(domRevision); };
+globalThis.produceContextForQa = () => {
+  domRevision += 1;
+  const context = getTrackedContext(domRevision);
+  contextProducerRevision += 1;
+  latestProducerContext = {
+    ...context,
+    producerSessionId: contextProducerSessionId,
+    producerRevision: contextProducerRevision,
+    contextCapturedAt: new Date().toISOString(),
+  };
+  return context;
+};
 globalThis.observeContextForQa = () => getObservedContext();
+globalThis.hasCachedProducerContextForQa = () => latestProducerContext?.url === window.location.href;
 globalThis.executeActionForQa = (action) => executeAction(action);
 globalThis.trackingFingerprintForQa = () => JSON.stringify({
   auctionSales,
@@ -767,6 +792,7 @@ globalThis.executionMetricsForQa = () => ({
     },
     produce: () => sandbox.produceContextForQa(),
     observe: () => sandbox.observeContextForQa(),
+    hasCachedProducerContext: () => sandbox.hasCachedProducerContextForQa(),
     execute: (action) => sandbox.executeActionForQa(action),
     trackingFingerprint: () => sandbox.trackingFingerprintForQa(),
     executionMetrics: () => sandbox.executionMetricsForQa(),
@@ -1549,7 +1575,16 @@ async function runProductionActionMatrix({ players, sources, evaluatedAt, action
   };
 }
 
-async function runObserverCadence({ durationMs, intervalMs, content, controlUrl, boardUrl, statusUrl, expectedSequence }) {
+export async function runObserverCadence({
+  durationMs,
+  intervalMs,
+  content,
+  controlUrl,
+  boardUrl,
+  statusUrl,
+  expectedSequence,
+  readJsonImpl = measuredJson,
+}) {
   const latencies = [];
   const boardLatencies = [];
   const contextLatencies = [];
@@ -1564,6 +1599,9 @@ async function runObserverCadence({ durationMs, intervalMs, content, controlUrl,
     const waitMs = target - performance.now();
     if (waitMs > 0) await sleep(waitMs);
     try {
+      if (content.hasCachedProducerContext?.() !== true) {
+        throw new Error("OBSERVER_PRODUCER_CACHE_MISSING");
+      }
       const fingerprint = content.trackingFingerprint();
       const contextStartedAt = performance.now();
       const observed = content.observe();
@@ -1573,9 +1611,9 @@ async function runObserverCadence({ durationMs, intervalMs, content, controlUrl,
         throw new Error("OBSERVER_MUTATED_CONTENT_STATE");
       }
       const [response, boardResponse, statusResponse] = await Promise.all([
-        measuredJson(controlUrl, { headers: { origin: APP_ORIGIN } }),
-        boardUrl ? measuredJson(boardUrl, { headers: { origin: APP_ORIGIN } }) : Promise.resolve(null),
-        statusUrl ? measuredJson(statusUrl, { headers: { origin: APP_ORIGIN } }) : Promise.resolve(null),
+        readJsonImpl(controlUrl, { headers: { origin: APP_ORIGIN } }),
+        boardUrl ? readJsonImpl(boardUrl, { headers: { origin: APP_ORIGIN } }) : Promise.resolve(null),
+        statusUrl ? readJsonImpl(statusUrl, { headers: { origin: APP_ORIGIN } }) : Promise.resolve(null),
       ]);
       latencies.push(response.latencyMs);
       const controlSequence = Number(response.body.control?.sequence);
@@ -1610,10 +1648,10 @@ async function runObserverCadence({ durationMs, intervalMs, content, controlUrl,
         }
         lastStatusSequence = statusSequence;
       }
-      if (content.trackingFingerprint() !== fingerprint) {
-        observerWrites += 1;
-        throw new Error("OBSERVER_ROUTE_MUTATED_CONTENT_STATE");
-      }
+      // The synchronous check above proves the observer itself is read-only.
+      // Do not compare the global content fingerprint across route I/O: the
+      // deliberately concurrent action writer may advance exact clock or
+      // settlement tracking while these independent GETs are in flight.
     } catch (error) {
       errors.push(error instanceof Error ? error.message : String(error));
     }
@@ -1635,6 +1673,7 @@ async function runCheckpointCriticalChurn({ routeServer, evaluatedAt, observerDu
   const leagueId = "qa-interrupted-room-4";
   const league = leagueFixture("AUCTION", leagueId);
   const content = await createFakeAuctionContent();
+  content.produce();
   const binding = {
     tabId: ESPN_TAB_ID,
     dashboardLoadedAt: new Date(Date.parse(evaluatedAt) + 1).toISOString(),

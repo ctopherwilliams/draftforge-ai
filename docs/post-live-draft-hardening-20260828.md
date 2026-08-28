@@ -87,7 +87,7 @@ Historical v0.2.27 post-fix synthetic evidence:
 Final v0.2.28 local mechanics evidence:
 
 - package identity: 18 source files; unpacked-source SHA-256 `e253c4dac6bacf791bc15cc729a6229e42ef5c0f7708ae9bfca4f64c52f21074`; ZIP SHA-256 `4f0d8d06146fe58f2388b180a8b600332d11c33d9f4900450f2425c9c9374a79`;
-- `npm test`: 609/609 after typecheck and production build, including 20 complete deterministic snake drafts and 20 complete deterministic salary-cap drafts;
+- `npm test`: 611/611 after typecheck and production build, including 20 complete deterministic snake drafts and 20 complete deterministic salary-cap drafts;
 - `npm run test:live-control`: 424/424;
 - focused action-authorization suite: 135/135;
 - production path: 82/82 exact acknowledgments with action p99 468.31 ms;

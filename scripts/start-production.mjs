@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -34,7 +34,46 @@ import {
 const PRODUCTION_ORIGIN = "http://127.0.0.1:3000";
 const PRODUCTION_START_TIMEOUT_MS = 15_000;
 const PRODUCTION_TERMINATION_GRACE_MS = 2_000;
+export const PRODUCTION_TRADYR_KEYCHAIN_SERVICE = "DraftForge Tradyr";
+export const PRODUCTION_TRADYR_KEYCHAIN_ACCOUNT = "draftforge";
+export const PRODUCTION_KEYCHAIN_READ_TIMEOUT_MS = 5_000;
 export const PRODUCTION_RESTART_BACKOFF_MS = Object.freeze([250, 1_000]);
+
+export function resolveProductionEnvironment({
+  environment = process.env,
+  platform = process.platform,
+  keychainReadImpl = spawnSync,
+} = {}) {
+  const resolved = { ...environment };
+  const existing = String(resolved.TRADYR_API_KEY || "").trim();
+  if (existing) {
+    resolved.TRADYR_API_KEY = existing;
+    return Object.freeze(resolved);
+  }
+  delete resolved.TRADYR_API_KEY;
+  if (platform !== "darwin") return Object.freeze(resolved);
+  try {
+    const result = keychainReadImpl("/usr/bin/security", [
+      "find-generic-password",
+      "-s", PRODUCTION_TRADYR_KEYCHAIN_SERVICE,
+      "-a", PRODUCTION_TRADYR_KEYCHAIN_ACCOUNT,
+      "-w",
+    ], {
+      encoding: "utf8",
+      timeout: PRODUCTION_KEYCHAIN_READ_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+      maxBuffer: 8_192,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const credential = result?.status === 0 ? String(result.stdout || "").trim() : "";
+    if (/^[\x21-\x7e]{8,4096}$/.test(credential)) resolved.TRADYR_API_KEY = credential;
+  } catch {
+    // Missing, denied, locked, or timed-out Keychain access leaves the server
+    // safely source-blocked. No credential bytes or Keychain diagnostics are
+    // emitted, persisted, or forwarded to the browser.
+  }
+  return Object.freeze(resolved);
+}
 
 export function nextProductionServerInstanceStartedAt(nowImpl = Date.now, previousEpochMs = -1) {
   const observedEpochMs = Number(nowImpl());
@@ -263,6 +302,7 @@ export async function startProduction({
   nowImpl = Date.now,
   portProbeImpl = productionListenerPids,
   signalSource = process,
+  environment = process.env,
 } = {}) {
   const exactProjectRoot = resolve(projectRoot);
   validateProductionStartArguments(args);
@@ -355,7 +395,7 @@ export async function startProduction({
         {
           cwd: exactProjectRoot,
           env: {
-            ...process.env,
+            ...environment,
             DRAFTFORGE_PERSIST_AVAILABILITY_STAGE: "1",
             DRAFTFORGE_PERSIST_DRAFT_AUDIT_CHECKPOINT: "1",
             DRAFTFORGE_RELEASE_REVISION: validation.release.revision,
@@ -411,6 +451,7 @@ export async function startProduction({
         origin: PRODUCTION_ORIGIN,
         restartAttempt,
         autoDraftRestored: false,
+        tradyrCredentialAvailable: Boolean(environment.TRADYR_API_KEY),
         serverInstanceStartedAt: serverInstance.timestamp,
       });
 
@@ -472,7 +513,8 @@ export async function startProduction({
 
 async function main() {
   try {
-    await startProduction();
+    const environment = resolveProductionEnvironment();
+    await startProduction({ environment });
   } catch (error) {
     process.stderr.write(`${JSON.stringify({
       ok: false,

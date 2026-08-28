@@ -35,7 +35,11 @@ import {
 } from "../scripts/release-artifact-lease-lib.mjs";
 import {
   nextProductionServerInstanceStartedAt,
+  PRODUCTION_KEYCHAIN_READ_TIMEOUT_MS,
+  PRODUCTION_TRADYR_KEYCHAIN_ACCOUNT,
+  PRODUCTION_TRADYR_KEYCHAIN_SERVICE,
   productionServerArguments,
+  resolveProductionEnvironment,
   startProduction,
   terminateProductionChild,
   validateProductionStartArguments,
@@ -467,6 +471,66 @@ test("production child instance timestamps are canonical and advance across same
   assert.throws(() => nextProductionServerInstanceStartedAt(() => Number.NaN), /INSTANCE_CLOCK_INVALID/);
 });
 
+test("production resolves the server-only Tradyr credential from Keychain without exposing it", () => {
+  const calls = [];
+  const credential = "private-keychain-token";
+  const resolved = resolveProductionEnvironment({
+    environment: { PATH: "/usr/bin" },
+    platform: "darwin",
+    keychainReadImpl: (...args) => {
+      calls.push(args);
+      return { status: 0, stdout: `  ${credential}\n`, stderr: "never emitted" };
+    },
+  });
+  assert.equal(resolved.TRADYR_API_KEY, credential);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0][0], "/usr/bin/security");
+  assert.deepEqual(calls[0][1], [
+    "find-generic-password",
+    "-s", PRODUCTION_TRADYR_KEYCHAIN_SERVICE,
+    "-a", PRODUCTION_TRADYR_KEYCHAIN_ACCOUNT,
+    "-w",
+  ]);
+  assert.equal(calls[0][2].timeout, PRODUCTION_KEYCHAIN_READ_TIMEOUT_MS);
+  assert.equal(calls[0][2].killSignal, "SIGKILL");
+  assert.deepEqual(calls[0][2].stdio, ["ignore", "pipe", "pipe"]);
+
+  let reads = 0;
+  const inherited = resolveProductionEnvironment({
+    environment: { TRADYR_API_KEY: ` ${credential} ` },
+    platform: "darwin",
+    keychainReadImpl: () => { reads += 1; },
+  });
+  assert.equal(inherited.TRADYR_API_KEY, credential);
+  assert.equal(reads, 0, "an explicit server environment must win without touching Keychain");
+
+  for (const result of [
+    { status: 1, stdout: credential },
+    { status: null, stdout: credential, error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }) },
+    { status: 0, stdout: "short" },
+    { status: 0, stdout: `${credential}\nsecond-line` },
+  ]) {
+    const blocked = resolveProductionEnvironment({
+      environment: {},
+      platform: "darwin",
+      keychainReadImpl: () => result,
+    });
+    assert.equal(blocked.TRADYR_API_KEY, undefined);
+  }
+  const denied = resolveProductionEnvironment({
+    environment: {},
+    platform: "darwin",
+    keychainReadImpl: () => { throw new Error("interaction denied"); },
+  });
+  assert.equal(denied.TRADYR_API_KEY, undefined);
+  const unsupported = resolveProductionEnvironment({
+    environment: {},
+    platform: "linux",
+    keychainReadImpl: () => assert.fail("non-macOS startup must not invoke Keychain"),
+  });
+  assert.equal(unsupported.TRADYR_API_KEY, undefined);
+});
+
 test("production start publishes ready only after exact health and reaps a failed startup", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "draftforge-start-readiness-"));
   const validation = { release, artifact, result: { code: "LIVE_CODE_FREEZE_INACTIVE_START_VERIFIED" } };
@@ -487,12 +551,14 @@ test("production start publishes ready only after exact health and reaps a faile
       },
       writeOutput: (value) => output.push(value),
       signalSource,
+      environment: {},
     });
     await new Promise((resolveWait) => setTimeout(resolveWait, 20));
     assert.equal(output.length, 0, "validation alone must never look like a listening server");
     releaseReadiness();
     await new Promise((resolveWait) => setTimeout(resolveWait, 20));
     assert.equal(JSON.parse(output.join("")).code, "PRODUCTION_SERVER_READY");
+    assert.equal(JSON.parse(output.join("")).tradyrCredentialAvailable, false);
     const stopped = assert.rejects(running, /PRODUCTION_SERVER_OPERATOR_SHUTDOWN_SIGTERM/);
     signalSource.emit("SIGTERM");
     await stopped;
@@ -558,6 +624,7 @@ test("production start recovers an unsolicited exit zero with the same lease and
       nowImpl: () => Date.parse("2026-08-28T03:00:00.000Z"),
       signalSource,
       writeOutput: (value) => output.push(value),
+      environment: { PATH: "/usr/bin", TRADYR_API_KEY: "private-restart-fixture" },
     });
 
     await waitUntil(() => readyCount === 1, "initial child did not become ready");
@@ -579,6 +646,7 @@ test("production start recovers an unsolicited exit zero with the same lease and
     ]);
     assert.ok(childEnvironments.every((environment) => /^[a-f0-9]{32}$/.test(environment.DRAFTFORGE_PRODUCTION_SUPERVISION_TOKEN)));
     assert.ok(childEnvironments.every((environment) => environment.DRAFTFORGE_PRODUCTION_SUPERVISOR_PID === String(process.pid)));
+    assert.ok(childEnvironments.every((environment) => environment.TRADYR_API_KEY === "private-restart-fixture"));
     assert.deepEqual(outputEvents(output).map((event) => event.code), [
       "PRODUCTION_SERVER_READY",
       "PRODUCTION_SERVER_RESTART_SCHEDULED",
@@ -586,6 +654,8 @@ test("production start recovers an unsolicited exit zero with the same lease and
     ]);
     assert.equal(outputEvents(output)[1].exitCode, 0);
     assert.equal(outputEvents(output)[2].autoDraftRestored, false);
+    assert.equal(outputEvents(output)[0].tradyrCredentialAvailable, true);
+    assert.equal(outputEvents(output)[2].tradyrCredentialAvailable, true);
     assert.equal(outputEvents(output)[2].restartAttempt, 1);
     assert.equal(outputEvents(output)[0].serverInstanceStartedAt, "2026-08-28T03:00:00.000Z");
     assert.equal(outputEvents(output)[2].serverInstanceStartedAt, "2026-08-28T03:00:00.001Z");
