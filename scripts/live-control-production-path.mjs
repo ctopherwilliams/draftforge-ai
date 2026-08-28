@@ -41,6 +41,10 @@ const AVAILABILITY_DECISION_DIGEST = `sha256:${"b".repeat(64)}`;
 const SOURCE_SNAPSHOT_ID = `sha256:${"c".repeat(64)}`;
 const REQUEST_TIMEOUT_MS = 500;
 const ACTION_SAMPLES_PER_OPERATION = 20;
+const MIB = 1024 * 1024;
+export const PRODUCTION_PATH_MEMORY_BUDGETS = Object.freeze({
+  peakRssMb: 300,
+});
 const CHECKPOINT_PRESEED_MIN_BYTES = Math.ceil(1.8 * 1024 * 1024);
 const CHECKPOINT_MAX_BYTES = 2 * 1024 * 1024;
 const CHECKPOINT_ENTRY_TARGET_BYTES = 500 * 1024;
@@ -53,6 +57,25 @@ export function percentile(values, quantile) {
   if (!Array.isArray(values) || values.length === 0) return Number.POSITIVE_INFINITY;
   const ordered = [...values].sort((left, right) => left - right);
   return ordered[Math.min(ordered.length - 1, Math.max(0, Math.ceil(ordered.length * quantile) - 1))];
+}
+
+export function evaluateProductionPathMemory({ baselineRss, peakRss }) {
+  const validMeasurements = Number.isFinite(baselineRss)
+    && Number.isFinite(peakRss)
+    && baselineRss > 0
+    && peakRss >= baselineRss;
+  const baselineRssMb = Number(baselineRss || 0) / MIB;
+  const peakRssMb = Number(peakRss || 0) / MIB;
+  return {
+    passed: validMeasurements && peakRssMb <= PRODUCTION_PATH_MEMORY_BUDGETS.peakRssMb,
+    checks: {
+      measurements: validMeasurements,
+      peakRss: peakRssMb <= PRODUCTION_PATH_MEMORY_BUDGETS.peakRssMb,
+    },
+    baselineRssMb,
+    peakRssMb,
+    rssGrowthMb: Math.max(0, peakRssMb - baselineRssMb),
+  };
 }
 
 function summarize(values) {
@@ -2372,7 +2395,7 @@ export async function runLiveControlProductionPath({
     const snakeStatusRoute = summarize(snakeObserverOverlap.statusRouteLatencies);
     const snakeObserverContext = summarize(snakeObserverOverlap.contextLatencies);
     const eventLoopP99Ms = eventLoop.percentile(99) / 1_000_000;
-    const rssGrowthMb = (peakRss - baselineRss) / 1024 / 1024;
+    const memory = evaluateProductionPathMemory({ baselineRss, peakRss });
     const durationMs = performance.now() - startedAt;
     const expectedNormal = Math.ceil(observerDurationMs / 1_000);
     const expectedBurst = Math.ceil(observerDurationMs / 250);
@@ -2420,8 +2443,7 @@ export async function runLiveControlProductionPath({
       && snakeObserverContext.p99 <= 50
       && snakeObserverOverlap.actionRoundTripMs <= 1_500
       && eventLoopP99Ms <= 75
-      && rssGrowthMb <= 96
-      && peakRss / 1024 / 1024 <= 384
+      && memory.passed
       && durationMs < 30_000
       && preseedCheckpointBytes >= CHECKPOINT_PRESEED_MIN_BYTES
       && preseedCheckpointBytes <= CHECKPOINT_MAX_BYTES
@@ -2502,16 +2524,13 @@ export async function runLiveControlProductionPath({
         auditPostP99Ms: 450,
         actionP99Ms: 1_200,
         eventLoopP99Ms: 75,
-        rssGrowthMb: 96,
-        peakRssMb: 384,
+        peakRssMb: PRODUCTION_PATH_MEMORY_BUDGETS.peakRssMb,
         totalDurationMs: 30_000,
       },
       resources: {
         durationMs,
         eventLoopP99Ms,
-        baselineRssMb: baselineRss / 1024 / 1024,
-        peakRssMb: peakRss / 1024 / 1024,
-        rssGrowthMb,
+        ...memory,
         maximumActiveAuditPosts: maximumActivePosts,
         queue: {
           maximumInFlight: Math.max(

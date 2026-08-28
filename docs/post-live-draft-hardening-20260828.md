@@ -81,16 +81,18 @@ Current post-fix synthetic evidence:
 
 Final frozen-tree mechanics evidence:
 
-- full repository suite: 594/594 after typecheck and production build;
-- focused live-control suite: 417 tests plus chaos, load, contention, and production-path probes;
-- 1,000-request GET-only load: p95 6.21 ms, p99 12.10 ms, zero failures, and no sequence mutation;
-- 25-second writer/observer contention: observer p95 5.19 ms and p99 9.26 ms, writer p99 28.55 ms, zero errors, and bounded memory;
+- full repository suite: 595/595 after typecheck and production build;
+- focused live-control suite: 418 tests plus chaos, load, contention, and production-path probes;
+- 1,000-request GET-only load: p95 2.53 ms, p99 3.89 ms, zero failures, and no sequence mutation;
+- 25-second writer/observer contention: observer p99 5.40 ms, writer p99 12.41 ms, zero errors, 0.35 MiB retained heap growth, zero retained external growth, and 144.44 MiB peak RSS;
 - near-cap production path: 1,890,787-byte starting ledger, 12 rapid salary writes at 75 ms, 13/13 durable exact-digest acknowledgments, one writer, concurrent 1 Hz/4 Hz observers, and no lost decision;
 - two-minute soak: 480/480 polls, p95 7.37 ms, p99 28.58 ms, 59.42 MiB peak RSS, 0.956% RSS growth, and no safety incident;
 - ten-viewport visual certification, lint, `git diff --check`, and dependency audit: PASS, with zero dependency vulnerabilities;
 - one schema-v3 Monte Carlo run: 10,000 snake plus 10,000 salary-cap drafts, zero simulation errors, zero illegal/incomplete rosters, and zero duplicate-player, unavailable-player, specialist, position-cap, salary, reserve, max-bid, or mandatory-starter violations; determinism digest `7899ec6dea97ba0bcf677bdaba5f4b56e5fa8c2478f2889434125b3ded06dceb` and ordered-outcome digest `7b91eeebf380c55e872dfcb6c9ea67ef43010af7d704449d782c9e33b7efe9ed`;
 - two independent current-code 1,000-draft replays matched determinism digest `4ef2821114eaf6c5ad3699fe9d265b14e06ef56ef990c59d3b3c96d3231ff8c1` and ordered-outcome digest `e90aabc8d058cd39151f7f3a6de69013c74fd759f8ac713180d367979d711b92` exactly; and
 - exact duplicate replays of representative high-regret snake acquisition, salary underbid, and auction nomination cases were byte-identical.
+
+The production-path probe records allocator-relative RSS growth for diagnosis but gates the live path against a 300 MiB absolute peak; the final run peaked at 206.94 MiB. Node/V8 initialization and repeated bounded checkpoint serialization made the former 96 MiB baseline-relative watermark unstable even though the dedicated post-GC contention probe showed negligible retained growth. The absolute ceiling is tighter than the former 384 MiB cap, and the separate contention gate still fails closed on retained heap or external memory.
 
 Independent release review found no P0/P1 defect in the unchanged mechanics release. Two retrospectively selected salary underbid tails remain a shadow-experiment candidate, not authority to raise live ceilings. They use synthetic hidden outcomes, have only two full paired continuations, and do not outweigh the negative acquired surplus observed across the general $25–49 tier. No production strategy change was made from this evidence.
 

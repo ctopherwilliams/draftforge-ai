@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  PRODUCTION_PATH_MEMORY_BUDGETS,
+  evaluateProductionPathMemory,
   percentile,
   runLiveControlProductionPath,
 } from "../scripts/live-control-production-path.mjs";
@@ -17,6 +19,28 @@ test("production-path percentile accounting is deterministic", () => {
   assert.equal(percentile([8, 2, 5, 1, 9], .5), 5);
   assert.equal(percentile([8, 2, 5, 1, 9], .95), 9);
   assert.equal(percentile([], .99), Number.POSITIVE_INFINITY);
+});
+
+test("production-path memory gate uses the absolute production ceiling, not allocator-relative RSS", () => {
+  const mib = 1024 * 1024;
+  const allocatorExpansion = evaluateProductionPathMemory({
+    baselineRss: 100 * mib,
+    peakRss: 225 * mib,
+  });
+  assert.equal(allocatorExpansion.passed, true);
+  assert.equal(allocatorExpansion.rssGrowthMb, 125);
+  assert.equal(allocatorExpansion.checks.peakRss, true);
+
+  const overAbsoluteCeiling = evaluateProductionPathMemory({
+    baselineRss: 100 * mib,
+    peakRss: (PRODUCTION_PATH_MEMORY_BUDGETS.peakRssMb + 1) * mib,
+  });
+  assert.equal(overAbsoluteCeiling.passed, false);
+  assert.equal(overAbsoluteCeiling.checks.peakRss, false);
+
+  const invalid = evaluateProductionPathMemory({ baselineRss: 0, peakRss: 0 });
+  assert.equal(invalid.passed, false);
+  assert.equal(invalid.checks.measurements, false);
 });
 
 test("contention cadences are phase-separated with meaningful tail samples", () => {
@@ -184,5 +208,7 @@ test("the bounded production path covers snake and salary-cap actions under chur
   assert.equal(result.latencyMs.criticalAuditPosts.count, 12);
   assert.ok(result.latencyMs.criticalAuditPosts.p99 <= 450);
   assert.ok(result.resources.peakRssMb <= result.budgets.peakRssMb);
+  assert.equal(result.resources.passed, true);
+  assert.deepEqual(result.resources.checks, { measurements: true, peakRss: true });
   assert.deepEqual(result.finalControl, { sequence: 5, pendingActionCount: 0, eventCount: 5 });
 });
