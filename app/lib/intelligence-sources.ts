@@ -343,17 +343,22 @@ type TradyrPayload = {
   data?: Record<string, unknown>[];
   meta?: {
     generatedAt?: string;
+    format?: string;
     total?: number;
+    limit?: number;
     offset?: number;
+    numQbs?: number;
     access?: {
       limited?: boolean;
       offsetIgnored?: boolean;
+      returned?: number;
+      total?: number;
     };
   };
 };
 
-const TRADYR_PAGE_SIZE = 50;
-const TRADYR_MAX_PLAYERS = 1000;
+const TRADYR_UNKEYED_ROW_CAP = 50;
+const TRADYR_BULK_ROW_LIMIT = 1000;
 
 export async function fetchTradyrRedraftPages(
   request: (url: string, init?: RequestInit) => Promise<TradyrPayload> = (url, init) => fetchJson(url, init, 15000),
@@ -363,56 +368,73 @@ export async function fetchTradyrRedraftPages(
 ) {
   const credential = String(apiKey || "").trim();
   if (!credential) throw new Error("TRADYR_API_KEY_REQUIRED");
-  const players: Record<string, unknown>[] = [];
-  const identities = new Set<string>();
-  let generatedAt: string | null = null;
-  let expectedTotal = TRADYR_PAGE_SIZE;
-  let declaredTotal: number | null = null;
+  if (numQbs !== 1 && numQbs !== 2) throw new Error("TRADYR_QB_PROFILE_INVALID");
   const init = { headers: { Authorization: `Bearer ${credential}` } };
 
-  for (let offset = 0; offset < Math.min(expectedTotal, TRADYR_MAX_PLAYERS); offset += TRADYR_PAGE_SIZE) {
-    const url = `https://api.tradyr.app/v1/players?format=redraft&numQbs=${numQbs}&limit=${TRADYR_PAGE_SIZE}&offset=${offset}`;
-    let payload: TradyrPayload;
-    try {
-      payload = await request(url, init);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!/(abort|timeout|timed out|fetch failed|ECONNRESET|ETIMEDOUT)/i.test(message)) throw error;
-      if (retryDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
-      payload = await request(url, init);
-    }
-    const page = Array.isArray(payload.data) ? payload.data : [];
-    if (payload.meta?.access?.limited === true) throw new Error("TRADYR_ACCESS_LIMITED");
-    if (payload.meta?.access?.offsetIgnored === true) throw new Error("TRADYR_OFFSET_IGNORED");
-    if (payload.meta?.offset !== undefined && Number(payload.meta.offset) !== offset) {
-      throw new Error("TRADYR_OFFSET_MISMATCH");
-    }
-    const total = Number(payload.meta?.total);
-    if (!Number.isSafeInteger(total) || total < 0 || total > TRADYR_MAX_PLAYERS) {
-      throw new Error("TRADYR_TOTAL_INVALID");
-    }
-    // Tradyr documents 50 rows as the unkeyed response cap. A credential in
-    // our request is not proof that the provider honored it, so a response
-    // declaring no more than that cap cannot establish full keyed access even
-    // when meta.access is absent or malformed.
-    if (total <= TRADYR_PAGE_SIZE) throw new Error("TRADYR_FULL_ACCESS_UNPROVEN");
-    if (declaredTotal !== null && total !== declaredTotal) throw new Error("TRADYR_TOTAL_CHANGED");
-    declaredTotal = total;
-    expectedTotal = total;
-    const pageGeneratedAt = validateProviderTimestamp(payload.meta?.generatedAt, Date.now(), "TRADYR");
-    if (generatedAt !== null && pageGeneratedAt !== generatedAt) throw new Error("TRADYR_GENERATED_AT_CHANGED");
-    generatedAt = pageGeneratedAt;
-    for (const player of page) {
-      const identity = `${String(player.slug || player.name || "").trim().toLowerCase()}|${String(player.position || "")}`;
-      if (identity === "|") throw new Error("TRADYR_PLAYER_IDENTITY_INVALID");
-      if (identities.has(identity)) throw new Error("TRADYR_DUPLICATE_PAGE");
-      identities.add(identity);
-      players.push(player);
-    }
-    if (page.length < TRADYR_PAGE_SIZE) break;
+  // A keyed request can return the entire current redraft board in one
+  // response. Do not paginate across independently generated snapshots: the
+  // single bounded bulk response is the atomic source truth we authorize.
+  const url = `https://api.tradyr.app/v1/players?format=redraft&numQbs=${numQbs}&limit=${TRADYR_BULK_ROW_LIMIT}&offset=0`;
+  let payload: TradyrPayload;
+  try {
+    payload = await request(url, init);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/(abort|timeout|timed out|fetch failed|ECONNRESET|ETIMEDOUT)/i.test(message)) throw error;
+    if (retryDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    payload = await request(url, init);
   }
 
-  if (players.length !== expectedTotal) throw new Error("TRADYR_INCOMPLETE_PAGINATION");
+  const meta = payload?.meta;
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) throw new Error("TRADYR_META_INVALID");
+  const access = meta.access;
+  if (access !== undefined && (!access || typeof access !== "object" || Array.isArray(access))) {
+    throw new Error("TRADYR_ACCESS_INVALID");
+  }
+  if (access?.limited !== undefined && access.limited !== false) {
+    throw new Error("TRADYR_ACCESS_LIMITED");
+  }
+  if (access?.offsetIgnored !== undefined && access.offsetIgnored !== false) {
+    throw new Error("TRADYR_OFFSET_IGNORED");
+  }
+  if (meta.format !== "redraft") throw new Error("TRADYR_FORMAT_MISMATCH");
+  if (meta.numQbs !== numQbs) throw new Error("TRADYR_QB_PROFILE_MISMATCH");
+  if (meta.limit !== TRADYR_BULK_ROW_LIMIT) throw new Error("TRADYR_LIMIT_MISMATCH");
+  if (meta.offset !== 0) throw new Error("TRADYR_OFFSET_MISMATCH");
+  const expectedTotal = meta.total;
+  if (typeof expectedTotal !== "number"
+    || !Number.isSafeInteger(expectedTotal)
+    || expectedTotal < 0
+    || expectedTotal > TRADYR_BULK_ROW_LIMIT) {
+    throw new Error("TRADYR_TOTAL_INVALID");
+  }
+  // A credential in the request is not proof that the provider honored it.
+  // Tradyr documents 50 rows as the unkeyed response cap, so only a larger
+  // declared board proves that this response came from the keyed contract.
+  if (expectedTotal <= TRADYR_UNKEYED_ROW_CAP) throw new Error("TRADYR_FULL_ACCESS_UNPROVEN");
+  const generatedAt = validateProviderTimestamp(meta.generatedAt, Date.now(), "TRADYR");
+  const players = Array.isArray(payload.data) ? payload.data : [];
+  if (players.length !== expectedTotal) throw new Error("TRADYR_BULK_COUNT_MISMATCH");
+  if (access?.returned !== undefined && access.returned !== players.length) {
+    throw new Error("TRADYR_ACCESS_RETURNED_MISMATCH");
+  }
+  if (access?.total !== undefined && access.total !== expectedTotal) {
+    throw new Error("TRADYR_ACCESS_TOTAL_MISMATCH");
+  }
+
+  const slugs = new Set<string>();
+  const identities = new Set<string>();
+  for (const player of players) {
+    const slug = String(player?.slug || "").trim().toLowerCase();
+    const normalizedName = normalizePlayerName(String(player?.name || "").trim());
+    const position = canonicalProviderPosition(player?.position);
+    if (!slug || !normalizedName || !position) throw new Error("TRADYR_PLAYER_IDENTITY_INVALID");
+    const identity = `${normalizedName}|${position}`;
+    if (slugs.has(slug) || identities.has(identity)) throw new Error("TRADYR_DUPLICATE_PLAYER_IDENTITY");
+    slugs.add(slug);
+    identities.add(identity);
+  }
+
   return { players, generatedAt, expectedTotal };
 }
 

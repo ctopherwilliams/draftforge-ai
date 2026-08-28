@@ -387,75 +387,97 @@ test("the MFL-style source queue rejects excess admission before work and recove
   assert.deepEqual(fetchQueued.stats(), { pending: 0, active: 0, maxPending: 2 });
 });
 
-test("Tradyr redraft pagination expands the same source deterministically and stays bounded", async () => {
-  const urls = [];
-  const authorizations = [];
-  const pages = new Map([
-    [0, Array.from({ length: 50 }, (_, index) => ({ slug: `player-${index}`, name: `Player ${index}`, position: "WR", rank: index + 1 }))],
-    [50, Array.from({ length: 50 }, (_, index) => ({ slug: `player-${index + 50}`, name: `Player ${index + 50}`, position: "RB", rank: index + 51 }))],
-    [100, Array.from({ length: 20 }, (_, index) => ({ slug: `player-${index + 100}`, name: `Player ${index + 100}`, position: "TE", rank: index + 101 }))],
-  ]);
+const tradyrGeneratedAt = () => new Date().toISOString();
+
+function tradyrRows(count = 60) {
+  const positions = ["QB", "RB", "WR", "TE"];
+  return Array.from({ length: count }, (_, index) => ({
+    slug: `player-${index}`,
+    name: `Player ${index}`,
+    position: positions[index % positions.length],
+    rank: index + 1,
+  }));
+}
+
+function tradyrBulkPayload(overrides = {}) {
+  const data = overrides.data ?? tradyrRows();
+  return {
+    data,
+    meta: {
+      format: "redraft",
+      total: data.length,
+      limit: 1000,
+      offset: 0,
+      numQbs: 1,
+      generatedAt: tradyrGeneratedAt(),
+      access: { limited: false, offsetIgnored: false },
+      ...overrides.meta,
+    },
+  };
+}
+
+test("Tradyr obtains one atomic keyed bulk board and never puts its credential in the URL", async () => {
+  const requests = [];
   const result = await fetchTradyrRedraftPages(async (url, init) => {
-    urls.push(url);
-    authorizations.push(init?.headers?.Authorization);
-    const offset = Number(new URL(url).searchParams.get("offset"));
-    return { data: pages.get(offset) || [], meta: { total: 120, offset, generatedAt: "2026-08-19T00:00:00.000Z", access: { limited: false } } };
+    requests.push({ url, authorization: init?.headers?.Authorization });
+    return tradyrBulkPayload({ data: tradyrRows(194), meta: { total: 194 } });
   }, 0, 1, "test-key");
 
-  assert.equal(result.players.length, 120);
-  assert.equal(result.expectedTotal, 120);
-  assert.equal(result.generatedAt, "2026-08-19T00:00:00.000Z");
-  assert.deepEqual(urls.map((url) => Number(new URL(url).searchParams.get("offset"))), [0, 50, 100]);
-  assert.ok(urls.every((url) => new URL(url).searchParams.get("numQbs") === "1"));
-  assert.deepEqual(authorizations, ["Bearer test-key", "Bearer test-key", "Bearer test-key"]);
-  assert.ok(urls.every((url) => !url.includes("test-key")), "the credential must never enter a URL");
+  assert.equal(result.players.length, 194);
+  assert.equal(result.expectedTotal, 194);
+  assert.equal(requests.length, 1, "a healthy keyed board must be one atomic request");
+  const requested = new URL(requests[0].url);
+  assert.equal(requested.searchParams.get("format"), "redraft");
+  assert.equal(requested.searchParams.get("numQbs"), "1");
+  assert.equal(requested.searchParams.get("limit"), "1000");
+  assert.equal(requested.searchParams.get("offset"), "0");
+  assert.equal(requests[0].authorization, "Bearer test-key");
+  assert.equal(requests[0].url.includes("test-key"), false, "the credential must stay header-only");
 });
 
-test("Tradyr retries one transient page timeout without changing pagination order", async () => {
-  const offsets = [];
-  let firstAttempt = true;
-  const result = await fetchTradyrRedraftPages(async (url) => {
-    const offset = Number(new URL(url).searchParams.get("offset"));
-    offsets.push(offset);
-    if (offset === 0 && firstAttempt) {
-      firstAttempt = false;
-      throw new Error("This operation was aborted");
-    }
-    const count = offset === 0 ? 50 : 10;
-    return {
-      data: Array.from({ length: count }, (_, index) => ({
-        slug: `player-${offset + index}`,
-        name: `Player ${offset + index}`,
-        position: "WR",
-        rank: offset + index + 1,
-      })),
-      meta: { total: 60, offset, generatedAt: "2026-08-19T00:00:00.000Z" },
-    };
-  }, 0, 1, "test-key");
-
-  assert.deepEqual(offsets, [0, 0, 50]);
-  assert.equal(result.players.length, 60);
-});
-
-test("Tradyr requests a two-QB board for ESPN QB-plus-OP leagues", async () => {
+test("Tradyr retries at most one transient bulk transport failure", async () => {
   const urls = [];
-  await fetchTradyrRedraftPages(async (url) => {
+  const result = await fetchTradyrRedraftPages(async (url) => {
     urls.push(url);
-    const offset = Number(new URL(url).searchParams.get("offset"));
-    const count = offset === 0 ? 50 : 1;
-    return {
-      data: Array.from({ length: count }, (_, index) => ({
-        slug: `player-${offset + index}`,
-        name: `Player ${offset + index}`,
-        position: "WR",
-        rank: offset + index + 1,
-      })),
-      meta: { total: 51, offset, generatedAt: "2026-08-20T00:00:00.000Z" },
-    };
-  }, 0, 2, "test-key");
+    if (urls.length === 1) throw new Error("This operation was aborted");
+    return tradyrBulkPayload();
+  }, 0, 1, "test-key");
 
+  assert.equal(result.players.length, 60);
   assert.equal(urls.length, 2);
-  assert.ok(urls.every((url) => new URL(url).searchParams.get("numQbs") === "2"));
+  assert.equal(urls[0], urls[1], "the retry must repeat the same atomic bulk request");
+
+  let persistentAttempts = 0;
+  await assert.rejects(
+    fetchTradyrRedraftPages(async () => {
+      persistentAttempts += 1;
+      throw new Error("ETIMEDOUT");
+    }, 0, 1, "test-key"),
+    /ETIMEDOUT/,
+  );
+  assert.equal(persistentAttempts, 2, "persistent transport failure is bounded to one retry");
+});
+
+test("Tradyr preserves exact one-QB and two-QB ESPN source profiles", async () => {
+  for (const numQbs of [1, 2]) {
+    const urls = [];
+    await fetchTradyrRedraftPages(async (url) => {
+      urls.push(url);
+      return tradyrBulkPayload({ meta: { numQbs } });
+    }, 0, numQbs, "test-key");
+    assert.equal(urls.length, 1);
+    assert.equal(new URL(urls[0]).searchParams.get("numQbs"), String(numQbs));
+  }
+
+  let called = false;
+  await assert.rejects(
+    fetchTradyrRedraftPages(async () => {
+      called = true;
+      return tradyrBulkPayload();
+    }, 0, 3, "test-key"),
+    /TRADYR_QB_PROFILE_INVALID/,
+  );
+  assert.equal(called, false);
 });
 
 test("Tradyr fails closed without a server-side API key", async () => {
@@ -470,84 +492,123 @@ test("Tradyr fails closed without a server-side API key", async () => {
   assert.equal(called, false);
 });
 
-test("Tradyr rejects capped or ignored-offset responses even when HTTP succeeds", async () => {
+test("Tradyr rejects capped, limited, or ignored-offset responses even when HTTP succeeds", async () => {
   await assert.rejects(
-    fetchTradyrRedraftPages(async () => ({
-      data: [{ slug: "decoy", name: "Decoy", position: "WR", rank: 1 }],
-      meta: { total: 192, offset: 0, access: { limited: true } },
-    }), 0, 2, "test-key"),
+    fetchTradyrRedraftPages(async () => tradyrBulkPayload({ meta: { access: { limited: true } } }), 0, 1, "test-key"),
     /TRADYR_ACCESS_LIMITED/,
   );
   await assert.rejects(
-    fetchTradyrRedraftPages(async () => ({
-      data: [{ slug: "player", name: "Player", position: "WR", rank: 1 }],
-      meta: { total: 100, offset: 0, access: { limited: false, offsetIgnored: true } },
-    }), 0, 2, "test-key"),
+    fetchTradyrRedraftPages(async () => tradyrBulkPayload({ meta: { access: { limited: false, offsetIgnored: true } } }), 0, 1, "test-key"),
     /TRADYR_OFFSET_IGNORED/,
   );
   await assert.rejects(
-    fetchTradyrRedraftPages(async () => ({
-      data: Array.from({ length: 50 }, (_, index) => ({
-        slug: `decoy-${index}`,
-        name: `Decoy ${index}`,
-        position: "WR",
-        rank: index + 1,
-      })),
-      meta: { total: 50, offset: 0 },
-    }), 0, 2, "bogus-key"),
+    fetchTradyrRedraftPages(async () => tradyrBulkPayload({ meta: { access: { limited: "false" } } }), 0, 1, "test-key"),
+    /TRADYR_ACCESS_LIMITED/,
+  );
+  await assert.rejects(
+    fetchTradyrRedraftPages(async () => tradyrBulkPayload({ data: tradyrRows(50), meta: { total: 50 } }), 0, 1, "bogus-key"),
     /TRADYR_FULL_ACCESS_UNPROVEN/,
   );
 });
 
-test("Tradyr rejects duplicate pages and incomplete pagination", async () => {
-  const firstPage = Array.from({ length: 50 }, (_, index) => ({
-    slug: `player-${index}`,
-    name: `Player ${index}`,
-    position: "WR",
-    rank: index + 1,
-  }));
+test("Tradyr requires exact bulk format, limit, offset, profile, total bounds, and declared row count", async () => {
   await assert.rejects(
-    fetchTradyrRedraftPages(async (url) => ({
-      data: firstPage,
-      meta: { total: 100, offset: Number(new URL(url).searchParams.get("offset")), generatedAt: "2026-08-19T00:00:00.000Z", access: { limited: false } },
-    }), 0, 1, "test-key"),
-    /TRADYR_DUPLICATE_PAGE/,
+    fetchTradyrRedraftPages(async () => tradyrBulkPayload({ meta: { format: "dynasty" } }), 0, 1, "test-key"),
+    /TRADYR_FORMAT_MISMATCH/,
   );
   await assert.rejects(
-    fetchTradyrRedraftPages(async () => ({
-      data: firstPage.slice(0, 20),
-      meta: { total: 60, offset: 0, generatedAt: "2026-08-19T00:00:00.000Z", access: { limited: false } },
-    }), 0, 1, "test-key"),
-    /TRADYR_INCOMPLETE_PAGINATION/,
+    fetchTradyrRedraftPages(async () => tradyrBulkPayload({ meta: { limit: 50 } }), 0, 1, "test-key"),
+    /TRADYR_LIMIT_MISMATCH/,
+  );
+  for (const offset of [1, "0"]) {
+    await assert.rejects(
+      fetchTradyrRedraftPages(async () => tradyrBulkPayload({ meta: { offset } }), 0, 1, "test-key"),
+      /TRADYR_OFFSET_MISMATCH/,
+    );
+  }
+  await assert.rejects(
+    fetchTradyrRedraftPages(async () => tradyrBulkPayload({ meta: { numQbs: 2 } }), 0, 1, "test-key"),
+    /TRADYR_QB_PROFILE_MISMATCH/,
+  );
+  await assert.rejects(
+    fetchTradyrRedraftPages(async () => tradyrBulkPayload({ meta: { total: 1001 } }), 0, 1, "test-key"),
+    /TRADYR_TOTAL_INVALID/,
+  );
+  await assert.rejects(
+    fetchTradyrRedraftPages(async () => tradyrBulkPayload({ meta: { total: "60" } }), 0, 1, "test-key"),
+    /TRADYR_TOTAL_INVALID/,
+  );
+  await assert.rejects(
+    fetchTradyrRedraftPages(async () => tradyrBulkPayload({ data: tradyrRows(59), meta: { total: 60 } }), 0, 1, "test-key"),
+    /TRADYR_BULK_COUNT_MISMATCH/,
+  );
+  await assert.rejects(
+    fetchTradyrRedraftPages(async () => tradyrBulkPayload({ data: tradyrRows(61), meta: { total: 60 } }), 0, 1, "test-key"),
+    /TRADYR_BULK_COUNT_MISMATCH/,
+  );
+  await assert.rejects(
+    fetchTradyrRedraftPages(async () => tradyrBulkPayload({ meta: { access: { returned: 59 } } }), 0, 1, "test-key"),
+    /TRADYR_ACCESS_RETURNED_MISMATCH/,
+  );
+  await assert.rejects(
+    fetchTradyrRedraftPages(async () => tradyrBulkPayload({ meta: { access: { total: 59 } } }), 0, 1, "test-key"),
+    /TRADYR_ACCESS_TOTAL_MISMATCH/,
+  );
+  await assert.rejects(
+    fetchTradyrRedraftPages(async () => ({ ...tradyrBulkPayload(), meta: undefined }), 0, 1, "test-key"),
+    /TRADYR_META_INVALID/,
+  );
+  await assert.rejects(
+    fetchTradyrRedraftPages(async () => ({ ...tradyrBulkPayload(), meta: { ...tradyrBulkPayload().meta, access: "invalid" } }), 0, 1, "test-key"),
+    /TRADYR_ACCESS_INVALID/,
   );
 });
 
-test("Tradyr requires one stable provider generation across every page", async () => {
+test("Tradyr rejects duplicate or invalid canonical player identities", async () => {
+  const duplicate = tradyrRows();
+  duplicate[59] = { ...duplicate[59], name: "Player 0 Jr.", position: "QB" };
   await assert.rejects(
-    fetchTradyrRedraftPages(async (url) => {
-      const offset = Number(new URL(url).searchParams.get("offset"));
-      const count = offset === 0 ? 50 : 10;
-      return {
-        data: Array.from({ length: count }, (_, index) => ({
-          slug: `player-${offset + index}`,
-          name: `Player ${offset + index}`,
-          position: "WR",
-          rank: offset + index + 1,
-        })),
-        meta: {
-          total: 60,
-          offset,
-          generatedAt: offset === 0 ? "2026-08-19T00:00:00.000Z" : "2026-08-20T00:00:00.000Z",
-        },
-      };
-    }, 0, 1, "test-key"),
-    /TRADYR_GENERATED_AT_CHANGED/,
+    fetchTradyrRedraftPages(async () => tradyrBulkPayload({ data: duplicate }), 0, 1, "test-key"),
+    /TRADYR_DUPLICATE_PLAYER_IDENTITY/,
+  );
+
+  const duplicateSlug = tradyrRows();
+  duplicateSlug[59] = { ...duplicateSlug[59], slug: duplicateSlug[0].slug };
+  await assert.rejects(
+    fetchTradyrRedraftPages(async () => tradyrBulkPayload({ data: duplicateSlug }), 0, 1, "test-key"),
+    /TRADYR_DUPLICATE_PLAYER_IDENTITY/,
+  );
+
+  for (const invalid of [
+    { slug: "", name: "Missing Slug", position: "WR", rank: 1 },
+    { slug: "missing-name", name: "", position: "WR", rank: 1 },
+    { slug: "missing-position", name: "Missing Position", position: "", rank: 1 },
+    { slug: "bad-position", name: "Bad Position", position: "P", rank: 1 },
+  ]) {
+    const rows = tradyrRows();
+    rows[0] = invalid;
+    await assert.rejects(
+      fetchTradyrRedraftPages(async () => tradyrBulkPayload({ data: rows }), 0, 1, "test-key"),
+      /TRADYR_PLAYER_IDENTITY_INVALID/,
+    );
+  }
+});
+
+test("Tradyr requires a valid fresh provider generation timestamp", async () => {
+  await assert.rejects(
+    fetchTradyrRedraftPages(async () => tradyrBulkPayload({ meta: { generatedAt: undefined } }), 0, 1, "test-key"),
+    /TRADYR_PROVIDER_TIMESTAMP_REQUIRED/,
   );
   await assert.rejects(
-    fetchTradyrRedraftPages(async () => ({
-      data: Array.from({ length: 50 }, (_, index) => ({ slug: `player-${index}`, name: `Player ${index}`, position: "WR" })),
-      meta: { total: 60, offset: 0 },
-    }), 0, 1, "test-key"),
-    /TRADYR_PROVIDER_TIMESTAMP_REQUIRED/,
+    fetchTradyrRedraftPages(async () => tradyrBulkPayload({ meta: { generatedAt: "not-a-timestamp" } }), 0, 1, "test-key"),
+    /TRADYR_PROVIDER_TIMESTAMP_INVALID/,
+  );
+  await assert.rejects(
+    fetchTradyrRedraftPages(async () => tradyrBulkPayload({ meta: { generatedAt: "2020-01-01T00:00:00.000Z" } }), 0, 1, "test-key"),
+    /TRADYR_PROVIDER_TIMESTAMP_STALE/,
+  );
+  await assert.rejects(
+    fetchTradyrRedraftPages(async () => tradyrBulkPayload({ meta: { generatedAt: new Date(Date.now() + 10 * 60 * 1000).toISOString() } }), 0, 1, "test-key"),
+    /TRADYR_PROVIDER_TIMESTAMP_FUTURE/,
   );
 });

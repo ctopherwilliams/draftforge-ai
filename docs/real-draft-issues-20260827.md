@@ -30,7 +30,7 @@ The current working candidate addresses the observed failure classes without cha
 - Sound is now telemetry only. The action path still fails closed on unknown/active ESPN Autopick, unsafe clocks, changed identity/action surfaces, source mismatch, post-click uncertainty, and incomplete attribution.
 - Fresh synthetic regression completed 10,000 snake and 10,000 salary-cap trials with zero recorded invariant failures. Independent 2,000-trial replays for both formats matched their run and ordered-outcome digests exactly. The final full repository/release gate remains pending.
 
-This is not an authenticated certification claim. Current source arming is **NO-GO** because `TRADYR_API_KEY` is absent and no fresh authenticated schema-v3 source snapshot exists. Official availability news remains a separate hold/veto overlay; the ranking consensus remains exactly ESPN/FFC/MFL/Tradyr/GNG at fixed weights.
+This is not an authenticated certification claim. Current source arming remains **NO-GO** because no fresh authenticated schema-v3 source snapshot exists from the final committed revision. The server-only Tradyr credential is now held in native Keychain and the source adapter requires one complete atomic keyed board. Official availability news remains a separate hold/veto overlay; the ranking consensus remains exactly ESPN/FFC/MFL/Tradyr/GNG at fixed weights.
 
 ## Prioritized backlog
 
