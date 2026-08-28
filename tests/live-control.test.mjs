@@ -6,6 +6,7 @@ import {
   buildLiveControlCompactView,
   createLiveControlState,
   deterministicSnakeSubmitSecondsRemaining,
+  isLiveDecisionEnvelope,
   isLiveControlState,
   preserveLiveControlForVerifiedRebound,
   validateLiveControlTransition,
@@ -24,14 +25,48 @@ function decision(overrides = {}) {
     tabId: 41,
     operation: "SELECT",
     sourceSnapshotId: "snapshot:five-source:20260828",
+    availabilityDigest: `sha256:${"a".repeat(64)}`,
+    availabilityDecisionDigest: `sha256:${"b".repeat(64)}`,
     expectedPick: 14,
     submitNotBeforeAt: at(30_000),
     submitTargetSeconds: 27,
+    notAfter: Date.parse(at(36_000)),
     intendedPlayer: player(101, "Intended Receiver"),
     alternatives: [player(102, "Alternative Runner", "RB")],
     ...overrides,
   };
 }
+
+test("live decisions require the exact fields for SELECT, BID, and NOMINATE", () => {
+  assert.equal(isLiveDecisionEnvelope(decision()), true);
+  assert.equal(isLiveDecisionEnvelope(decision({ expectedPick: undefined })), false);
+  assert.equal(isLiveDecisionEnvelope(decision({ intendedOffer: 1 })), false);
+  assert.equal(isLiveDecisionEnvelope(decision({ notAfter: Number.MAX_SAFE_INTEGER + 1 })), false);
+
+  const bid = decision({
+    operation: "BID",
+    expectedPick: undefined,
+    expectedCurrentBid: 27,
+    intendedOffer: 28,
+    maxApprovedBid: 35,
+  });
+  assert.equal(isLiveDecisionEnvelope(bid), true);
+  assert.equal(isLiveDecisionEnvelope({ ...bid, expectedCurrentBid: undefined }), false);
+  assert.equal(isLiveDecisionEnvelope({ ...bid, intendedOffer: 29 }), false);
+  assert.equal(isLiveDecisionEnvelope({ ...bid, maxApprovedBid: 27 }), false);
+  assert.equal(isLiveDecisionEnvelope({ ...bid, nominationIntent: "TARGET" }), false);
+
+  const nomination = decision({
+    operation: "NOMINATE",
+    expectedPick: undefined,
+    intendedOffer: 2,
+    nominationIntent: "DRAIN",
+  });
+  assert.equal(isLiveDecisionEnvelope(nomination), true);
+  assert.equal(isLiveDecisionEnvelope({ ...nomination, intendedOffer: undefined }), false);
+  assert.equal(isLiveDecisionEnvelope({ ...nomination, nominationIntent: undefined }), false);
+  assert.equal(isLiveDecisionEnvelope({ ...nomination, nominationIntent: "PRICE_ENFORCE" }), false);
+});
 
 function append(state, event) {
   return appendLiveControlEvent(state, { occurredAt: at(state.sequence * 1_000), ...event });
@@ -302,6 +337,55 @@ test("lifecycle identity, event continuity, pending counts, and freshness cannot
     operation: "BID",
     phase: "RESOLVED",
   }), /INVALID_LIVE_CONTROL_TRANSITION/);
+});
+
+test("one decision id can own only one action id while that action may advance through every phase", () => {
+  let control = createLiveControlState("single-action-lineage-session");
+  control = append(control, {
+    kind: "ACTION_LIFECYCLE",
+    actionId: "action-1",
+    decisionId: "decision-1",
+    operation: "SELECT",
+    phase: "PLANNED",
+    intendedPlayer: player(101, "Exact Receiver"),
+  });
+  control = append(control, {
+    kind: "ACTION_LIFECYCLE",
+    actionId: "action-1",
+    decisionId: "decision-1",
+    operation: "SELECT",
+    phase: "RESOLVED",
+    intendedPlayer: player(101, "Exact Receiver"),
+    resolvedPlayer: player(101, "Exact Receiver"),
+  });
+  assert.equal(control.pendingActionCount, 1);
+  assert.throws(() => append(control, {
+    kind: "ACTION_LIFECYCLE",
+    actionId: "action-2",
+    decisionId: "decision-1",
+    operation: "SELECT",
+    phase: "PLANNED",
+    intendedPlayer: player(101, "Exact Receiver"),
+  }), /INVALID_LIVE_CONTROL_TRANSITION/);
+
+  control = append(control, {
+    kind: "ACTION_LIFECYCLE",
+    actionId: "action-1",
+    decisionId: "decision-1",
+    operation: "SELECT",
+    phase: "ROSTER_CONFIRMED",
+    resolvedPlayer: player(101, "Exact Receiver"),
+  });
+  control = append(control, {
+    kind: "ACTION_LIFECYCLE",
+    actionId: "action-2",
+    decisionId: "decision-2",
+    operation: "SELECT",
+    phase: "PLANNED",
+    intendedPlayer: player(102, "Next Receiver"),
+  });
+  assert.equal(control.pendingActionCount, 1);
+  assert.equal(isLiveControlState(control), true);
 });
 
 test("an acknowledged bid can terminate without pretending the auction sale is roster-confirmed", () => {

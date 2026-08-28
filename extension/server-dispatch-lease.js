@@ -11,15 +11,30 @@ export async function verifyServerDispatchLease(payload, {
   }
   const query = new URLSearchParams({
     view: "dispatch-lease",
-    leagueId: String(payload?.expectedLeagueId || ""),
-    teamId: String(payload?.expectedTeamId || ""),
-    tabId: String(payload?.expectedTabId || ""),
-    commandCenterSessionId: String(payload?.commandCenterSessionId || ""),
-    dashboardLoadedAt: String(payload?.dashboardLoadedAt || ""),
-    decisionId: String(payload?.decisionId || ""),
-    operation: String(payload?.operation || ""),
-    playerId: String(payload?.playerId || ""),
+    leagueId: String(payload?.expectedLeagueId ?? ""),
+    teamId: String(payload?.expectedTeamId ?? ""),
+    tabId: String(payload?.expectedTabId ?? ""),
+    commandCenterSessionId: String(payload?.commandCenterSessionId ?? ""),
+    dashboardLoadedAt: String(payload?.dashboardLoadedAt ?? ""),
+    actionId: String(payload?.actionId ?? ""),
+    decisionId: String(payload?.decisionId ?? ""),
+    sourceSnapshotId: String(payload?.sourceSnapshotId ?? ""),
+    availabilityDigest: String(payload?.availabilityDigest ?? ""),
+    availabilityDecisionDigest: String(payload?.availabilityDecisionDigest ?? ""),
+    operation: String(payload?.operation ?? ""),
+    playerId: String(payload?.playerId ?? ""),
+    notAfter: String(payload?.notAfter ?? ""),
   });
+  if (payload?.operation === "SELECT") {
+    query.set("expectedPick", String(payload?.expectedPick ?? ""));
+  } else if (payload?.operation === "BID") {
+    query.set("expectedCurrentBid", String(payload?.expectedCurrentBid ?? ""));
+    query.set("amount", String(payload?.amount ?? ""));
+    query.set("maxApprovedBid", String(payload?.maxApprovedBid ?? ""));
+  } else if (payload?.operation === "NOMINATE") {
+    query.set("amount", String(payload?.amount ?? ""));
+    query.set("nominationIntent", String(payload?.nominationIntent ?? ""));
+  }
   try {
     const response = await fetchImpl(`${origin}/api/draft-day?${query}`, {
       cache: "no-store",
@@ -27,6 +42,9 @@ export async function verifyServerDispatchLease(payload, {
       signal: AbortSignal.timeout(Math.max(1, Math.min(SERVER_DISPATCH_LEASE_TIMEOUT_MS, remainingMs))),
     });
     const result = await response.json().catch(() => null);
+    if (Number(payload?.notAfter) - now() <= 0) {
+      return { ok: false, code: "ACTION_DEADLINE_EXPIRED" };
+    }
     return response.ok && result?.ok === true && result?.code === "DRAFT_ACTION_SERVER_LEASE_CURRENT"
       ? { ok: true, code: result.code }
       : { ok: false, code: String(result?.code || "SERVER_DISPATCH_LEASE_UNVERIFIED") };

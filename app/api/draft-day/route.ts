@@ -371,6 +371,28 @@ export function dashboardMatchesServerInstance(
   return Date.parse(dashboardLoadedAt) >= Date.parse(serverInstanceStartedAt);
 }
 
+function exactDispatchString(value: unknown) {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function exactDispatchInteger(value: unknown, minimum: number) {
+  if (typeof value === "number") return Number.isSafeInteger(value) && value >= minimum ? value : null;
+  if (typeof value !== "string" || !/^(?:0|[1-9]\d*)$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= minimum ? parsed : null;
+}
+
+function exactDispatchPlayerId(value: unknown) {
+  if (typeof value === "number") return Number.isSafeInteger(value) && value !== 0 ? value : null;
+  if (typeof value !== "string" || !/^-?(?:0|[1-9]\d*)$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed !== 0 ? parsed : null;
+}
+
+function dispatchValueAbsent(value: unknown) {
+  return value === undefined || value === null;
+}
+
 export function dispatchLeaseMatchesAudit(
   snapshot: DraftAuditSnapshot | undefined,
   expectation: {
@@ -379,25 +401,106 @@ export function dispatchLeaseMatchesAudit(
     tabId?: unknown;
     commandCenterSessionId?: unknown;
     dashboardLoadedAt?: unknown;
+    actionId?: unknown;
     decisionId?: unknown;
+    sourceSnapshotId?: unknown;
+    availabilityDigest?: unknown;
+    availabilityDecisionDigest?: unknown;
     operation?: unknown;
     playerId?: unknown;
+    notAfter?: unknown;
+    expectedPick?: unknown;
+    expectedCurrentBid?: unknown;
+    amount?: unknown;
+    maxApprovedBid?: unknown;
+    nominationIntent?: unknown;
   },
   serverInstanceStartedAt = process.env.DRAFTFORGE_SERVER_INSTANCE_STARTED_AT,
 ) {
   const decision = snapshot?.liveControl?.decision;
-  return Boolean(snapshot
-    && decision
-    && dashboardMatchesServerInstance(expectation.dashboardLoadedAt, serverInstanceStartedAt)
-    && dashboardMatchesServerInstance(snapshot.binding.dashboardLoadedAt, serverInstanceStartedAt)
-    && String(expectation.leagueId || "") === snapshot.league.id
-    && Number(expectation.teamId) === snapshot.league.teamId
-    && Number(expectation.tabId) === snapshot.binding.tabId
-    && String(expectation.commandCenterSessionId || "") === snapshot.binding.commandCenterSessionId
-    && String(expectation.dashboardLoadedAt || "") === snapshot.binding.dashboardLoadedAt
-    && String(expectation.decisionId || "") === decision.decisionId
-    && String(expectation.operation || "") === decision.operation
-    && Number(expectation.playerId) === decision.intendedPlayer.playerId);
+  if (!snapshot || !decision) return false;
+  const leagueId = exactDispatchString(expectation.leagueId);
+  const teamId = exactDispatchInteger(expectation.teamId, 1);
+  const tabId = exactDispatchInteger(expectation.tabId, 1);
+  const commandCenterSessionId = exactDispatchString(expectation.commandCenterSessionId);
+  const dashboardLoadedAt = exactDispatchString(expectation.dashboardLoadedAt);
+  const actionId = exactDispatchString(expectation.actionId);
+  const decisionId = exactDispatchString(expectation.decisionId);
+  const sourceSnapshotId = exactDispatchString(expectation.sourceSnapshotId);
+  const availabilityDigest = exactDispatchString(expectation.availabilityDigest);
+  const availabilityDecisionDigest = exactDispatchString(expectation.availabilityDecisionDigest);
+  const operation = exactDispatchString(expectation.operation);
+  const playerId = exactDispatchPlayerId(expectation.playerId);
+  const notAfter = exactDispatchInteger(expectation.notAfter, 1);
+  const observedActionIds = new Set((snapshot.liveControl?.events || []).flatMap((event) => (
+    event.kind === "ACTION_LIFECYCLE" && event.decisionId === decision.decisionId ? [event.actionId] : []
+  )));
+  if (!leagueId
+    || teamId === null
+    || tabId === null
+    || !commandCenterSessionId
+    || !dashboardLoadedAt
+    || !actionId
+    || !decisionId
+    || !sourceSnapshotId
+    || !availabilityDigest
+    || !availabilityDecisionDigest
+    || !operation
+    || playerId === null
+    || notAfter === null
+    || observedActionIds.size !== 1
+    || !observedActionIds.has(actionId)
+    || !/^sha256:[a-f0-9]{64}$/.test(availabilityDigest)
+    || !/^sha256:[a-f0-9]{64}$/.test(availabilityDecisionDigest)
+    || !dashboardMatchesServerInstance(dashboardLoadedAt, serverInstanceStartedAt)
+    || !dashboardMatchesServerInstance(snapshot.binding.dashboardLoadedAt, serverInstanceStartedAt)
+    || leagueId !== snapshot.league.id
+    || teamId !== snapshot.league.teamId
+    || tabId !== snapshot.binding.tabId
+    || commandCenterSessionId !== snapshot.binding.commandCenterSessionId
+    || dashboardLoadedAt !== snapshot.binding.dashboardLoadedAt
+    || decisionId !== decision.decisionId
+    || sourceSnapshotId !== decision.sourceSnapshotId
+    || availabilityDigest !== decision.availabilityDigest
+    || availabilityDecisionDigest !== decision.availabilityDecisionDigest
+    || operation !== decision.operation
+    || playerId !== decision.intendedPlayer.playerId
+    || notAfter !== decision.notAfter) return false;
+
+  if (operation === "SELECT") {
+    const expectedPick = exactDispatchInteger(expectation.expectedPick, 1);
+    return expectedPick !== null
+      && expectedPick === decision.expectedPick
+      && dispatchValueAbsent(expectation.expectedCurrentBid)
+      && dispatchValueAbsent(expectation.amount)
+      && dispatchValueAbsent(expectation.maxApprovedBid)
+      && dispatchValueAbsent(expectation.nominationIntent);
+  }
+  if (operation === "BID") {
+    const expectedCurrentBid = exactDispatchInteger(expectation.expectedCurrentBid, 0);
+    const amount = exactDispatchInteger(expectation.amount, 1);
+    const maxApprovedBid = exactDispatchInteger(expectation.maxApprovedBid, 0);
+    return expectedCurrentBid !== null
+      && amount !== null
+      && maxApprovedBid !== null
+      && expectedCurrentBid === decision.expectedCurrentBid
+      && amount === decision.intendedOffer
+      && maxApprovedBid === decision.maxApprovedBid
+      && dispatchValueAbsent(expectation.expectedPick)
+      && dispatchValueAbsent(expectation.nominationIntent);
+  }
+  if (operation === "NOMINATE") {
+    const amount = exactDispatchInteger(expectation.amount, 1);
+    const nominationIntent = exactDispatchString(expectation.nominationIntent);
+    return amount !== null
+      && ["TARGET", "DRAIN"].includes(nominationIntent || "")
+      && amount === decision.intendedOffer
+      && nominationIntent === decision.nominationIntent
+      && dispatchValueAbsent(expectation.expectedPick)
+      && dispatchValueAbsent(expectation.expectedCurrentBid)
+      && dispatchValueAbsent(expectation.maxApprovedBid);
+  }
+  return false;
 }
 
 function recordedAuditPublication(snapshot: DraftAuditSnapshot): DraftAuditRecordedPublication | null {
@@ -702,13 +805,23 @@ export async function GET(request: Request) {
   if (view === "dispatch-lease") {
     const expectation = {
       leagueId,
-      teamId,
-      tabId: Number(url.searchParams.get("tabId")),
-      commandCenterSessionId: String(url.searchParams.get("commandCenterSessionId") || ""),
-      dashboardLoadedAt: String(url.searchParams.get("dashboardLoadedAt") || ""),
-      decisionId: String(url.searchParams.get("decisionId") || ""),
-      operation: String(url.searchParams.get("operation") || ""),
-      playerId: Number(url.searchParams.get("playerId")),
+      teamId: url.searchParams.get("teamId"),
+      tabId: url.searchParams.get("tabId"),
+      commandCenterSessionId: url.searchParams.get("commandCenterSessionId"),
+      dashboardLoadedAt: url.searchParams.get("dashboardLoadedAt"),
+      actionId: url.searchParams.get("actionId"),
+      decisionId: url.searchParams.get("decisionId"),
+      sourceSnapshotId: url.searchParams.get("sourceSnapshotId"),
+      availabilityDigest: url.searchParams.get("availabilityDigest"),
+      availabilityDecisionDigest: url.searchParams.get("availabilityDecisionDigest"),
+      operation: url.searchParams.get("operation"),
+      playerId: url.searchParams.get("playerId"),
+      notAfter: url.searchParams.get("notAfter"),
+      expectedPick: url.searchParams.get("expectedPick"),
+      expectedCurrentBid: url.searchParams.get("expectedCurrentBid"),
+      amount: url.searchParams.get("amount"),
+      maxApprovedBid: url.searchParams.get("maxApprovedBid"),
+      nominationIntent: url.searchParams.get("nominationIntent"),
     };
     if (!dispatchLeaseMatchesAudit(snapshot, expectation)) {
       return response(origin, { ok: false, code: DRAFT_ACTION_SERVER_LEASE_STALE }, 409);

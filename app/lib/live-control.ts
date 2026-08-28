@@ -5,6 +5,7 @@ export const MAX_LIVE_DECISION_ALTERNATIVES = 5;
 
 export type LiveControlOperation = "SELECT" | "BID" | "NOMINATE";
 export type LiveControlPosition = "QB" | "RB" | "WR" | "TE" | "DST" | "K";
+export type LiveNominationIntent = "TARGET" | "DRAIN";
 
 export type LivePlayerIdentity = {
   playerId: number;
@@ -32,6 +33,8 @@ export type LiveDecisionEnvelope = {
   intendedOffer?: number;
   resolvedOffer?: number;
   maxApprovedBid?: number;
+  nominationIntent?: LiveNominationIntent;
+  notAfter?: number;
   alternatives: LivePlayerIdentity[];
 };
 
@@ -163,6 +166,7 @@ export type LiveControlTransitionResult = {
 
 const OPERATIONS = new Set<LiveControlOperation>(["SELECT", "BID", "NOMINATE"]);
 const POSITIONS = new Set<LiveControlPosition>(["QB", "RB", "WR", "TE", "DST", "K"]);
+const NOMINATION_INTENTS = new Set<LiveNominationIntent>(["TARGET", "DRAIN"]);
 const ACTION_PHASES = new Set<LiveActionLifecyclePhase>([
   "PLANNED",
   "RESOLVED",
@@ -270,12 +274,35 @@ export function isLiveDecisionEnvelope(value: unknown): value is LiveDecisionEnv
     || !isOptionalNonNegativeInteger(value.intendedOffer)
     || !isOptionalNonNegativeInteger(value.resolvedOffer)
     || !isOptionalNonNegativeInteger(value.maxApprovedBid)
+    || (value.nominationIntent !== undefined && !NOMINATION_INTENTS.has(value.nominationIntent as LiveNominationIntent))
+    || (value.notAfter !== undefined && (!Number.isSafeInteger(value.notAfter) || Number(value.notAfter) <= 0))
     || (value.expectedPick !== undefined && !isPositiveInteger(value.expectedPick))
     || (value.submitTargetSeconds !== undefined && !isNonNegativeInteger(value.submitTargetSeconds))
     || (value.submitNotBeforeAt !== undefined && !isTimestamp(value.submitNotBeforeAt))
     || !Array.isArray(value.alternatives)
     || value.alternatives.length > MAX_LIVE_DECISION_ALTERNATIVES
     || !value.alternatives.every(isLivePlayerIdentity)) return false;
+  const operationFieldsValid = value.operation === "SELECT"
+    ? isPositiveInteger(value.expectedPick)
+      && value.expectedCurrentBid === undefined
+      && value.intendedOffer === undefined
+      && value.resolvedOffer === undefined
+      && value.maxApprovedBid === undefined
+      && value.nominationIntent === undefined
+    : value.operation === "BID"
+      ? value.expectedPick === undefined
+        && isNonNegativeInteger(value.expectedCurrentBid)
+        && isPositiveInteger(value.intendedOffer)
+        && Number(value.intendedOffer) === Number(value.expectedCurrentBid) + 1
+        && isNonNegativeInteger(value.maxApprovedBid)
+        && Number(value.intendedOffer) <= Number(value.maxApprovedBid)
+        && value.nominationIntent === undefined
+      : value.expectedPick === undefined
+        && value.expectedCurrentBid === undefined
+        && isPositiveInteger(value.intendedOffer)
+        && value.maxApprovedBid === undefined
+        && NOMINATION_INTENTS.has(value.nominationIntent as LiveNominationIntent);
+  if (!operationFieldsValid) return false;
   const ids = [value.intendedPlayer, ...value.alternatives].map((player) => Number(player.playerId));
   return new Set(ids).size === ids.length;
 }
@@ -362,10 +389,14 @@ function mergeObservedLifecycle(
 
 function observedActionLifecycles(events: LiveControlEvent[]) {
   const actions = new Map<string, ObservedActionLifecycle>();
+  const decisionActionIds = new Map<string, string>();
   for (const event of events) {
     if (event.kind !== "ACTION_LIFECYCLE") continue;
+    const actionId = decisionActionIds.get(event.decisionId);
+    if (actionId !== undefined && actionId !== event.actionId) return null;
     const observed = mergeObservedLifecycle(actions.get(event.actionId), event);
     if (!observed) return null;
+    decisionActionIds.set(event.decisionId, event.actionId);
     actions.set(event.actionId, observed);
   }
   return actions;

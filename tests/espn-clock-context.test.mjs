@@ -2164,6 +2164,10 @@ test("every safety-relevant action field participates in request idempotency", a
   });
   const now = Date.now();
   const base = {
+    actionId: "action-idempotency-1",
+    decisionId: "decision-idempotency-1",
+    dashboardLoadedAt: "2026-08-28T01:00:00.000Z",
+    sourceSnapshotId: `sha256:${"e".repeat(64)}`,
     operation: "SELECT",
     playerId: 12345,
     playerName: "Exact Player",
@@ -2182,9 +2186,14 @@ test("every safety-relevant action field participates in request idempotency", a
     availabilityNotAfter: now + 5_000,
   };
   const mutations = [
+    ["action", (action) => ({ ...action, actionId: "action-idempotency-2" })],
+    ["decision", (action) => ({ ...action, decisionId: "decision-idempotency-2" })],
+    ["dashboard instance", (action) => ({ ...action, dashboardLoadedAt: "2026-08-28T01:00:00.001Z" })],
+    ["source snapshot", (action) => ({ ...action, sourceSnapshotId: `sha256:${"f".repeat(64)}` })],
     ["tab", (action) => ({ ...action, expectedTabId: 42 })],
     ["availability artifact", (action) => ({ ...action, availabilityDigest: `sha256:${"c".repeat(64)}` })],
     ["availability decision", (action) => ({ ...action, availabilityDecisionDigest: `sha256:${"d".repeat(64)}` })],
+    ["action deadline", (action) => ({ ...action, notAfter: action.notAfter + 1 })],
     ["candidate position", (action) => ({ ...action, candidates: [{ ...action.candidates[0], position: "RB" }] })],
     ["mandatory starter flag", (action) => ({ ...action, candidates: [{ ...action.candidates[0], fillsMandatoryStarter: true }] })],
   ];

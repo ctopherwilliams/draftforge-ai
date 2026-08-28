@@ -282,6 +282,7 @@ function stageSnakeDecision(harness, timing, key = "snake-plan-key") {
       expectedPick: 1,
       submitNotBeforeAt: timing.submitNotBeforeAt,
       submitTargetSeconds: timing.submitTargetSeconds,
+      notAfter: Date.now() + 5_500,
       intendedPlayer,
       alternatives: [],
     },

@@ -16,6 +16,9 @@ The dashboard and companion are the only production writer. Chat and terminal to
 - MV3 worker restart restores authority only after revalidating both bound tabs and the exact live ESPN identity. Closing either tab revokes persisted authority.
 - A verified ESPN tab replacement preserves the append-only action/attribution/incident ledger only between actions. It never replaces history and Auto-Draft remains off until the fresh checklist passes.
 - A stale or replacement audit publisher immediately disarms DraftForge; it cannot keep acting while chat observes an obsolete ledger.
+- The final server dispatch lease is an exact, operation-aware authorization. It binds `actionId`, `decisionId`, room/dashboard identity, player, source snapshot, availability-stage digest, availability-decision digest, and immutable `notAfter`. SELECT also binds the expected pick; BID binds expected current bid, intended offer, and maximum approved bid; NOMINATE binds intended offer and TARGET/DRAIN intent. Missing, malformed, changed, or operation-inapplicable evidence mismatches fail closed.
+- A decision may own exactly one action ID. A second distinct action ID for the same decision invalidates the typed live-control ledger rather than creating another executable path.
+- The companion includes the action, decision, dashboard, source, availability, economics, and deadline evidence in its execution signature. After the bounded server request returns, it rechecks the exact lease acknowledgment and immutable `notAfter` against the current clock before any ESPN click, preventing expiry during verification.
 - ESPN Autopick and salary-cap leader ownership are tri-state. Missing or contradictory proof is unsafe, never interpreted as OFF or “not leading.”
 - Auction clocks bind to nominee plus offer. Consecutive $1 nominations cannot inherit the prior nominee's timer.
 - Bids require exact ID-first nominee identity, explicit opponent-leader/outbid evidence, exact current-plus-one price, an immutable ceiling, and the one-dollar-per-open-slot reserve.
@@ -71,7 +74,7 @@ Historical pre-final-gate evidence retained from the earlier candidate:
 - independent P0/P1 review: GO after the stale/global auction-leader proof was removed;
 - earlier five-seed synthetic matrix: 10,000 total drafts across its combined formats, zero failures and zero hard violations. This evidence predates the final exact-ID, source-binding, restart-fence, and sound-policy changes and must not substitute for the final full gate.
 
-Current post-fix synthetic evidence:
+Historical v0.2.27 post-fix synthetic evidence:
 
 - snake: 10,000/10,000 complete across seeds `20260828`, `18472631`, `73190422`, `41586703`, and `96724011`, with zero failures and zero hard violations;
 - salary cap: 10,000/10,000 complete across the same seed family, with zero failures and zero hard violations;
@@ -79,22 +82,23 @@ Current post-fix synthetic evidence:
 - salary-cap replay: 2,000/2,000 complete for seed `20260828`; determinism digest `6305a5b2cbe02c61a8751a99270559d31b341854634939009a4ebaefc0c6ef06` and ordered outcome digest `279251a06f49915e3e69f6859d5cf65b4fab520b0731d95cf486250dc9306ebd` match the baseline exactly;
 - all of these runs have `sourceSnapshotDigest: null` and are synthetic mechanics evidence, not current player-specific or authenticated ESPN certification.
 
-Final frozen-tree mechanics evidence:
+Final v0.2.28 local mechanics evidence:
 
-- full repository suite: 595/595 after typecheck and production build;
-- focused live-control suite: 418 tests plus chaos, load, contention, and production-path probes;
-- 1,000-request GET-only load: p95 2.53 ms, p99 3.89 ms, zero failures, and no sequence mutation;
-- 25-second writer/observer contention: observer p99 5.40 ms, writer p99 12.41 ms, zero errors, 0.35 MiB retained heap growth, zero retained external growth, and 144.44 MiB peak RSS;
-- near-cap production path: 1,890,787-byte starting ledger, 12 rapid salary writes at 75 ms, 13/13 durable exact-digest acknowledgments, one writer, concurrent 1 Hz/4 Hz observers, and no lost decision;
-- two-minute soak: 480/480 polls, p95 7.37 ms, p99 28.58 ms, 59.42 MiB peak RSS, 0.956% RSS growth, and no safety incident;
-- ten-viewport visual certification, lint, `git diff --check`, and dependency audit: PASS, with zero dependency vulnerabilities;
-- one schema-v3 Monte Carlo run: 10,000 snake plus 10,000 salary-cap drafts, zero simulation errors, zero illegal/incomplete rosters, and zero duplicate-player, unavailable-player, specialist, position-cap, salary, reserve, max-bid, or mandatory-starter violations; determinism digest `7899ec6dea97ba0bcf677bdaba5f4b56e5fa8c2478f2889434125b3ded06dceb` and ordered-outcome digest `7b91eeebf380c55e872dfcb6c9ea67ef43010af7d704449d782c9e33b7efe9ed`;
-- two independent current-code 1,000-draft replays matched determinism digest `4ef2821114eaf6c5ad3699fe9d265b14e06ef56ef990c59d3b3c96d3231ff8c1` and ordered-outcome digest `e90aabc8d058cd39151f7f3a6de69013c74fd759f8ac713180d367979d711b92` exactly; and
-- exact duplicate replays of representative high-regret snake acquisition, salary underbid, and auction nomination cases were byte-identical.
+- package identity: 18 source files; unpacked-source SHA-256 `e253c4dac6bacf791bc15cc729a6229e42ef5c0f7708ae9bfca4f64c52f21074`; ZIP SHA-256 `4f0d8d06146fe58f2388b180a8b600332d11c33d9f4900450f2425c9c9374a79`;
+- `npm test`: 606/606 after typecheck and production build, including 20 complete deterministic snake drafts and 20 complete deterministic salary-cap drafts;
+- `npm run test:live-control`: 424/424;
+- focused action-authorization suite: 135/135;
+- production path: 82/82 exact acknowledgments with action p99 468.31 ms;
+- GET-only load: 1,000/1,000, p95 12.59 ms, p99 20.94 ms;
+- writer/observer contention: PASS;
+- monitor chaos: 9/9 detected;
+- short soak: 150 polls, p99 14.00 ms, 0.75% growth;
+- visual certification: all ten scenarios PASS; and
+- dependency audit: zero vulnerabilities.
 
-The production-path probe records allocator-relative RSS growth for diagnosis but gates the live path against a 300 MiB absolute peak; the final run peaked at 206.94 MiB. Node/V8 initialization and repeated bounded checkpoint serialization made the former 96 MiB baseline-relative watermark unstable even though the dedicated post-GC contention probe showed negligible retained growth. The absolute ceiling is tighter than the former 384 MiB cap, and the separate contention gate still fails closed on retained heap or external memory.
+The preceding 595/595, 418-test, 13-acknowledgment, two-minute-soak, memory, Monte Carlo, and replay measurements remain historical evidence for v0.2.27 and earlier candidates. They do not replace v0.2.28's current gate or authenticate current source truth.
 
-Independent release review found no P0/P1 defect in the unchanged mechanics release. Two retrospectively selected salary underbid tails remain a shadow-experiment candidate, not authority to raise live ceilings. They use synthetic hidden outcomes, have only two full paired continuations, and do not outweigh the negative acquired surplus observed across the general $25–49 tier. No production strategy change was made from this evidence.
+Independent release review found two authorization-integrity gaps and v0.2.28 closes both: the final dispatch lease had not bound every source/availability/economic field, and one decision could own multiple action IDs. The repair is narrow and fail closed, including a post-response deadline recheck. Two retrospectively selected salary underbid tails remain a shadow-experiment candidate, not authority to raise live ceilings. They use synthetic hidden outcomes, have only two full paired continuations, and do not outweigh the negative acquired surplus observed across the general $25–49 tier. No production strategy change was made from this evidence.
 
 The exact depleted-TE adversarial failure at base seed `18472631`, trial `154`, was a harness inventory defect: the deepest 14-team variant exhausted all synthetic tight ends after two seeded news removals. The harness-only pool now covers every position cap plus a removal cushion. Exact replay is deterministic, and the full five-seed rerun passed without relaxing roster or nomination legality.
 
@@ -104,21 +108,18 @@ Partial authenticated Chrome state observed on 2026-08-28:
 - exact league `44050`, team `7`, season 2026;
 - imported 12-team PPR salary-cap rules, $200 budget, 14 roster slots, QB plus OP;
 - DraftForge Auto-Draft remained off and every nomination/bid control remained disabled;
-- the current keyed five-source capture and an authenticated ESPN Player News review were not completed in this checkpoint and are not claimed;
-- the required server-only Tradyr key is absent, no fresh authenticated schema-v3 snapshot exists, and the saved schema-v1 salary artifact is stale and noncertifying.
+- the current keyed five-source capture was not completed because the required server-only Tradyr key is absent; no fresh authenticated schema-v3 snapshot exists, and the saved schema-v1 salary artifact is stale and noncertifying;
+- a later authenticated ESPN Player News scan and official-NFL comparison completed and produced the short-lived staged availability evidence described below. That stage is separate from source readiness and must be refreshed whenever its draft-day TTL expires.
 
 ### 2026-08-28 availability freshness review
 
-A read-only comparison against the official NFL news and transaction feeds found concrete evidence that the saved ESPN salary player pool is stale and must not authorize a draft:
+A read-only comparison against the official NFL news and transaction feeds found concrete evidence that the saved ESPN salary player pool is stale and must not authorize a draft. The subsequent authenticated ESPN Player News scan completed successfully. The staged artifact contains exactly resolved hard-veto records for:
 
 - Jayden Higgins and Calvin Austin III are still marked healthy in the saved pool although NFL.com reports season-ending torn ACLs;
-- Cedric Tillman remains attached to Cleveland although NFL.com reports that he is being released;
-- Tutu Atwell remains attached to Miami although the official transaction feed records the August 27 trade to the Rams;
-- Isiah Pacheco, Wan'Dale Robinson, and Cameron Dicker have new injury advisories that require current ESPN-news reconciliation, while Alec Pierce has been activated from PUP.
 
-The official references are `https://www.nfl.com/news/texans-wr-jayden-higgins-torn-acl-out-2026-season`, `https://www.nfl.com/news/nfl-news-roundup-latest-league-updates-from-wednesday-aug-26`, `https://www.nfl.com/news/nfl-news-roundup-latest-league-updates-from-thursday-aug-27`, and `https://www.nfl.com/transactions/`. This review is not a staged availability artifact: the required authenticated ESPN Player News scan could not be completed through the current Chrome controller, so the availability gate remains blocked. Confirmed availability news stays a separate veto/advisory layer and never becomes a sixth ranking source.
+The exact official references are `https://www.nfl.com/news/texans-wr-jayden-higgins-torn-acl-out-2026-season` and `https://www.nfl.com/news/nfl-news-roundup-latest-league-updates-from-wednesday-aug-26`. The ignored local artifact `outputs/availability/release-20260828.json` records the sanitized authenticated/official scan receipt and those two hard vetoes; it contains no ESPN credentials or opponent identity. Its freshness is bounded, so it must be rescanned and restaged before arming if its TTL has elapsed. Confirmed availability news stays a separate veto/advisory layer and never becomes a sixth ranking source or a substitute for the blocked exact five-source snapshot.
 
-The code and packaged companion are locally **GO for unchanged mechanics**. Authenticated current-source arming is intentionally **NO-GO** until a server-only Tradyr key is configured, a fresh authenticated schema-v3 5/5 snapshot with authenticated ESPN provenance and a separate availability artifact pass, and the committed/upstream-matched candidate passes its exact two-tab no-click and requested authenticated format certification. The final companion identity is v0.2.27 with packaged zip SHA-256 `526246b8a284422dfdc55d36dc57f6193a4b21a88018db2e3b511bcc4d12cc1d`.
+The code and packaged companion are locally **GO for v0.2.28 mechanics**. Authenticated current-source arming is intentionally **NO-GO**: the server-only Tradyr key is absent, an exact current schema-v3 5/5 snapshot cannot be published, Chrome has not proven that the installed unpacked companion was reloaded to v0.2.28, and the committed/upstream-matched candidate still requires its exact two-tab no-click rehearsal, authenticated normal/rapid/recovery salary-cap rooms, authenticated snake regression, and three-hour soak. The final companion identity is v0.2.28 with 18 files, unpacked-source SHA-256 `e253c4dac6bacf791bc15cc729a6229e42ef5c0f7708ae9bfca4f64c52f21074`, and packaged ZIP SHA-256 `4f0d8d06146fe58f2388b180a8b600332d11c33d9f4900450f2425c9c9374a79`.
 
 ## Rollback and no-go triggers
 

@@ -251,6 +251,7 @@ const ACTION_CANDIDATE_LIMIT = 64;
 const EXACT_TAB_WATCHDOG_MS = 5000;
 const MIN_SNAKE_SELECTION_WINDOW_SECONDS = 10;
 const MIN_OTHER_ACTION_WINDOW_SECONDS = 5;
+const SNAKE_ACTION_RESPONSE_BUDGET_MS = 6_000;
 // One keyed ESPN poll may legally consume the 1.8s cadence, 1.2s coordinator
 // budget, and scheduling jitter. Actions still fail closed while unhealthy,
 // but normal poll timing must not permanently cancel operator intent.
@@ -398,6 +399,7 @@ type StagedSnakeDecision = {
     expectedPick: number;
     submitNotBeforeAt: string;
     submitTargetSeconds: number;
+    notAfter: number;
   };
   availabilityDecision: AvailabilityDecisionSnapshot;
 };
@@ -3113,6 +3115,16 @@ export default function Home() {
     }
 
     const timing = buildSnakePlanTiming(Date.now(), latestClock, submitTargetSeconds);
+    const stagedNotAfter = availabilityBoundedActionDeadline(
+      availabilityGateRef.current,
+      SNAKE_ACTION_RESPONSE_BUDGET_MS,
+      Date.parse(timing.submitNotBeforeAt),
+    );
+    if (stagedNotAfter === null) {
+      setAutoDraft(false);
+      setActionState("Action stopped: availability evidence does not cover the announced snake submission window.");
+      return null;
+    }
     const intendedPlayer = livePlayerIdentity(player);
     const decisionEnvelope: StagedSnakeDecision["decision"] = {
       decisionId,
@@ -3128,6 +3140,7 @@ export default function Home() {
       expectedPick: currentPick,
       submitNotBeforeAt: timing.submitNotBeforeAt,
       submitTargetSeconds: timing.submitTargetSeconds,
+      notAfter: stagedNotAfter,
       intendedPlayer,
       alternatives: liveRecommendations
         .filter((candidate) => candidate.id !== player.id)
@@ -3441,9 +3454,16 @@ export default function Home() {
     }
     if (resolvedOperation === "BID") exactApprovedBidCeiling = latestExactBidCeiling;
     const responseBudgetMs = resolvedOperation === "BID" ? 2_500 : resolvedOperation === "NOMINATE" ? 5_500 : 6_000;
-    const notAfter = availabilityBoundedActionDeadline(preClickAvailability, responseBudgetMs);
+    const freshlyBoundedNotAfter = availabilityBoundedActionDeadline(preClickAvailability, responseBudgetMs);
+    const notAfter = stagedSnake && freshlyBoundedNotAfter !== null
+      ? Math.min(stagedSnake.decision.notAfter, freshlyBoundedNotAfter)
+      : freshlyBoundedNotAfter;
     const availabilityNotAfter = Date.parse(preClickAvailability.freshUntil || "");
-    if (notAfter === null || !Number.isSafeInteger(availabilityNotAfter) || availabilityNotAfter <= Date.now()) {
+    if (notAfter === null
+      || !Number.isSafeInteger(notAfter)
+      || notAfter <= Date.now()
+      || !Number.isSafeInteger(availabilityNotAfter)
+      || availabilityNotAfter <= Date.now()) {
       if (inFlightActionRef.current?.actionRequestId === actionRequestId) inFlightActionRef.current = null;
       setActionInFlight(false);
       setAutoDraft(false);
@@ -3470,6 +3490,8 @@ export default function Home() {
       ...(resolvedOperation === "BID" ? { expectedCurrentBid: Math.max(0, Math.trunc(Number(context.currentBid || 0))) } : {}),
       ...(intendedOffer === undefined ? {} : { intendedOffer }),
       ...(resolvedOperation === "BID" ? { maxApprovedBid: Number(exactApprovedBidCeiling) } : {}),
+      ...(resolvedOperation === "NOMINATE" ? { nominationIntent } : {}),
+      notAfter,
       alternatives: alternativePlayers,
     };
     const actionRecord: PendingLiveAction = stagedSnake?.action ?? {
@@ -3675,7 +3697,9 @@ export default function Home() {
       authorizationEpoch,
       commandCenterSessionId: COMMAND_CENTER_PUBLISHER.sessionId,
       dashboardLoadedAt: DASHBOARD_LOADED_AT,
+      actionId,
       decisionId: decisionEnvelope.decisionId,
+      sourceSnapshotId: decisionEnvelope.sourceSnapshotId,
       operation: resolvedOperation,
       playerId: player.id,
       playerName: player.name,

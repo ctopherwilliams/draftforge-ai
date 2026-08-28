@@ -1419,6 +1419,10 @@ function actionExecutionSignature(action) {
     .join(",");
   return [
     action?.commandCenterSessionId || "",
+    action?.dashboardLoadedAt || "",
+    action?.actionId || "",
+    action?.decisionId || "",
+    action?.sourceSnapshotId || "",
     action?.operation || "",
     action?.expectedLeagueId || "",
     Number(action?.expectedTeamId || 0),
