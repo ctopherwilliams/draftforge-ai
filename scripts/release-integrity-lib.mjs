@@ -13,8 +13,8 @@ import {
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export const RELEASE_INTEGRITY_SCHEMA_VERSION = 2;
-export const RELEASE_MANIFEST_PATH = "/draftforge-release-integrity.json";
-export const RELEASE_MANIFEST_FILENAME = RELEASE_MANIFEST_PATH.slice(1);
+export const RELEASE_MANIFEST_PATH = "/api/release-integrity";
+export const RELEASE_MANIFEST_FILENAME = "draftforge-release-integrity.json";
 export const SOURCE_TREE_DOMAIN = "draftforge-source-tree-v1";
 export const CLIENT_ASSET_TREE_DOMAIN = "draftforge-client-assets-v1";
 export const SERVER_ASSET_TREE_DOMAIN = "draftforge-server-assets-v1";

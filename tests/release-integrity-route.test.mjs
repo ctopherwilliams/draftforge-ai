@@ -6,15 +6,21 @@ import test from "node:test";
 import {
   GET,
   serveReleaseIntegrityManifest,
-} from "../app/draftforge-release-integrity.json/route.ts";
+} from "../app/api/release-integrity/route.ts";
 import {
   MAX_SERVED_RELEASE_MANIFEST_BYTES,
   readServedReleaseManifest,
 } from "../app/lib/release-integrity-response.ts";
-import { MAX_RELEASE_MANIFEST_BYTES } from "../scripts/release-integrity-lib.mjs";
+import {
+  MAX_RELEASE_MANIFEST_BYTES,
+  RELEASE_MANIFEST_FILENAME,
+  RELEASE_MANIFEST_PATH,
+} from "../scripts/release-integrity-lib.mjs";
 
-test("route and release verifier enforce the same manifest byte ceiling", () => {
+test("route and release verifier share one bounded API and artifact contract", () => {
   assert.equal(MAX_SERVED_RELEASE_MANIFEST_BYTES, MAX_RELEASE_MANIFEST_BYTES);
+  assert.equal(RELEASE_MANIFEST_PATH, "/api/release-integrity");
+  assert.equal(RELEASE_MANIFEST_FILENAME, "draftforge-release-integrity.json");
 });
 
 test("release integrity route serves the exact bounded post-build manifest", async () => {
@@ -61,7 +67,7 @@ test("release integrity reader fails closed for missing, malformed, empty, and o
 test("release integrity route preserves exact bytes and hardened response headers", async () => {
   const exact = Buffer.from('{"schemaVersion":2}\n');
   const response = await serveReleaseIntegrityManifest(
-    new Request("http://127.0.0.1:3000/draftforge-release-integrity.json"),
+    new Request("http://127.0.0.1:3000/api/release-integrity"),
     async () => new Uint8Array(exact),
   );
   assert.equal(response.status, 200);
@@ -73,7 +79,7 @@ test("release integrity route preserves exact bytes and hardened response header
 });
 
 test("release integrity route rejects query ambiguity and sanitizes artifact failures", async () => {
-  const ambiguous = await GET(new Request("http://127.0.0.1:3000/draftforge-release-integrity.json?cache=old"));
+  const ambiguous = await GET(new Request("http://127.0.0.1:3000/api/release-integrity?cache=old"));
   assert.equal(ambiguous.status, 400);
   assert.deepEqual(await ambiguous.json(), {
     ok: false,
@@ -81,7 +87,7 @@ test("release integrity route rejects query ambiguity and sanitizes artifact fai
   });
 
   const unavailable = await serveReleaseIntegrityManifest(
-    new Request("http://127.0.0.1:3000/draftforge-release-integrity.json"),
+    new Request("http://127.0.0.1:3000/api/release-integrity"),
     async () => { throw new Error("sensitive local path"); },
   );
   assert.equal(unavailable.status, 503);

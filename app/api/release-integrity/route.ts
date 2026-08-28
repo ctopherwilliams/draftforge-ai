@@ -1,6 +1,6 @@
 import {
   readServedReleaseManifest,
-} from "../lib/release-integrity-response.ts";
+} from "../../lib/release-integrity-response.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -27,12 +27,14 @@ export async function serveReleaseIntegrityManifest(
 
   try {
     const bytes = await readManifest();
-    return new Response(bytes, {
+    const body = new Uint8Array(bytes.byteLength);
+    body.set(bytes);
+    return new Response(body.buffer, {
       status: 200,
       headers: {
         "Cache-Control": "no-store",
         "Content-Type": "application/json; charset=utf-8",
-        "Content-Length": String(bytes.byteLength),
+        "Content-Length": String(body.byteLength),
         "X-Content-Type-Options": "nosniff",
       },
     });
