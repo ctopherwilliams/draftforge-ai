@@ -101,10 +101,26 @@ export function isIntelligenceSourceFresh(source: IntelligenceSource, evaluatedA
     source.coverage.players < MIN_SOURCE_PLAYER_COVERAGE
     || !REQUIRED_SOURCE_POSITIONS.every((position) => source.coverage?.corePositions.includes(position))
   )) return false;
-  const timestamp = source.updatedAt || source.retrievedAt;
+  // MFL's rolling ADP/AAV endpoints do not publish an underlying-data
+  // timestamp, so a successful query receipt is its honest freshness proof.
+  // Every other production provider must supply provider-authored update time;
+  // a recent HTTP retrieval may never launder missing or stale source truth.
+  const timestamp = source.id === "mfl"
+    ? source.updatedAt || source.retrievedAt
+    : source.updatedAt;
   if (!timestamp) return !source.coverage;
   const age = new Date(evaluatedAt).getTime() - new Date(timestamp).getTime();
   return Number.isFinite(age) && age >= -MAX_SOURCE_CLOCK_SKEW_MS && age <= MAX_SOURCE_AGE_MS;
+}
+
+export function filterFreshIntelligenceSources(
+  sources: IntelligenceSource[],
+  evaluatedAt: string | number | Date = Date.now(),
+) {
+  // Keep the evaluation instant explicit. Passing isIntelligenceSourceFresh
+  // directly to Array.filter would supply the array index as its second
+  // argument and turn otherwise healthy providers into false future data.
+  return sources.filter((source) => isIntelligenceSourceFresh(source, evaluatedAt));
 }
 
 export function isCompleteFreshIntelligenceSnapshot(

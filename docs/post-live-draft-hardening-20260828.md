@@ -59,6 +59,8 @@ Tradyr changed its access policy on 2026-08-15. Unkeyed bulk responses are cappe
 
 Source readiness binds content, not only five provider names. WARM and the active audit must publish the same exact scoring/team-count/season/QB profile, canonical UTC generation timestamp, and lowercase `sha256:<64 hex>` snapshot ID. The server retains a bounded fresh snapshot set and uses the exact retained tuple without refetching providers during doctor verification. A stale/malformed timestamp, wrong profile, unknown digest, or schema-v1 capture fails. The production supervisor also gives each server child a monotonic instance-start timestamp; a dashboard loaded before that server instance is rejected until it reloads and republishes.
 
+Dashboard source health now evaluates every provider against one explicit wall-clock instant. The prior `Array.filter` callback accidentally passed each array index as the freshness timestamp, so a valid server-accepted 5/5 envelope rendered as 1/5 and could never publish a valid audit. The shared callback-safe helper and dashboard regression test close that authorization/presentation split without changing source weights or freshness limits.
+
 ## Release evidence
 
 Historical pre-final-gate evidence retained from the earlier candidate:
@@ -85,7 +87,7 @@ Historical v0.2.27 post-fix synthetic evidence:
 Final v0.2.28 local mechanics evidence:
 
 - package identity: 18 source files; unpacked-source SHA-256 `e253c4dac6bacf791bc15cc729a6229e42ef5c0f7708ae9bfca4f64c52f21074`; ZIP SHA-256 `4f0d8d06146fe58f2388b180a8b600332d11c33d9f4900450f2425c9c9374a79`;
-- `npm test`: 606/606 after typecheck and production build, including 20 complete deterministic snake drafts and 20 complete deterministic salary-cap drafts;
+- `npm test`: 609/609 after typecheck and production build, including 20 complete deterministic snake drafts and 20 complete deterministic salary-cap drafts;
 - `npm run test:live-control`: 424/424;
 - focused action-authorization suite: 135/135;
 - production path: 82/82 exact acknowledgments with action p99 468.31 ms;

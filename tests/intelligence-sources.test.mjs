@@ -16,6 +16,7 @@ import {
 } from "../app/lib/intelligence-sources.ts";
 import { GET as GET_INTELLIGENCE } from "../app/api/intelligence/route.ts";
 import {
+  filterFreshIntelligenceSources,
   intelligenceSnapshotCacheKey,
   isCompleteFreshIntelligenceSnapshot,
   isIntelligenceSourceFresh,
@@ -79,6 +80,32 @@ test("a decision-time intelligence snapshot requires every distinct fresh source
   assert.equal(isCompleteFreshIntelligenceSnapshot([
     source("ffc"), source("mfl", { updatedAt: "2026-08-15T09:00:00.000Z" }), source("tradyr"), source("gng"),
   ], evaluatedAt), false, "future-dated source truth must fail closed");
+});
+
+test("dashboard freshness filtering keeps one explicit evaluation instant", () => {
+  assert.deepEqual(
+    filterFreshIntelligenceSources(completeSnapshot, evaluatedAt),
+    completeSnapshot,
+    "Array.filter indexes must never be interpreted as source evaluation timestamps",
+  );
+  assert.equal(
+    completeSnapshot.filter(isIntelligenceSourceFresh).length,
+    0,
+    "this reproduces the callback-arity failure the explicit helper prevents",
+  );
+});
+
+test("only MFL may use a current rolling-query receipt when provider update time is unavailable", () => {
+  const coverage = { players: 100, corePositions: ["QB", "RB", "WR", "TE"] };
+  const receiptOnly = { updatedAt: null, retrievedAt: evaluatedAt, coverage };
+  assert.equal(isIntelligenceSourceFresh(source("mfl", receiptOnly), evaluatedAt), true);
+  for (const id of ["ffc", "tradyr", "gng"]) {
+    assert.equal(
+      isIntelligenceSourceFresh(source(id, receiptOnly), evaluatedAt),
+      false,
+      `${id} must fail closed without provider-authored update time`,
+    );
+  }
 });
 
 test("a degraded HTTP 200 refresh cannot replace the last complete snapshot", () => {

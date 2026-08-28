@@ -133,6 +133,8 @@ test("dashboard retains the server source identity atomically and never synthesi
   assert.match(page, /deferredIntelligenceSnapshotRef/);
   assert.match(page, /INTELLIGENCE_REFRESH_MS = 4 \* 60 \* 1000 \+ 15 \* 1000/);
   assert.match(page, /INTELLIGENCE_REFRESH_TIMEOUT_MS/);
+  assert.match(page, /filterFreshIntelligenceSources\(sources, sourceFreshnessEvaluatedAt\)/);
+  assert.doesNotMatch(page, /sources\.filter\(isIntelligenceSourceFresh\)/);
   assert.doesNotMatch(page, /liveSourceSnapshotId|Math\.imul\(hash|sources-\$\{/);
 
   assert.match(route, /sourceSnapshotId: intelligence\.sourceSnapshotId/g);
