@@ -5,13 +5,15 @@ import test from "node:test";
 
 const contentUrl = new URL("../extension/espn-content.js", import.meta.url);
 
-async function loadDraftContext({ text, clockTeam, clockOwnMarker = false, ownTeam, ownAuctionTeam, ownAuctionSelecting = false, nominationTurnEndsAfterSelect = false, nominationConfirmationDelayMs = null, mandatoryPositionFilterDelayMs = null, maximumOffer, nominatedPlayer, waitingTeamId, availableIds = [], snakeHistory = [], selectPlayer, bidAmount, bidControlDelayMs = 0, autopickActive = false, autopickControlVisible = false, soundMuted = true, href = "https://fantasy.espn.com/football/draft?leagueId=701&teamId=5" }) {
+async function loadDraftContext({ text, staleBidText = "", clockTeam, clockDisplay = null, clockOwnMarker = false, ownTeam, ownAuctionTeam, ownAuctionSelecting = false, nominationTurnEndsAfterSelect = false, nominationConfirmationDelayMs = null, nominationAcknowledged = true, nominationAcknowledgementDelayMs = 0, nominationAcknowledgedAmount = 1, mandatoryPositionFilterDelayMs = null, maximumOffer, nominatedPlayer, nominatedPlayerId = null, waitingTeamId, availableIds = [], snakeHistory = [], selectPlayer, selectRosterConfirmed = true, bidAmount, bidControlVisible = true, bidControlDelayMs = 0, customBidForm = false, customBidAcceptsAmount = true, customBidActsAsNomination = false, customBidDriftsAfterReads = null, bidAcknowledged = true, bidAcknowledgementDelayMs = 0, leadingBid = false, leadingBidAfterMs = null, opponentLeadingProof = true, modalConfirmations = [], autopickActive = false, autopickControlVisible = true, autopickEnableControlVisible = false, soundMuted = true, href = "https://fantasy.espn.com/football/draft?leagueId=701&teamId=5&seasonId=2026" }) {
   const source = await readFile(contentUrl, "utf8");
   const runtimeStart = source.indexOf("chrome.runtime.onMessage.addListener");
   assert.ok(runtimeStart > 0, "content script should expose a Chrome message listener");
 
+  let visibleClock = clockDisplay || text.match(/\b\d{1,2}:\d{2}\b/)?.[0] || "";
+  let simulatedNominatedPlayer = nominatedPlayer;
   const clockNode = clockTeam ? {
-    textContent: "On the Clock: Pick 47",
+    textContent: `On the Clock: Pick 47 ${visibleClock}`,
     closest: (selector) => {
       if (selector === ".current-pick-module-container") {
         return { querySelector: (childSelector) => childSelector === ".team-name" ? { textContent: clockTeam } : null };
@@ -23,8 +25,20 @@ async function loadDraftContext({ text, clockTeam, clockOwnMarker = false, ownTe
   const ownAuctionParent = {};
   const ownAuctionNode = ownAuctionTeam ? { closest: (selector) => selector === ".auction-pick-component" ? ownAuctionParent : null } : null;
   const selectingAuctionNode = ownAuctionSelecting ? { closest: (selector) => selector === ".auction-pick-component" ? ownAuctionParent : null } : null;
-  const actionState = { selected: false, selectedAt: 0, selectClicks: 0, nominationClicks: 0, bidClicks: 0, autopickDisableClicks: 0 };
+  let currentHref = href;
+  const actionState = { selected: false, selectedAt: 0, selectClicks: 0, nominationClicks: 0, nominationClickedAt: 0, bidClicks: 0, bidClickedAt: 0, autopickDisableClicks: 0, modalClicks: 0, customSurfaceReads: 0 };
+  class TestInputElement {
+    constructor() {
+      this._value = "";
+      this.disabled = false;
+    }
+    get value() { return this._value; }
+    set value(value) { if (customBidAcceptsAmount) this._value = String(value); }
+    dispatchEvent() {}
+    getClientRects() { return [{ width: 1, height: 1 }]; }
+  }
   let simulatedAutopickActive = autopickActive || /you(?:'|’)re on autopick/i.test(text);
+  const roomLoadedAt = Date.now();
   const bidControlAvailableAt = Date.now() + bidControlDelayMs;
   let mandatoryPositionFilterActivatedAt = 0;
   let mandatoryPositionFilterValue = "-1";
@@ -102,17 +116,71 @@ async function loadDraftContext({ text, clockTeam, clockOwnMarker = false, ownTe
     },
     querySelectorAll: () => [],
   } : null;
-  const bidControl = bidAmount ? {
+  const bidControl = bidAmount && bidControlVisible ? {
     textContent: `Offer $${bidAmount}`,
     disabled: false,
-    click() { actionState.bidClicks += 1; },
+    click() { actionState.bidClicks += 1; actionState.bidClickedAt = Date.now(); },
     getClientRects: () => [{ width: 1, height: 1 }],
     getAttribute: () => null,
   } : null;
+  const customBidInput = customBidForm ? new TestInputElement() : null;
+  const customBidSubmit = customBidForm ? {
+    textContent: "Place Bid",
+    disabled: false,
+    click() {
+      if (customBidActsAsNomination) {
+        actionState.nominationClicks += 1;
+        actionState.nominationClickedAt = Date.now();
+      } else {
+        actionState.bidClicks += 1;
+        actionState.bidClickedAt = Date.now();
+      }
+    },
+    getClientRects: () => [{ width: 1, height: 1 }],
+    getAttribute: () => null,
+  } : null;
+  const customBidContainer = customBidForm ? {
+    getClientRects: () => [{ width: 1, height: 1 }],
+    querySelector(selector) {
+      return selector === "#bid__input, input[type='number']" ? customBidInput : null;
+    },
+    querySelectorAll(selector) {
+      if (selector === "button, [role='button']") return [customBidSubmit];
+      if (selector === "#bid__input, input[type='number']") {
+        actionState.customSurfaceReads += 1;
+        if (customBidDriftsAfterReads !== null && actionState.customSurfaceReads >= customBidDriftsAfterReads) customBidInput._value = "";
+        return [customBidInput];
+      }
+      return [];
+    },
+  } : null;
+  const confirmationDialogs = modalConfirmations.map((modal) => {
+    const identityNode = {
+      textContent: modal.playerName || "",
+      getAttribute(name) {
+        return ["data-player-id", "data-playerid"].includes(name) && modal.playerId ? String(modal.playerId) : null;
+      },
+    };
+    const buttons = Array.from({ length: Number(modal.buttons ?? 1) }, () => ({
+      textContent: modal.buttonText || "Confirm",
+      disabled: false,
+      click() { actionState.modalClicks += 1; },
+      getClientRects: () => modal.visible === false ? [] : [{ width: 1, height: 1 }],
+    }));
+    return {
+      textContent: `${modal.playerName || ""} ${modal.amount ? `$${modal.amount}` : ""}`,
+      getClientRects: () => modal.visible === false ? [] : [{ width: 1, height: 1 }],
+      querySelectorAll(selector) {
+        if (selector === "button, [role='button']") return buttons;
+        if (selector.includes("[data-player-id]")) return [identityNode];
+        return [];
+      },
+    };
+  });
   const nominationControl = nominationConfirmationDelayMs !== null ? {
     textContent: "Nominate Player",
     disabled: false,
-    click() { actionState.nominationClicks += 1; },
+    click() { actionState.nominationClicks += 1; actionState.nominationClickedAt = Date.now(); },
     getClientRects: () => [{ width: 1, height: 1 }],
     getAttribute: () => null,
   } : null;
@@ -120,6 +188,13 @@ async function loadDraftContext({ text, clockTeam, clockOwnMarker = false, ownTe
     textContent: "",
     disabled: false,
     click() { actionState.autopickDisableClicks += 1; simulatedAutopickActive = false; },
+    getClientRects: () => [{ width: 1, height: 1 }],
+    getAttribute: () => null,
+  } : null;
+  const enableAutopickControl = autopickEnableControlVisible ? {
+    textContent: "Enable Autopick",
+    disabled: false,
+    click() {},
     getClientRects: () => [{ width: 1, height: 1 }],
     getAttribute: () => null,
   } : null;
@@ -137,18 +212,41 @@ async function loadDraftContext({ text, clockTeam, clockOwnMarker = false, ownTe
   } : null;
   const document = {
     body: { get innerText() {
-      const currentText = nominationTurnEndsAfterSelect && actionState.selected ? "PK 12 OF 128\n00:20\nOther team is nominating" : text;
-      return simulatedAutopickActive ? `${currentText}\nYou're on Autopick` : currentText.replace(/you(?:'|’)re on autopick/ig, "");
+      let currentText = nominationTurnEndsAfterSelect && actionState.selected ? "PK 12 OF 128\n00:20\nOther team is nominating" : text;
+      const bidConfirmed = bidAcknowledged && actionState.bidClickedAt > 0 && Date.now() - actionState.bidClickedAt >= bidAcknowledgementDelayMs;
+      const nominationConfirmed = nominationAcknowledged && actionState.nominationClickedAt > 0 && Date.now() - actionState.nominationClickedAt >= nominationAcknowledgementDelayMs;
+      if (bidConfirmed) {
+        currentText = currentText.replace(/current (?:bid|offer)\s*:\s*\$?\s*\d+/i, `Current Bid: $${bidAmount}`);
+      }
+      if (nominationConfirmed && !/current (?:bid|offer)/i.test(currentText)) {
+        currentText += `\nCurrent Bid: $${nominationAcknowledgedAmount}`;
+      }
+      const becameLeading = leadingBidAfterMs !== null && Date.now() - roomLoadedAt >= leadingBidAfterMs;
+      if (leadingBid || becameLeading || bidConfirmed) currentText += "\nYou're the high bidder";
+      if (staleBidText) currentText += `\n${staleBidText}`;
+      currentText = simulatedAutopickActive ? `${currentText}\nYou're on Autopick` : currentText.replace(/you(?:'|’)re on autopick/ig, "");
+      return currentText;
     } },
     querySelector(selector) {
       if (selector === ".on-the-clock") return clockNode;
+      if (selector === ".draft-timer") return !clockNode && visibleClock ? { textContent: visibleClock } : null;
       if (selector === ".pick-queue__header .autoPick-toggle") return autopickContainer;
+      if (selector === ".bidding-form__custom") return customBidContainer;
       if (selector === ".pick-component.own-pick .team-name") return ownTeam ? { textContent: ownTeam } : null;
       if (selector === ".auction-pick-component--own .team-name") return ownAuctionTeam ? { textContent: `5. ${ownAuctionTeam}` } : null;
       if (selector === ".auction-pick-component--own") return ownAuctionNode;
       if (selector === ".auction-pick-component--selecting") return nominationTurnEndsAfterSelect && actionState.selected ? null : selectingAuctionNode;
       if (selector === "[data-testid='player-selected'] .playerinfo__playername") {
-        return nominatedPlayer ? { textContent: nominatedPlayer, closest: () => null } : null;
+        const nominationConfirmed = nominationAcknowledged && actionState.nominationClickedAt > 0 && Date.now() - actionState.nominationClickedAt >= nominationAcknowledgementDelayMs;
+        const liveNominee = simulatedNominatedPlayer || (nominationConfirmed ? selectPlayer?.name : null);
+        return liveNominee ? {
+          textContent: liveNominee,
+          closest: () => ({
+            querySelector() {
+              return nominatedPlayerId ? { getAttribute: (name) => ["data-player-id", "data-playerid"].includes(name) ? String(nominatedPlayerId) : null } : null;
+            },
+          }),
+        } : null;
       }
       return null;
     },
@@ -156,6 +254,20 @@ async function loadDraftContext({ text, clockTeam, clockOwnMarker = false, ownTe
       if (selector === ".draft-header .icon-wrapper use") return [{
         getAttribute: (name) => name === "href" ? `#icon__controls__volume_${soundMuted ? "mute" : "up"}` : null,
       }];
+      if (selector === ".bidding-form__custom") return customBidContainer ? [customBidContainer] : [];
+      if (selector === "[data-testid*='high-bidder' i], [class*='high-bidder' i], [aria-label*='high bidder' i]") {
+        const bidConfirmed = bidAcknowledged && actionState.bidClickedAt > 0 && Date.now() - actionState.bidClickedAt >= bidAcknowledgementDelayMs;
+        const becameLeading = leadingBidAfterMs !== null && Date.now() - roomLoadedAt >= leadingBidAfterMs;
+        const leader = leadingBid || becameLeading || bidConfirmed
+          ? ownAuctionTeam
+          : (opponentLeadingProof ? "Rival Team" : null);
+        return leader ? [{
+          textContent: `High bidder: ${leader}`,
+          getClientRects: () => [{ width: 1, height: 1 }],
+          getAttribute: () => null,
+        }] : [];
+      }
+      if (selector === "[role='dialog'], [aria-modal='true'], [class*='modal' i]") return confirmationDialogs;
       if (selector === "[role='grid'] [role='row']") return [
         ...(surfaceRow ? [surfaceRow] : []),
         ...(playerRow && mandatoryPositionPlayerVisible() ? [playerRow] : []),
@@ -164,11 +276,12 @@ async function loadDraftContext({ text, clockTeam, clockOwnMarker = false, ownTe
       if (selector === "select") return mandatoryPositionFilter ? [mandatoryPositionFilter] : [];
       if (selector === "button, [role='button']") {
         const controls = [];
+        if (enableAutopickControl) controls.push(enableAutopickControl);
         if (nominationControl && actionState.selected && Date.now() - actionState.selectedAt >= nominationConfirmationDelayMs) controls.push(nominationControl);
         if (bidControl && Date.now() >= bidControlAvailableAt) controls.push(bidControl);
         return controls;
       }
-      if (selector === "[class*='roster' i] tr") return actionState.selected && rosterRow ? [rosterRow] : [];
+      if (selector === "[class*='roster' i] tr") return selectRosterConfirmed && actionState.selected && rosterRow ? [rosterRow] : [];
       if (selector === "a[href*='teamId=']") {
         return waitingTeamId ? [{ textContent: "Edit Team Settings", getAttribute: () => `/football/team?leagueId=701&teamId=${waitingTeamId}` }] : [];
       }
@@ -204,10 +317,11 @@ async function loadDraftContext({ text, clockTeam, clockOwnMarker = false, ownTe
   const sandbox = {
     URL,
     document,
-    window: { location: { href } },
+    window: { location: { get href() { return currentHref; } } },
     setTimeout,
     clearTimeout,
-    HTMLInputElement: class HTMLInputElement {},
+    requestAnimationFrame: (callback) => setTimeout(() => callback(Date.now()), 16),
+    HTMLInputElement: TestInputElement,
     CSS: { escape: (value) => String(value) },
     Event: class Event {},
   };
@@ -223,13 +337,19 @@ async function loadDraftContext({ text, clockTeam, clockOwnMarker = false, ownTe
     snakePoolStable: sandbox.snakePoolStable,
     nominationStarted: sandbox.nominationStarted,
     updateSales: sandbox.updateSales,
-    executeAction: sandbox.executeDraftAction,
+    readContext: sandbox.readDraftContext,
+    executeAction: (action) => sandbox.executeDraftAction({ commandCenterSessionId: "test-command-center", ...action }),
     disableAutopick: sandbox.disableDraftAutopick,
     candidateSearchPlan: sandbox.planCandidateSearch,
     playerResolutionPlan: sandbox.planPlayerResolution,
     mandatoryPositionPlan: sandbox.planMandatoryPosition,
     availableSnakeCandidates: sandbox.pruneSnakeCandidates,
     actionState,
+    setAuctionOffer({ playerName, clock }) {
+      simulatedNominatedPlayer = playerName;
+      visibleClock = clock;
+    },
+    setRoomUrl(url) { currentHref = url; },
   };
 }
 
@@ -355,6 +475,31 @@ test("short, unknown, or another team's ESPN clock is not actionable", async () 
   assert.equal(unknown.hasSafeWindow(unknown.context), false);
 });
 
+test("unrelated body timers cannot override the scoped ESPN draft clock", async () => {
+  const room = await loadDraftContext({
+    text: "ADVERTISEMENT 99:59\nRND 5 OF 16\n00:12\nON THE CLOCK: PICK 47\nUs",
+    clockDisplay: "00:12",
+    clockTeam: "Us",
+    ownTeam: "Us",
+  });
+  assert.equal(room.context.remainingSeconds, 12);
+  assert.notEqual(room.context.draftClockSource, null);
+});
+
+test("auction clock monotonicity binds to the exact nominee and offer identity", async () => {
+  const room = await loadDraftContext({
+    text: "PK 11 OF 128\n00:05\nCurrent Bid: $1",
+    clockDisplay: "00:05",
+    nominatedPlayer: "First Nominee",
+  });
+
+  assert.equal(room.context.remainingSeconds, 5);
+  room.setAuctionOffer({ playerName: "First Nominee", clock: "00:10" });
+  assert.equal(room.readContext().remainingSeconds, null, "the same offer cannot jump upward");
+  room.setAuctionOffer({ playerName: "Second Nominee", clock: "00:10" });
+  assert.equal(room.readContext().remainingSeconds, 10, "a consecutive $1 offer for a different nominee accepts its reset");
+});
+
 test("hidden generic clock copy cannot override the exact opponent clock", async () => {
   const room = await loadDraftContext({
     text: "RND 16 OF 16\n00:20\nYou're on the clock\nON THE CLOCK: PICK 153\nOther Team",
@@ -435,6 +580,60 @@ test("active ESPN Autopick is authoritative and closes the action window", async
   assert.equal(autopick.hasSafeWindow(autopick.context), false);
 });
 
+test("Autopick absence is unknown and locks every draft action", async () => {
+  const room = await loadDraftContext({
+    text: "RND 5 OF 16\n00:20\nON THE CLOCK: PICK 47",
+    clockTeam: "Us",
+    ownTeam: "Us",
+    autopickControlVisible: false,
+    selectPlayer: { id: 12345, name: "Exact Player" },
+  });
+
+  assert.equal(room.context.autopickActive, null);
+  assert.equal(room.context.actionSurfaceReady, false);
+  assert.equal(room.hasSafeWindow(room.context), false);
+  const result = await room.executeAction({
+    operation: "SELECT",
+    playerId: 12345,
+    playerName: "Exact Player",
+    candidates: [{ playerId: 12345, playerName: "Exact Player" }],
+    expectedLeagueId: "701",
+    expectedPick: 47,
+  });
+  assert.equal(result.code, "AUTOPICK_STATE_UNKNOWN");
+  assert.equal(room.actionState.selectClicks, 0);
+  assert.equal((await room.disableAutopick({ expectedLeagueId: "701" })).code, "AUTOPICK_STATE_UNKNOWN");
+});
+
+test("an exact visible unchecked ESPN toggle is authoritative Autopick-off proof", async () => {
+  const room = await loadDraftContext({
+    text: "RND 5 OF 16\n00:20\nON THE CLOCK: PICK 47",
+    clockTeam: "Us",
+    ownTeam: "Us",
+    autopickControlVisible: true,
+  });
+
+  assert.equal(room.context.autopickActive, false);
+  assert.equal(room.hasSafeWindow(room.context), true);
+  assert.equal((await room.disableAutopick({ expectedLeagueId: "701" })).code, "AUTOPICK_ALREADY_OFF");
+});
+
+test("contradictory visible Autopick controls are unknown and fail closed", async () => {
+  const room = await loadDraftContext({
+    text: "RND 5 OF 16\n00:20\nON THE CLOCK: PICK 47\nYou're on Autopick",
+    clockTeam: "Us",
+    ownTeam: "Us",
+    autopickActive: true,
+    autopickControlVisible: true,
+    autopickEnableControlVisible: true,
+  });
+
+  assert.equal(room.context.autopickActive, null);
+  assert.equal(room.hasSafeWindow(room.context), false);
+  assert.equal((await room.disableAutopick({ expectedLeagueId: "701" })).code, "AUTOPICK_STATE_UNKNOWN");
+  assert.equal(room.actionState.autopickDisableClicks, 0);
+});
+
 test("Autopick recovery clicks only the exact visible disable control in the exact league", async () => {
   const room = await loadDraftContext({
     text: "RND 16 OF 16\n00:12\nON THE CLOCK: PICK 153",
@@ -476,6 +675,7 @@ test("Autopick recovery fails closed for another league or a missing exact contr
     clockTeam: "Us",
     clockOwnMarker: true,
     autopickActive: true,
+    autopickControlVisible: false,
   });
 
   assert.equal((await wrongLeague.disableAutopick({ expectedLeagueId: "702" })).code, "WRONG_LEAGUE");
@@ -524,6 +724,7 @@ test("a nomination turn that advances before confirmation is retriable", async (
     playerName: "Exact Player",
     candidates: [{ playerId: 12345, playerName: "Exact Player" }],
     amount: 1,
+    nominationIntent: "TARGET",
     expectedLeagueId: "701",
   });
 
@@ -545,12 +746,57 @@ test("salary-cap nomination waits once for ESPN's late confirmation control", as
     playerName: "Exact Player",
     candidates: [{ playerId: 12345, playerName: "Exact Player" }],
     amount: 1,
+    nominationIntent: "TARGET",
     expectedLeagueId: "701",
   });
 
-  assert.equal(result.code, "SUBMITTED");
+  assert.equal(result.code, "NOMINATION_CONFIRMED");
   assert.equal(room.actionState.selectClicks, 1);
   assert.equal(room.actionState.nominationClicks, 1);
+});
+
+test("salary-cap nomination proves the exact custom opening price and acknowledgement", async () => {
+  const exact = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nYour turn to nominate a player!\nSelect a player below to nominate",
+    ownAuctionTeam: "Us",
+    ownAuctionSelecting: true,
+    maximumOffer: 150,
+    selectPlayer: { id: 12345, name: "Exact Player" },
+    nominationConfirmationDelayMs: 10_000,
+    nominationAcknowledgedAmount: 2,
+    customBidForm: true,
+    customBidActsAsNomination: true,
+  });
+  const wrongAcknowledgement = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nYour turn to nominate a player!\nSelect a player below to nominate",
+    ownAuctionTeam: "Us",
+    ownAuctionSelecting: true,
+    maximumOffer: 150,
+    selectPlayer: { id: 12345, name: "Exact Player" },
+    nominationConfirmationDelayMs: 10_000,
+    nominationAcknowledgedAmount: 1,
+    customBidForm: true,
+    customBidActsAsNomination: true,
+  });
+  const action = {
+    operation: "NOMINATE",
+    playerId: 12345,
+    playerName: "Exact Player",
+    candidates: [{ playerId: 12345, playerName: "Exact Player" }],
+    amount: 2,
+    nominationIntent: "TARGET",
+    expectedLeagueId: "701",
+  };
+
+  const exactResult = await exact.executeAction({ ...action, actionRequestId: 7401 });
+  const wrongResult = await wrongAcknowledgement.executeAction({ ...action, actionRequestId: 7402 });
+
+  assert.equal(exactResult.code, "NOMINATION_CONFIRMED");
+  assert.equal(exact.actionState.nominationClicks, 1);
+  assert.equal(wrongResult.code, "NOMINATION_ACK_UNCERTAIN");
+  assert.equal(wrongResult.clicked, true);
+  assert.equal(wrongResult.retryable, false);
+  assert.equal(wrongAcknowledgement.actionState.nominationClicks, 1);
 });
 
 test("salary-cap nomination still fails closed when confirmation never appears", async () => {
@@ -568,6 +814,7 @@ test("salary-cap nomination still fails closed when confirmation never appears",
     playerName: "Exact Player",
     candidates: [{ playerId: 12345, playerName: "Exact Player" }],
     amount: 1,
+    nominationIntent: "TARGET",
     expectedLeagueId: "701",
   });
 
@@ -652,6 +899,85 @@ test("salary-cap tracking survives a transient blank budget surface between nomi
   assert.equal(secondSettlement.auctionSales[1].sequence, 2);
 });
 
+test("SPA navigation resets auction sales and clock state for the exact new draft namespace", async () => {
+  const room = await loadDraftContext({
+    text: "PK 11 OF 128\n00:14\nCurrent Bid: $45",
+    clockDisplay: "00:14",
+    nominatedPlayer: "First Room Player",
+    href: "https://fantasy.espn.com/football/draft?leagueId=701&teamId=5&seasonId=2026&draftId=room-one",
+  });
+  room.updateSales({
+    nominatedPlayer: "First Room Player",
+    nominatedPlayerId: 111,
+    currentBid: 45,
+    auctionBudgets: [
+      { teamName: "Us", remaining: 200, maxOffer: 185 },
+      { teamName: "Rival", remaining: 200, maxOffer: 185 },
+    ],
+  });
+  const settled = room.updateSales({
+    nominatedPlayer: null,
+    currentBid: 0,
+    auctionBudgets: [
+      { teamName: "Us", remaining: 155, maxOffer: 141 },
+      { teamName: "Rival", remaining: 200, maxOffer: 185 },
+    ],
+  });
+  assert.equal(settled.auctionSales.length, 1);
+  room.updateSales({
+    nominatedPlayer: "Unsettled First Room Player",
+    nominatedPlayerId: 112,
+    currentBid: 12,
+    auctionBudgets: [
+      { teamName: "Us", remaining: 155, maxOffer: 141 },
+      { teamName: "Rival", remaining: 200, maxOffer: 185 },
+    ],
+  });
+
+  room.setRoomUrl("https://fantasy.espn.com/football/draft?leagueId=702&teamId=6&seasonId=2026&draftId=room-two");
+  room.setAuctionOffer({ playerName: "Second Room Player", clock: "00:20" });
+  const secondRoom = room.readContext();
+  assert.equal(secondRoom.leagueId, "702");
+  assert.equal(secondRoom.teamId, 6);
+  assert.equal(secondRoom.remainingSeconds, 20, "the new room accepts its own clock reset");
+  const secondOffer = room.updateSales({
+    nominatedPlayer: "Second Room Player",
+    nominatedPlayerId: 222,
+    currentBid: 45,
+    auctionBudgets: [
+      { teamName: "Us", remaining: 200, maxOffer: 185 },
+      { teamName: "Rival", remaining: 200, maxOffer: 185 },
+    ],
+  });
+  assert.equal(secondOffer.auctionSales.length, 0, "the first room's completed sales never cross the namespace");
+});
+
+test("salary-cap sale history stays bounded within a long draft room", async () => {
+  const room = await loadDraftContext({ text: "PK 1 OF 400\n00:20" });
+  let result;
+  for (let index = 1; index <= 270; index += 1) {
+    room.updateSales({
+      nominatedPlayer: `Player ${index}`,
+      nominatedPlayerId: index,
+      currentBid: 1,
+      auctionBudgets: [
+        { teamName: "Us", remaining: 500 - index, maxOffer: 400 - index },
+        { teamName: "Rival", remaining: 500, maxOffer: 400 },
+      ],
+    });
+    result = room.updateSales({
+      nominatedPlayer: null,
+      currentBid: 0,
+      auctionBudgets: [
+        { teamName: "Us", remaining: 499 - index, maxOffer: 399 - index },
+        { teamName: "Rival", remaining: 500, maxOffer: 400 },
+      ],
+    });
+  }
+  assert.equal(result.auctionSales.length, 256);
+  assert.equal(result.auctionSales.at(-1).sequence, 270);
+});
+
 test("draft actions fail closed before resolving or clicking a player control", async () => {
   const wrongLeague = await loadDraftContext({
     text: "RND 5 OF 16\n00:20\nON THE CLOCK: PICK 47",
@@ -691,6 +1017,7 @@ test("salary-cap actions reject a mismatched nominee before searching for a bid 
     ownAuctionSelecting: true,
     maximumOffer: 150,
     nominatedPlayer: "Other Player",
+    bidAmount: 28,
   });
   const result = await room.executeAction({
     operation: "BID",
@@ -703,6 +1030,29 @@ test("salary-cap actions reject a mismatched nominee before searching for a bid 
   });
 
   assert.equal(result.code, "NOMINEE_MISMATCH");
+});
+
+test("salary-cap bid identity is ID-first and rejects colliding player names without clicking", async () => {
+  const room = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
+    ownAuctionTeam: "Us",
+    maximumOffer: 150,
+    nominatedPlayer: "Expected Player Jr.",
+    nominatedPlayerId: 222,
+    bidAmount: 28,
+  });
+  const result = await room.executeAction({
+    operation: "BID",
+    playerId: 111,
+    playerName: "Expected Player",
+    expectedLeagueId: "701",
+    expectedCurrentBid: 27,
+    amount: 28,
+    maxApprovedBid: 35,
+  });
+
+  assert.equal(result.code, "NOMINEE_MISMATCH");
+  assert.equal(room.actionState.bidClicks, 0);
 });
 
 test("salary-cap nomination cannot fire while ESPN already has an active offer", async () => {
@@ -720,6 +1070,7 @@ test("salary-cap nomination cannot fire while ESPN already has an active offer",
     playerName: "Next Target",
     candidates: [{ playerId: 12345, playerName: "Next Target" }],
     amount: 1,
+    nominationIntent: "TARGET",
     expectedLeagueId: "701",
   });
 
@@ -747,6 +1098,82 @@ test("an exact snake player control is clicked and confirmed from ESPN's roster"
   assert.equal(room.actionState.selectClicks, 1);
 });
 
+test("only one visible modal scoped to the exact player can receive confirmation", async () => {
+  const exact = await loadDraftContext({
+    text: "RND 5 OF 16\n00:20\nON THE CLOCK: PICK 47",
+    clockTeam: "Us",
+    ownTeam: "Us",
+    selectPlayer: { id: 12345, name: "Exact Player" },
+    modalConfirmations: [{ visible: true, playerId: 12345, playerName: "Exact Player" }],
+  });
+  const stale = await loadDraftContext({
+    text: "RND 5 OF 16\n00:20\nON THE CLOCK: PICK 47",
+    clockTeam: "Us",
+    ownTeam: "Us",
+    selectPlayer: { id: 12345, name: "Exact Player" },
+    modalConfirmations: [
+      { visible: false, playerId: 12345, playerName: "Exact Player" },
+      { visible: true, playerId: 99999, playerName: "Stale Player" },
+    ],
+  });
+  const ambiguous = await loadDraftContext({
+    text: "RND 5 OF 16\n00:20\nON THE CLOCK: PICK 47",
+    clockTeam: "Us",
+    ownTeam: "Us",
+    selectPlayer: { id: 12345, name: "Exact Player" },
+    modalConfirmations: [
+      { visible: true, playerId: 12345, playerName: "Exact Player" },
+      { visible: true, playerId: 12345, playerName: "Exact Player" },
+    ],
+  });
+  const action = {
+    operation: "SELECT",
+    playerId: 12345,
+    playerName: "Exact Player",
+    candidates: [{ playerId: 12345, playerName: "Exact Player" }],
+    expectedLeagueId: "701",
+    expectedPick: 47,
+  };
+
+  assert.equal((await exact.executeAction({ ...action, actionRequestId: 7601 })).code, "ROSTER_CONFIRMED");
+  assert.equal((await stale.executeAction({ ...action, actionRequestId: 7602 })).code, "ROSTER_CONFIRMED");
+  assert.equal((await ambiguous.executeAction({ ...action, actionRequestId: 7603 })).code, "ROSTER_CONFIRMED");
+  assert.equal(exact.actionState.modalClicks, 1);
+  assert.equal(stale.actionState.modalClicks, 0);
+  assert.equal(ambiguous.actionState.modalClicks, 0);
+});
+
+test("an unconfirmed clicked snake selection is uncertain and never retries another candidate", async () => {
+  const room = await loadDraftContext({
+    text: "RND 5 OF 16\n00:20\nON THE CLOCK: PICK 47",
+    clockTeam: "Us",
+    ownTeam: "Us",
+    selectPlayer: { id: 12345, name: "Exact Player" },
+    selectRosterConfirmed: false,
+  });
+  const action = {
+    operation: "SELECT",
+    actionRequestId: 7701,
+    playerId: 12345,
+    playerName: "Exact Player",
+    candidates: [
+      { playerId: 12345, playerName: "Exact Player" },
+      { playerId: 99999, playerName: "Different Candidate" },
+    ],
+    expectedLeagueId: "701",
+    expectedPick: 47,
+  };
+
+  const first = await room.executeAction(action);
+  const duplicate = await room.executeAction(action);
+
+  assert.equal(first.code, "ROSTER_NOT_CONFIRMED");
+  assert.equal(first.clicked, true);
+  assert.equal(first.retryable, false);
+  assert.equal(duplicate.code, "ROSTER_NOT_CONFIRMED");
+  assert.equal(room.actionState.selectClicks, 1);
+});
+
 test("salary-cap bidding clicks only the exact next incremental offer", async () => {
   const room = await loadDraftContext({
     text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
@@ -755,6 +1182,8 @@ test("salary-cap bidding clicks only the exact next incremental offer", async ()
     nominatedPlayer: "Exact Player",
     bidAmount: 28,
   });
+
+  assert.equal(room.context.leadingBid, false);
   const result = await room.executeAction({
     operation: "BID",
     playerId: 12345,
@@ -765,11 +1194,149 @@ test("salary-cap bidding clicks only the exact next incremental offer", async ()
     maxApprovedBid: 35,
   });
 
-  assert.equal(result.code, "SUBMITTED");
+  assert.equal(result.code, "BID_CONFIRMED");
   assert.equal(room.actionState.bidClicks, 1);
 });
 
-test("salary-cap bidding survives a transient ESPN offer-control rerender", async () => {
+test("a visible next-offer control cannot prove we are not already leading", async () => {
+  const room = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
+    ownAuctionTeam: "Us",
+    maximumOffer: 150,
+    nominatedPlayer: "Exact Player",
+    bidAmount: 28,
+    opponentLeadingProof: false,
+  });
+  const result = await room.executeAction({
+    operation: "BID",
+    playerId: 12345,
+    playerName: "Exact Player",
+    expectedLeagueId: "701",
+    expectedCurrentBid: 27,
+    amount: 28,
+    maxApprovedBid: 35,
+  });
+
+  assert.equal(room.context.leadingBid, null);
+  assert.equal(result.code, "LEADING_BID_UNKNOWN");
+  assert.equal(room.actionState.bidClicks, 0);
+});
+
+test("stale global auction messages never override the dedicated current leader", async () => {
+  const staleOutbidButLeading = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
+    staleBidText: "You've been outbid",
+    ownAuctionTeam: "Us",
+    maximumOffer: 150,
+    nominatedPlayer: "Exact Player",
+    bidAmount: 28,
+    leadingBid: true,
+  });
+  const staleWinningButOpponentLeads = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
+    staleBidText: "You're the high bidder",
+    ownAuctionTeam: "Us",
+    maximumOffer: 150,
+    nominatedPlayer: "Exact Player",
+    bidAmount: 28,
+  });
+
+  assert.equal(staleOutbidButLeading.context.leadingBid, true);
+  assert.equal(staleWinningButOpponentLeads.context.leadingBid, false);
+});
+
+test("stale global auction leadership without dedicated evidence fails closed", async () => {
+  const room = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
+    staleBidText: "Another team remains the high bidder",
+    ownAuctionTeam: "Us",
+    maximumOffer: 150,
+    nominatedPlayer: "Exact Player",
+    bidAmount: 28,
+    opponentLeadingProof: false,
+  });
+  const result = await room.executeAction({
+    operation: "BID",
+    actionRequestId: 7901,
+    playerId: 12345,
+    playerName: "Exact Player",
+    expectedLeagueId: "701",
+    expectedCurrentBid: 27,
+    amount: 28,
+    maxApprovedBid: 35,
+  });
+
+  assert.equal(room.context.leadingBid, null);
+  assert.equal(result.code, "LEADING_BID_UNKNOWN");
+  assert.equal(room.actionState.bidClicks, 0);
+});
+
+test("custom salary-cap bidding proves the exact input and paired submit before clicking", async () => {
+  const exact = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
+    ownAuctionTeam: "Us",
+    maximumOffer: 150,
+    nominatedPlayer: "Exact Player",
+    bidAmount: 28,
+    bidControlVisible: false,
+    customBidForm: true,
+  });
+  const rejectedInput = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
+    ownAuctionTeam: "Us",
+    maximumOffer: 150,
+    nominatedPlayer: "Exact Player",
+    bidAmount: 28,
+    bidControlVisible: false,
+    customBidForm: true,
+    customBidAcceptsAmount: false,
+  });
+  const action = {
+    operation: "BID",
+    playerId: 12345,
+    playerName: "Exact Player",
+    expectedLeagueId: "701",
+    expectedCurrentBid: 27,
+    amount: 28,
+    maxApprovedBid: 35,
+  };
+
+  const exactResult = await exact.executeAction({ ...action, actionRequestId: 7801 });
+  const rejectedResult = await rejectedInput.executeAction({ ...action, actionRequestId: 7802 });
+
+  assert.equal(exactResult.code, "BID_CONFIRMED");
+  assert.equal(exact.actionState.bidClicks, 1);
+  assert.ok(exact.actionState.customSurfaceReads >= 4, "the custom amount surface is re-resolved after a render and before click");
+  assert.equal(rejectedResult.code, "BID_OUT_OF_SEQUENCE");
+  assert.equal(rejectedInput.actionState.bidClicks, 0);
+});
+
+test("a settled custom bid that drifts before final preflight never clicks", async () => {
+  const room = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
+    ownAuctionTeam: "Us",
+    maximumOffer: 150,
+    nominatedPlayer: "Exact Player",
+    bidAmount: 28,
+    bidControlVisible: false,
+    customBidForm: true,
+    customBidDriftsAfterReads: 3,
+  });
+  const result = await room.executeAction({
+    operation: "BID",
+    playerId: 12345,
+    playerName: "Exact Player",
+    expectedLeagueId: "701",
+    expectedCurrentBid: 27,
+    amount: 28,
+    maxApprovedBid: 35,
+  });
+
+  assert.equal(result.code, "CUSTOM_AMOUNT_UNCONFIRMED");
+  assert.equal(room.actionState.bidClicks, 0);
+});
+
+test("salary-cap bidding fails closed while authoritative non-leading proof is rerendering", async () => {
   const room = await loadDraftContext({
     text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
     ownAuctionTeam: "Us",
@@ -777,6 +1344,7 @@ test("salary-cap bidding survives a transient ESPN offer-control rerender", asyn
     nominatedPlayer: "Exact Player",
     bidAmount: 28,
     bidControlDelayMs: 260,
+    opponentLeadingProof: false,
   });
   const result = await room.executeAction({
     operation: "BID",
@@ -788,8 +1356,9 @@ test("salary-cap bidding survives a transient ESPN offer-control rerender", asyn
     maxApprovedBid: 35,
   });
 
-  assert.equal(result.code, "SUBMITTED");
-  assert.equal(room.actionState.bidClicks, 1);
+  assert.equal(room.context.leadingBid, null);
+  assert.equal(result.code, "LEADING_BID_UNKNOWN");
+  assert.equal(room.actionState.bidClicks, 0);
 });
 
 test("salary-cap bidding still fails closed when the exact offer control never stabilizes", async () => {
@@ -800,6 +1369,7 @@ test("salary-cap bidding still fails closed when the exact offer control never s
     nominatedPlayer: "Exact Player",
     bidAmount: 28,
     bidControlDelayMs: 10_000,
+    opponentLeadingProof: false,
   });
   const result = await room.executeAction({
     operation: "BID",
@@ -811,8 +1381,420 @@ test("salary-cap bidding still fails closed when the exact offer control never s
     maxApprovedBid: 35,
   });
 
-  assert.equal(result.code, "BID_OUT_OF_SEQUENCE");
+  assert.equal(result.code, "LEADING_BID_UNKNOWN");
   assert.equal(room.actionState.bidClicks, 0);
+});
+
+test("salary-cap bidding never retargets an immutable stale offer", async () => {
+  const room = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nCurrent Bid: $28",
+    ownAuctionTeam: "Us",
+    maximumOffer: 150,
+    nominatedPlayer: "Exact Player",
+    bidAmount: 29,
+  });
+  const result = await room.executeAction({
+    operation: "BID",
+    playerId: 12345,
+    playerName: "Exact Player",
+    expectedLeagueId: "701",
+    expectedTeamId: 5,
+    expectedSeason: 2026,
+    expectedCurrentBid: 27,
+    amount: 28,
+    maxApprovedBid: 35,
+  });
+
+  assert.equal(result.code, "BID_CHANGED");
+  assert.equal(room.actionState.bidClicks, 0);
+});
+
+test("salary-cap walk-away is terminal before any ESPN click", async () => {
+  const room = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nCurrent Bid: $35",
+    ownAuctionTeam: "Us",
+    maximumOffer: 150,
+    nominatedPlayer: "Exact Player",
+    bidAmount: 36,
+  });
+  const result = await room.executeAction({
+    operation: "BID",
+    playerId: 12345,
+    playerName: "Exact Player",
+    expectedLeagueId: "701",
+    expectedTeamId: 5,
+    expectedSeason: 2026,
+    expectedCurrentBid: 35,
+    amount: 36,
+    maxApprovedBid: 35,
+  });
+
+  assert.equal(result.code, "WALK_AWAY");
+  assert.equal(result.ok, true);
+  assert.equal(room.actionState.bidClicks, 0);
+});
+
+test("salary-cap lead detection and ambiguous rerenders both block self-raises", async () => {
+  const action = {
+    operation: "BID",
+    playerId: 12345,
+    playerName: "Exact Player",
+    expectedLeagueId: "701",
+    expectedTeamId: 5,
+    expectedSeason: 2026,
+    expectedCurrentBid: 27,
+    amount: 28,
+    maxApprovedBid: 35,
+  };
+  const alreadyLeading = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
+    ownAuctionTeam: "Us",
+    maximumOffer: 150,
+    nominatedPlayer: "Exact Player",
+    bidAmount: 28,
+    leadingBid: true,
+  });
+  const leadDuringRender = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
+    ownAuctionTeam: "Us",
+    maximumOffer: 150,
+    nominatedPlayer: "Exact Player",
+    bidAmount: 28,
+    bidControlDelayMs: 120,
+    leadingBidAfterMs: 40,
+    opponentLeadingProof: false,
+  });
+
+  const initialResult = await alreadyLeading.executeAction({ ...action, actionRequestId: 8101 });
+  const raceResult = await leadDuringRender.executeAction({ ...action, actionRequestId: 8102 });
+
+  assert.equal(initialResult.code, "HOLD_LEADING_BID");
+  assert.equal(raceResult.code, "LEADING_BID_UNKNOWN");
+  assert.equal(alreadyLeading.actionState.bidClicks, 0);
+  assert.equal(leadDuringRender.actionState.bidClicks, 0);
+});
+
+test("draft actions validate exact team and season before any click", async () => {
+  const room = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
+    ownAuctionTeam: "Us",
+    maximumOffer: 150,
+    nominatedPlayer: "Exact Player",
+    bidAmount: 28,
+  });
+  const base = {
+    operation: "BID",
+    playerId: 12345,
+    playerName: "Exact Player",
+    expectedLeagueId: "701",
+    expectedCurrentBid: 27,
+    amount: 28,
+    maxApprovedBid: 35,
+  };
+
+  const wrongTeam = await room.executeAction({ ...base, expectedTeamId: 6, expectedSeason: 2026, actionRequestId: 8201 });
+  const wrongSeason = await room.executeAction({ ...base, expectedTeamId: 5, expectedSeason: 2025, actionRequestId: 8202 });
+
+  assert.equal(wrongTeam.code, "WRONG_TEAM");
+  assert.equal(wrongSeason.code, "WRONG_SEASON");
+  assert.equal(room.actionState.bidClicks, 0);
+});
+
+test("salary-cap actions require a ceiling and explicit nomination intent", async () => {
+  const bidRoom = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
+    ownAuctionTeam: "Us",
+    maximumOffer: 150,
+    nominatedPlayer: "Exact Player",
+    bidAmount: 28,
+  });
+  const nominationRoom = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nYour turn to nominate a player!\nSelect a player below to nominate",
+    ownAuctionTeam: "Us",
+    ownAuctionSelecting: true,
+    nominationConfirmationDelayMs: 0,
+    maximumOffer: 150,
+    selectPlayer: { id: 12345, name: "Exact Player" },
+  });
+
+  const missingCeiling = await bidRoom.executeAction({
+    operation: "BID",
+    playerId: 12345,
+    playerName: "Exact Player",
+    expectedLeagueId: "701",
+    expectedTeamId: 5,
+    expectedSeason: 2026,
+    expectedCurrentBid: 27,
+    amount: 28,
+  });
+  const missingIntent = await nominationRoom.executeAction({
+    operation: "NOMINATE",
+    playerId: 12345,
+    playerName: "Exact Player",
+    candidates: [{ playerId: 12345, playerName: "Exact Player" }],
+    amount: 1,
+    expectedLeagueId: "701",
+    expectedTeamId: 5,
+    expectedSeason: 2026,
+  });
+
+  assert.equal(missingCeiling.code, "BID_CEILING_UNKNOWN");
+  assert.equal(missingIntent.code, "NOMINATION_INTENT_UNKNOWN");
+  assert.equal(bidRoom.actionState.bidClicks, 0);
+  assert.equal(nominationRoom.actionState.selectClicks, 0);
+  assert.equal(nominationRoom.actionState.nominationClicks, 0);
+});
+
+test("a clicked bid has bounded acknowledgement and is never blindly retried", async () => {
+  const room = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
+    ownAuctionTeam: "Us",
+    maximumOffer: 150,
+    nominatedPlayer: "Exact Player",
+    bidAmount: 28,
+    bidAcknowledged: false,
+  });
+  const action = {
+    operation: "BID",
+    actionRequestId: 8301,
+    playerId: 12345,
+    playerName: "Exact Player",
+    expectedLeagueId: "701",
+    expectedTeamId: 5,
+    expectedSeason: 2026,
+    expectedCurrentBid: 27,
+    amount: 28,
+    maxApprovedBid: 35,
+  };
+
+  const first = await room.executeAction(action);
+  const duplicate = await room.executeAction(action);
+
+  assert.equal(first.code, "BID_ACK_UNCERTAIN");
+  assert.equal(first.clicked, true);
+  assert.equal(first.retryable, false);
+  assert.equal(duplicate.code, "BID_ACK_UNCERTAIN");
+  assert.equal(room.actionState.bidClicks, 1);
+});
+
+test("concurrent identical bid commands are single-flight and idempotent", async () => {
+  const room = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
+    ownAuctionTeam: "Us",
+    maximumOffer: 150,
+    nominatedPlayer: "Exact Player",
+    bidAmount: 28,
+    bidAcknowledgementDelayMs: 80,
+  });
+  const action = {
+    operation: "BID",
+    playerId: 12345,
+    playerName: "Exact Player",
+    expectedLeagueId: "701",
+    expectedTeamId: 5,
+    expectedSeason: 2026,
+    expectedCurrentBid: 27,
+    amount: 28,
+    maxApprovedBid: 35,
+  };
+
+  const [first, second] = await Promise.all([
+    room.executeAction({ ...action, actionRequestId: 8401 }),
+    room.executeAction({ ...action, actionRequestId: 8402 }),
+  ]);
+  const requestIdConflict = await room.executeAction({
+    ...action,
+    actionRequestId: 8401,
+    expectedCurrentBid: 28,
+    amount: 29,
+  });
+
+  assert.equal(first.code, "BID_CONFIRMED");
+  assert.equal(second.code, "BID_CONFIRMED");
+  assert.equal(first.action.actionRequestId, 8401);
+  assert.equal(second.action.actionRequestId, 8402);
+  assert.equal(requestIdConflict.code, "ACTION_REQUEST_CONFLICT");
+  assert.equal(room.actionState.bidClicks, 1);
+});
+
+test("action request ids are namespaced to a validated command-center session", async () => {
+  const room = await loadDraftContext({
+    text: "RND 5 OF 16\n00:20\nON THE CLOCK: PICK 47",
+    clockTeam: "Us",
+    ownTeam: "Us",
+  });
+  const base = {
+    operation: "SELECT",
+    actionRequestId: 1,
+    expectedLeagueId: "wrong-league",
+    expectedPick: 47,
+  };
+
+  const oldSession = await room.executeAction({
+    ...base,
+    commandCenterSessionId: "old-session-2026",
+    playerId: 111,
+    playerName: "Old Player",
+  });
+  const newSession = await room.executeAction({
+    ...base,
+    commandCenterSessionId: "new-session-2026",
+    playerId: 222,
+    playerName: "New Player",
+  });
+  const sameSessionConflict = await room.executeAction({
+    ...base,
+    commandCenterSessionId: "old-session-2026",
+    playerId: 333,
+    playerName: "Conflicting Player",
+  });
+  const unsafeSession = await room.executeAction({
+    ...base,
+    commandCenterSessionId: "bad session",
+    actionRequestId: 2,
+    playerId: 444,
+    playerName: "Unsafe Session Player",
+  });
+
+  assert.equal(oldSession.code, "WRONG_LEAGUE");
+  assert.equal(newSession.code, "WRONG_LEAGUE");
+  assert.equal(sameSessionConflict.code, "ACTION_REQUEST_CONFLICT");
+  assert.equal(unsafeSession.code, "COMMAND_CENTER_SESSION_INVALID");
+  assert.equal(room.actionState.selectClicks, 0);
+});
+
+test("nomination actuator resolves only the exact requested player", async () => {
+  const room = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nYour turn to nominate a player!\nSelect a player below to nominate",
+    ownAuctionTeam: "Us",
+    ownAuctionSelecting: true,
+    nominationConfirmationDelayMs: 0,
+    maximumOffer: 150,
+    selectPlayer: { id: 99999, name: "Visible Fallback" },
+  });
+  const result = await room.executeAction({
+    operation: "NOMINATE",
+    playerId: 12345,
+    playerName: "Exact Target",
+    candidates: [
+      { playerId: 12345, playerName: "Exact Target" },
+      { playerId: 99999, playerName: "Visible Fallback" },
+    ],
+    amount: 1,
+    nominationIntent: "TARGET",
+    expectedLeagueId: "701",
+    expectedTeamId: 5,
+    expectedSeason: 2026,
+  });
+
+  assert.equal(result.code, "PLAYER_NOT_FOUND");
+  assert.equal(room.actionState.selectClicks, 0);
+  assert.equal(room.actionState.nominationClicks, 0);
+});
+
+test("a clicked drain nomination is acknowledged once and exposes its intent", async () => {
+  const room = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nYour turn to nominate a player!\nSelect a player below to nominate",
+    ownAuctionTeam: "Us",
+    ownAuctionSelecting: true,
+    nominationConfirmationDelayMs: 0,
+    maximumOffer: 150,
+    selectPlayer: { id: 12345, name: "Exact Player" },
+  });
+  const action = {
+    operation: "NOMINATE",
+    actionRequestId: 8501,
+    playerId: 12345,
+    playerName: "Exact Player",
+    candidates: [{ playerId: 12345, playerName: "Exact Player" }],
+    amount: 1,
+    nominationIntent: "DRAIN",
+    expectedLeagueId: "701",
+    expectedTeamId: 5,
+    expectedSeason: 2026,
+  };
+
+  const first = await room.executeAction(action);
+  const duplicate = await room.executeAction(action);
+  const tracked = room.readContext();
+
+  assert.equal(first.code, "NOMINATION_CONFIRMED");
+  assert.equal(duplicate.code, "NOMINATION_CONFIRMED");
+  assert.equal(room.actionState.selectClicks, 1);
+  assert.equal(room.actionState.nominationClicks, 1);
+  assert.equal(tracked.ownNominationIntent, "DRAIN");
+  assert.equal(tracked.ownNominationPlayerId, 12345);
+  room.setRoomUrl("https://fantasy.espn.com/football/draft?leagueId=702&teamId=6&seasonId=2026&draftId=next-room");
+  const nextRoom = room.readContext();
+  assert.equal(nextRoom.ownNominationIntent, null);
+  assert.equal(nextRoom.ownNominationPlayerId, null);
+});
+
+test("an unacknowledged clicked nomination is uncertain and never blindly retried", async () => {
+  const room = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nYour turn to nominate a player!\nSelect a player below to nominate",
+    ownAuctionTeam: "Us",
+    ownAuctionSelecting: true,
+    nominationConfirmationDelayMs: 0,
+    nominationAcknowledged: false,
+    maximumOffer: 150,
+    selectPlayer: { id: 12345, name: "Exact Player" },
+  });
+  const action = {
+    operation: "NOMINATE",
+    actionRequestId: 8601,
+    playerId: 12345,
+    playerName: "Exact Player",
+    candidates: [{ playerId: 12345, playerName: "Exact Player" }],
+    amount: 1,
+    nominationIntent: "TARGET",
+    expectedLeagueId: "701",
+    expectedTeamId: 5,
+    expectedSeason: 2026,
+  };
+
+  const first = await room.executeAction(action);
+  const duplicate = await room.executeAction(action);
+
+  assert.equal(first.code, "NOMINATION_ACK_UNCERTAIN");
+  assert.equal(first.clicked, true);
+  assert.equal(first.retryable, false);
+  assert.equal(duplicate.code, "NOMINATION_ACK_UNCERTAIN");
+  assert.equal(room.actionState.selectClicks, 1);
+  assert.equal(room.actionState.nominationClicks, 1);
+});
+
+test("a late ESPN acknowledgement still preserves drain intent after an uncertain result", async () => {
+  const room = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nYour turn to nominate a player!\nSelect a player below to nominate",
+    ownAuctionTeam: "Us",
+    ownAuctionSelecting: true,
+    nominationConfirmationDelayMs: 0,
+    nominationAcknowledgementDelayMs: 850,
+    maximumOffer: 150,
+    selectPlayer: { id: 12345, name: "Exact Player" },
+  });
+  const result = await room.executeAction({
+    operation: "NOMINATE",
+    actionRequestId: 8701,
+    playerId: 12345,
+    playerName: "Exact Player",
+    candidates: [{ playerId: 12345, playerName: "Exact Player" }],
+    amount: 1,
+    nominationIntent: "DRAIN",
+    expectedLeagueId: "701",
+    expectedTeamId: 5,
+    expectedSeason: 2026,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 180));
+  const tracked = room.readContext();
+
+  assert.equal(result.code, "NOMINATION_ACK_UNCERTAIN");
+  assert.equal(room.actionState.selectClicks, 1);
+  assert.equal(room.actionState.nominationClicks, 1);
+  assert.equal(tracked.nominatedPlayer, "Exact Player");
+  assert.equal(tracked.ownNominationIntent, "DRAIN");
+  assert.equal(tracked.ownNominationPlayerId, 12345);
 });
 
 test("final mandatory slots search a wider exact shortlist inside the same action budget", async () => {
@@ -923,10 +1905,11 @@ test("an available mandatory position filter skips the redundant unfiltered grid
     position: "DST",
     candidates: [{ playerId: -16023, playerName: "Steelers D/ST", position: "DST", fillsMandatoryStarter: true }],
     amount: 1,
+    nominationIntent: "TARGET",
     expectedLeagueId: "701",
   });
 
-  assert.equal(result.code, "SUBMITTED");
+  assert.equal(result.code, "NOMINATION_CONFIRMED");
   assert.equal(room.actionState.selectClicks, 1);
   assert.equal(room.actionState.nominationClicks, 1);
   assert.ok(Date.now() - startedAt < 520, "mandatory filter path should not wait for the unfiltered grid first");

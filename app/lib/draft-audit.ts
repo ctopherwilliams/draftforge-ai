@@ -1,4 +1,5 @@
 import { openStarterSlots, type LeagueSettings, type Position } from "./draft-engine.ts";
+import { isLiveControlState, type LiveControlState } from "./live-control.ts";
 
 export const MAX_DRAFT_ACTION_TELEMETRY_EVENTS = 256;
 
@@ -118,6 +119,16 @@ export type DraftAuditSnapshot = {
     candidateCount: number;
     candidates: DraftAuditSleeperCandidate[];
   };
+  availability?: {
+    status: "READY" | "BLOCKED";
+    digest: string;
+    evaluatedAt: string;
+    freshUntil: string | null;
+    blockingReasons: string[];
+    vetoedPlayerIds: number[];
+  };
+  /** Optional while legacy schema-v1 publishers migrate to typed live control. */
+  liveControl?: LiveControlState;
 };
 
 export type DraftAuditEvaluation = {
@@ -288,6 +299,18 @@ export function isDraftAuditSnapshot(value: unknown): value is DraftAuditSnapsho
     && (candidate.acquisitionPick === undefined || candidate.acquisitionPick === null || (Number.isInteger(candidate.acquisitionPick) && candidate.acquisitionPick >= 1))
     && (candidate.acquisitionAmount === undefined || (Number.isInteger(candidate.acquisitionAmount) && candidate.acquisitionAmount >= 0))
   ))) return false;
+  if (snapshot.availability) {
+    const availability = snapshot.availability;
+    if (!["READY", "BLOCKED"].includes(availability.status)
+      || !/^sha256:[a-f0-9]{64}$/.test(String(availability.digest || ""))
+      || !Number.isFinite(Date.parse(String(availability.evaluatedAt || "")))
+      || (availability.freshUntil !== null && !Number.isFinite(Date.parse(String(availability.freshUntil || ""))))
+      || !Array.isArray(availability.blockingReasons)
+      || availability.blockingReasons.some((reason) => !/^[A-Z0-9_]{1,64}$/.test(String(reason)))
+      || !Array.isArray(availability.vetoedPlayerIds)
+      || availability.vetoedPlayerIds.some((id) => !Number.isInteger(id) || id === 0)) return false;
+  }
+  if (snapshot.liveControl !== undefined && !isLiveControlState(snapshot.liveControl)) return false;
   return [...draft.appRoster, ...draft.espnRoster].every((entry) => (
     Number.isInteger(entry?.playerId)
     && Number(entry.playerId) !== 0
@@ -343,7 +366,39 @@ export function evaluateDraftAuditSnapshot(snapshot: DraftAuditSnapshot): DraftA
   if (snapshot.safety.settingsConfirmed !== true) finalViolations.push("LEAGUE_RULES_NOT_CONFIRMED");
   if (snapshot.safety.liveChecklistReady !== true) finalViolations.push("LIVE_CHECKLIST_NOT_READY");
   if (snapshot.safety.sourceCoverage !== 5) finalViolations.push("FIVE_SOURCE_COVERAGE_INCOMPLETE");
+  if (!snapshot.liveControl) finalViolations.push("LIVE_CONTROL_MISSING");
+  if (!snapshot.availability) finalViolations.push("AVAILABILITY_GATE_MISSING");
+  if (snapshot.availability?.status !== undefined && snapshot.availability.status !== "READY") {
+    finalViolations.push("AVAILABILITY_GATE_BLOCKED");
+  }
+  if (snapshot.availability) {
+    const capturedAt = Date.parse(snapshot.capturedAt);
+    const freshUntil = Date.parse(snapshot.availability.freshUntil || "");
+    if (!Number.isFinite(freshUntil) || freshUntil <= capturedAt) {
+      finalViolations.push("AVAILABILITY_GATE_STALE");
+    }
+  }
   if (/stopped|excluded|autopick/i.test(snapshot.safety.actionState)) finalViolations.push("FATAL_ACTION_STATE");
+  if (snapshot.liveControl) {
+    const liveControl = snapshot.liveControl;
+    if (liveControl.pendingActionCount !== 0) finalViolations.push("LIVE_ACTIONS_PENDING");
+    if (liveControl.historicalAutopickDetected) finalViolations.push("HISTORICAL_ESPN_AUTOPICK");
+    if (liveControl.uncontrolledRosterAdditionDetected) finalViolations.push("UNCONTROLLED_ROSTER_ADDITION");
+
+    const rosterIds = new Set(roster.map((entry) => entry.playerId));
+    const attributions = new Map(liveControl.rosterAttributions.map((entry) => [entry.player.playerId, entry]));
+    const missingAttributions = roster.filter((entry) => !attributions.has(entry.playerId));
+    const orphanAttributions = liveControl.rosterAttributions.filter((entry) => !rosterIds.has(entry.player.playerId));
+    if (liveControl.unattributedRosterCount !== missingAttributions.length) finalViolations.push("ROSTER_ATTRIBUTION_COUNT_MISMATCH");
+    if (liveControl.unattributedRosterCount > 0 || missingAttributions.length > 0) finalViolations.push("ROSTER_ATTRIBUTION_INCOMPLETE");
+    if (orphanAttributions.length > 0) finalViolations.push("ROSTER_ATTRIBUTION_ORPHANED");
+    if (liveControl.rosterAttributions.some((entry) => entry.attribution === "ESPN_AUTOPICK")) {
+      finalViolations.push("HISTORICAL_ESPN_AUTOPICK");
+    }
+    if (liveControl.rosterAttributions.some((entry) => entry.attribution === "UNKNOWN_EXTERNAL")) {
+      finalViolations.push("UNCONTROLLED_ROSTER_ADDITION");
+    }
+  }
 
   return {
     complete,

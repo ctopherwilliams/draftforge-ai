@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { isIntelligenceSourceFresh, mergeConsensus } from "../app/lib/consensus.ts";
+import { intelligenceQuarterbackMode, isIntelligenceSourceFresh, mergeConsensus } from "../app/lib/consensus.ts";
 import { recommendPlayers } from "../app/lib/draft-engine.ts";
 
 export const SOURCE_SNAPSHOT_SCHEMA_VERSION = 1;
@@ -133,6 +133,11 @@ export function validateSourceSnapshot(snapshot) {
   if (snapshot?.schemaVersion !== SOURCE_SNAPSHOT_SCHEMA_VERSION) errors.push("Unsupported snapshot schema version.");
   if (!Number.isFinite(capturedAtMs)) errors.push("Snapshot capturedAt is invalid.");
   const league = sanitizeLeagueSettings(snapshot?.league || {});
+  const quarterbackMode = Number(snapshot?.parameters?.qbs);
+  if (![1, 2].includes(quarterbackMode)) errors.push("Snapshot quarterback profile must be one-QB or two-QB.");
+  else if (quarterbackMode !== intelligenceQuarterbackMode(league.lineupSlotCounts)) {
+    errors.push("Snapshot quarterback profile does not match ESPN starter slots.");
+  }
   if (!Number.isInteger(league.size) || league.size < 8 || league.size > 16) errors.push("League size must be ESPN-compatible (8–16)." );
   if (!Number.isInteger(league.rosterSize) || league.rosterSize < 1) errors.push("League roster size is invalid.");
   const espnPlayers = sanitizeEspnPlayers(snapshot?.espnPlayers);
@@ -249,6 +254,7 @@ export function createSourceSnapshot({ capturedAt = new Date().toISOString(), le
       scoring: intelligence?.scoring || league?.scoringLabel || "PPR",
       teams: Number(intelligence?.teams || league?.size || 12),
       season: Number(intelligence?.season || league?.season || 2026),
+      qbs: Number(intelligence?.qbs) >= 2 ? 2 : 1,
     },
     league: sanitizeLeagueSettings(league),
     espnPlayers: sanitizeEspnPlayers(espnPlayers),
@@ -264,5 +270,9 @@ export function replayConsensusSnapshot(snapshot, leagueOverride) {
   if (snapshot?.digest !== expectedDigest) throw new Error("source snapshot digest mismatch");
   const validation = validateSourceSnapshot(snapshot);
   if (!validation.valid) throw new Error(`source snapshot invalid: ${validation.errors.join(" ")}`);
-  return mergeConsensus(snapshot.espnPlayers, snapshot.sources, leagueOverride || snapshot.league, { evaluatedAt: snapshot.capturedAt });
+  const league = leagueOverride || snapshot.league;
+  if (Number(snapshot.parameters.qbs) !== intelligenceQuarterbackMode(league.lineupSlotCounts)) {
+    throw new Error("source snapshot quarterback profile mismatch");
+  }
+  return mergeConsensus(snapshot.espnPlayers, snapshot.sources, league, { evaluatedAt: snapshot.capturedAt });
 }

@@ -31,10 +31,11 @@ Keep Codex open in the desktop app and exactly two controlled Chrome tabs: `http
 
 ## Certification ledger
 
-Last updated: 2026-08-21.
+Last updated: 2026-08-28.
 
 | Gate | State |
 | --- | --- |
+| v0.2.26 post-live hardening | Local GO: build/typecheck/lint/audit; 279/279 full tests; deterministic 20+20 drafts; fresh five-seed 10,000-draft two-format matrix with zero failures/hard violations; 121/121 live-control release tests; 9/9 chaos; 1,000 status reads with zero failures at p95 2.52 ms/p99 3.20 ms; bounded soak passed; ten-scenario visual gate passed; independent P0/P1 re-review GO. Package SHA-256 `96acc8438a0f5ca2e66bd780afe7432581f95198ff0c5a8cd943b6318b478791`. The authenticated 2026-08-28 no-click Chrome preflight reproduced league `44050`, team `7` as 12-team PPR, $200 salary cap, 14 slots, QB plus OP, with exactly two tabs and all actions locked. Authenticated certification and current 5/5 data remain NO-GO until a server-only `TRADYR_API_KEY` is configured and a fresh complete snapshot is captured. |
 | Local release gate | v0.2.24: 201/201 tests, lint, typecheck, production build, UI, extension safety, replay, managed workspace cleanup, recovery targeting, and latency passing; visual certification covers pre-room plus snake/salary command centers at 390, 1440, 1728, and 2560 widths with nine zero-distance captures and one accepted one-pixel mobile distance |
 | Deterministic drafts | 20/20 snake and 20/20 salary-cap complete and legal |
 | Live-snapshot Monte Carlo | Fresh seed `20260820`: 10,000 snake + 10,000 salary-cap, including 4,000 exposed holdouts; zero failures, hard violations, or simulation errors |
@@ -68,7 +69,7 @@ Do not advance an authenticated count without a complete final-ready loopback au
    npm run check
    ```
 
-3. Confirm the unpacked Chrome companion is version `0.2.24` and loaded from this repository's `extension/` directory. The packaged zip SHA-256 is `ff42c6a085f5973d35e34e9766ca1b90c563be6a337998c8d4a17069f1dbe3b1`. Its one-shot live-room handoff and server recovery are authenticated in snake rooms `1221310079` and `1586041611`; its salary-cap action path, deliberate recovery, parity audit, automatic shutdown, and exact tab cleanup are authenticated in room `1551126922`. The dashboard preflight must also report companion-managed workspace cleanup ready.
+3. Confirm the unpacked Chrome companion is version `0.2.26` and loaded from this repository's `extension/` directory. The packaged zip SHA-256 is `96acc8438a0f5ca2e66bd780afe7432581f95198ff0c5a8cd943b6318b478791`. The older authenticated rooms remain regression evidence, but v0.2.26 must receive its own authenticated no-click and salary-cap certification after the current keyed source gate passes. The dashboard preflight must also report companion-managed workspace cleanup ready.
 4. Run one cold-start, no-click rehearsal for the exact league. Do not wait until the real room opens to discover an ESPN login, extension, source, firewall, or Chrome-control problem.
 5. Keep the companion zip digest and current release evidence in [AGENT_HANDOFF.md](AGENT_HANDOFF.md).
 
@@ -89,7 +90,7 @@ Do not advance an authenticated count without a complete final-ready loopback au
    > Draft day. Use the exact named ESPN league and team. Run the complete cold-start checklist. Keep Auto-Draft off and do not create or enter the room until you report READY.
 
 6. Import the league from ESPN. Verify draft type, scoring, teams, roster slots, position caps, keepers, timer, budget, and team identity from the authenticated response rather than memory.
-7. Warm the five sources with the imported scoring and league size. League `44050`, team `7`, currently uses:
+7. Configure the free Tradyr key only in the production server environment as `TRADYR_API_KEY`; never place it in a URL, browser, snapshot, log, or Git. Warm the five sources with the imported scoring and league size. League `44050`, team `7`, currently uses:
 
    ```bash
    npm run draft-day:warm -- --league 44050 --team 7 --scoring PPR --teams 12 --season 2026
@@ -199,6 +200,8 @@ Count the room only when the audit proves exact ESPN/app roster parity, exact sa
 Record the room ID, format, roster, prices/budget when applicable, audit result, exercised retries, source coverage, and count change in [AGENT_HANDOFF.md](AGENT_HANDOFF.md). Update the ledger in this document in the same commit. Close the completed ESPN tab and leave no stale room open.
 
 ## Known launch risks
+
+- Current authenticated launch is blocked until `TRADYR_API_KEY` is present and a new complete keyed snapshot passes coverage, pagination, freshness, and QB-profile checks. Tradyr's unkeyed bulk response is capped at 50 and may contain decoys; the old unkeyed snapshot is regression-only evidence and must never arm a draft.
 
 - Chrome-control recovery is no longer an untested blocker: a clean two-tab cold start and a deliberate in-room dashboard reload both passed, including Auto-Draft resetting off, exact-room re-import, full revalidation, safe re-arming, 16/16 parity, and automatic shutdown. ESPN/Chrome drift can still recur, so every real draft must run both READY gates.
 - The expanded 2026-08-19 snapshot improved player-level coverage to 60.12% at four or more sources and 47.62% at all five, but GNG remains the shortest model board at 150 rows and not every late player can be corroborated. Treat confidence and sleeper labels accordingly.

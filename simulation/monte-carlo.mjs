@@ -30,6 +30,19 @@ const METRIC_KEYS = [
   "objective",
 ];
 
+// The synthetic pool must survive the deepest ESPN-compatible room even when
+// every opponent reaches a position cap and seeded late news removes players.
+// This is harness inventory only; production ranking and roster logic are
+// imported unchanged below.
+export const SYNTHETIC_POSITION_COUNTS = Object.freeze({
+  QB: 64,
+  RB: 136,
+  WR: 136,
+  TE: 64,
+  K: 24,
+  DST: 24,
+});
+
 export const OPPONENT_ARCHETYPES = {
   snake: [
     "ADP_FOLLOWER",
@@ -211,8 +224,9 @@ function approximateReplacement(position) {
 function makeRawPlayers(rng) {
   // Keep a full undrafted buffer behind the deepest 14-team adversarial room.
   // A merely roster-sized pool can strand otherwise legal teams at position
-  // caps when noisy opponents consume an asymmetric share of one position.
-  const counts = { QB: 44, RB: 82, WR: 82, TE: 40, K: 24, DST: 24 };
+  // caps when noisy opponents consume an asymmetric share of one position or
+  // late-news removals deplete a mandatory position.
+  const counts = SYNTHETIC_POSITION_COUNTS;
   const base = { QB: 390, RB: 325, WR: 320, TE: 260, K: 155, DST: 165 };
   const decay = { QB: 4.2, RB: 2.25, WR: 2.2, TE: 3.15, K: 1.65, DST: 1.8 };
   const raw = [];
@@ -836,7 +850,11 @@ function runAuctionDraft(players, league, rng, archetypes, override, roomParamet
       }));
     } else {
       nominatedPlayer = chooseOpponentAuctionNomination(players, unavailable, rosters.get(nominator.id), picks, league, playerById, archetypes.get(nominator.id), rng, phase);
-      if (!nominatedPlayer) throw new Error(`no opponent auction nomination at sale ${overall}`);
+      if (!nominatedPlayer) {
+        const remainingByPosition = positionCounts(players.filter((player) => !unavailable.has(player.id)));
+        const rosterByPosition = positionCounts(rosters.get(nominator.id));
+        throw new Error(`no opponent auction nomination at sale ${overall}; team=${nominator.id}; roster=${JSON.stringify(rosterByPosition)}; remaining=${JSON.stringify(remainingByPosition)}`);
+      }
     }
     const runPosition = recentRunPosition(picks, playerById, league.size);
     const bidders = [];

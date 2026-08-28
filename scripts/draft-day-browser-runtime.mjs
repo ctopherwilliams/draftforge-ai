@@ -5,15 +5,37 @@ import path from "node:path";
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const espnContentPath = path.join(projectRoot, "extension", "espn-content.js");
 
+export const LAB_BROWSER_RUNTIME_MODE = "LAB_ONLY_COMPANION_DISABLED";
+
+function requireLabOnly(options) {
+  if (options?.mode !== LAB_BROWSER_RUNTIME_MODE || options?.companionDisabled !== true) {
+    throw new Error("DRAFTFORGE_LAB_RUNTIME_REQUIRES_DISABLED_COMPANION");
+  }
+}
+
 /**
- * Build the temporary, page-scoped runtime installed by Codex in the
- * authenticated in-app browser. The same selector, clock, bid, reserve, and
- * verification code used by the Chrome companion is reused verbatim.
+ * Build a temporary, page-scoped, read-only observer for isolated lab work.
+ *
+ * This is deliberately not a production recovery path. It exposes context
+ * reads only and requires an explicit assertion that the Chrome companion is
+ * disabled. Browser actions have one production writer: the installed Chrome
+ * companion. Keeping the observer read-only prevents a second MutationObserver
+ * runtime from ever competing to submit a pick, bid, or nomination.
  */
-export async function buildDraftDayRuntimeExpression() {
+export async function buildDraftDayRuntimeExpression(options = {}) {
+  requireLabOnly(options);
   const contentScript = await readFile(espnContentPath, "utf8");
+  const readOnlyContentScript = contentScript.replace(
+    "  enforceMutedDraftSound(context);",
+    "  // LAB OBSERVER: never mutate ESPN sound or any other action control.",
+  );
+  if (readOnlyContentScript === contentScript) throw new Error("DRAFTFORGE_LAB_RUNTIME_READ_ONLY_PATCH_MISSING");
   return `(() => {
     try { globalThis.__DRAFTFORGE_CHAT_RUNTIME__?.stop?.(); } catch {}
+    try { globalThis.__DRAFTFORGE_AUTOPILOT__?.stop?.("LAB_RUNTIME_REPLACED"); } catch {}
+    try { globalThis.__DRAFTFORGE_LAB_RUNTIME__?.stop?.(); } catch {}
+    delete globalThis.__DRAFTFORGE_CHAT_RUNTIME__;
+    delete globalThis.__DRAFTFORGE_AUTOPILOT__;
     const chrome = {
       runtime: {
         id: null,
@@ -21,22 +43,22 @@ export async function buildDraftDayRuntimeExpression() {
         sendMessage() { return Promise.resolve({ ok: true }); },
       },
     };
-    ${contentScript}
-    globalThis.__DRAFTFORGE_CHAT_RUNTIME__ = Object.freeze({
+    ${readOnlyContentScript}
+    globalThis.__DRAFTFORGE_LAB_RUNTIME__ = Object.freeze({
+      mode: "READ_ONLY_LAB",
       getContext: getTrackedContext,
-      executeAction,
-      disableAutopick: disableEspnAutopick,
       stop() {
         contextObserver.disconnect();
         clearInterval(contextWatchdog);
         if (scheduledContextRefresh) clearTimeout(scheduledContextRefresh);
       },
     });
-    return { installed: true, context: getTrackedContext() };
+    return { installed: true, mode: "READ_ONLY_LAB", context: getTrackedContext() };
   })()`;
 }
 
-export function buildSourceWarmupExpression({ leagueId, teamId, season = 2026 }) {
+export function buildSourceWarmupExpression({ leagueId, teamId, season = 2026, ...options }) {
+  requireLabOnly(options);
   const leagueIdLiteral = JSON.stringify(String(leagueId));
   return `(async () => {
     const leagueId = ${leagueIdLiteral};
@@ -63,7 +85,8 @@ export function buildSourceWarmupExpression({ leagueId, teamId, season = 2026 })
   })()`;
 }
 
-export function buildLeagueSpecificMockLaunchExpression({ leagueId, draftPosition = null }) {
+export function buildLeagueSpecificMockLaunchExpression({ leagueId, draftPosition = null, ...options }) {
+  requireLabOnly(options);
   const position = draftPosition === null ? "null" : String(Math.max(1, Number(draftPosition)));
   const leagueIdLiteral = JSON.stringify(String(leagueId));
   return `(async () => {
@@ -101,10 +124,11 @@ export function buildLeagueSpecificMockLaunchExpression({ leagueId, draftPositio
   })()`;
 }
 
-export function buildDraftDayDecisionExpression({ strategy = "BALANCED" } = {}) {
+export function buildDraftDayDecisionExpression({ strategy = "BALANCED", ...options } = {}) {
+  requireLabOnly(options);
   const strategyLiteral = JSON.stringify(String(strategy));
   return `(async () => {
-    const runtime = globalThis.__DRAFTFORGE_CHAT_RUNTIME__;
+    const runtime = globalThis.__DRAFTFORGE_LAB_RUNTIME__;
     if (!runtime) throw new Error("DRAFTFORGE_RUNTIME_NOT_INSTALLED");
     const room = runtime.getContext();
     const season = Number(new URL(location.href).searchParams.get("seasonId") || 2026);
@@ -153,149 +177,10 @@ export function buildDraftDayDecisionExpression({ strategy = "BALANCED" } = {}) 
   })()`;
 }
 
-export function buildExecuteDraftDayActionExpression(action) {
-  return `globalThis.__DRAFTFORGE_CHAT_RUNTIME__.executeAction(${JSON.stringify(action)})`;
+export function buildExecuteDraftDayActionExpression() {
+  throw new Error("DRAFTFORGE_LAB_RUNTIME_ACTIONS_DISABLED_USE_COMPANION");
 }
 
-export function buildGuardedDraftLoopExpression({ strategy = "BALANCED", pollMs = 100 } = {}) {
-  const decisionExpression = buildDraftDayDecisionExpression({ strategy });
-  return `(() => {
-    try { globalThis.__DRAFTFORGE_AUTOPILOT__?.stop?.(); } catch {}
-    const runtime = globalThis.__DRAFTFORGE_CHAT_RUNTIME__;
-    if (!runtime) throw new Error("DRAFTFORGE_RUNTIME_NOT_INSTALLED");
-    const state = {
-      running: true,
-      busy: false,
-      errors: 0,
-      autopickInterventions: 0,
-      failedActions: 0,
-      retriableActions: 0,
-      successfulActions: { SELECT: 0, BID: 0, NOMINATE: 0 },
-      events: [],
-      handledSignature: null,
-      walkedNomineeKey: null,
-      lastDecision: null,
-      lastAction: null,
-    };
-    const record = (event) => {
-      state.events.push({ ...event, at: new Date().toISOString() });
-      if (state.events.length > 100) state.events.shift();
-    };
-    const stop = (reason = "STOPPED") => {
-      state.running = false;
-      clearInterval(state.timer);
-      record({ type: "STOPPED", reason });
-    };
-    const retriableActionCodes = new Set([
-      "ACTION_NOT_FOUND",
-      "ACTION_TIMEOUT",
-      "BID_CHANGED",
-      "BID_OUT_OF_SEQUENCE",
-      "CLOCK_TOO_SHORT",
-      "NOMINATION_ACTIVE",
-      "NOMINEE_MISMATCH",
-      "NOMINEE_UNKNOWN",
-      "NOT_ON_CLOCK",
-      "PICK_CHANGED",
-      "PLAYER_POOL_STALE",
-    ]);
-    const tick = async () => {
-      if (!state.running || state.busy) return;
-      let context = runtime.getContext();
-      if (context.autopickActive) {
-        state.busy = true;
-        try {
-          const result = await runtime.disableAutopick({ expectedLeagueId: context.leagueId });
-          state.autopickInterventions += 1;
-          record({ type: "AUTOPICK", code: result.code });
-          if (!result.ok) throw new Error(result.code || "AUTOPICK_DISABLE_FAILED");
-          state.errors = 0;
-        } catch (error) {
-          state.errors += 1;
-          record({ type: "ERROR", message: String(error) });
-          if (state.errors >= 3) stop("AUTOPICK_DISABLE_FAILED");
-        } finally {
-          state.busy = false;
-        }
-        return;
-      }
-      const activeAuctionOffer = Boolean(context.auctionActive && context.nominatedPlayer && Number(context.currentBid) > 0);
-      const nomineeKey = activeAuctionOffer
-        ? String(context.nominatedPlayerId || context.nominatedPlayer || "")
-        : null;
-      if (!activeAuctionOffer) state.walkedNomineeKey = null;
-      if (activeAuctionOffer && state.walkedNomineeKey === nomineeKey) return;
-      if (activeAuctionOffer && state.walkedNomineeKey !== nomineeKey) state.walkedNomineeKey = null;
-      const needsPrepare = !globalThis.__DRAFTFORGE_CHAT_SESSION__;
-      if (!needsPrepare && !context.onClock && !activeAuctionOffer) return;
-      const signature = [context.leagueId, context.currentPick, context.onClock, context.nominatedPlayerId || context.nominatedPlayer || "", context.currentBid || 0, context.leadingBid || false].join(":");
-      if (state.handledSignature === signature) return;
-      state.busy = true;
-      try {
-        const decision = await ${decisionExpression};
-        state.lastDecision = { code: decision.code, observed: decision.observed, sourceCoverage: decision.sourceCoverage };
-        if (decision.action) {
-          const result = await runtime.executeAction(decision.action);
-          state.lastAction = {
-            code: result.code,
-            ok: result.ok,
-            operation: decision.action.operation,
-            playerName: result.action?.playerName || decision.action.playerName,
-          };
-          record({ type: "ACTION", ...state.lastAction });
-          if (!result.ok && retriableActionCodes.has(result.code)) {
-            state.retriableActions += 1;
-            if (result.code === "CLOCK_TOO_SHORT") state.handledSignature = signature;
-            record({ type: "WAIT", code: result.code });
-          } else if (!result.ok) {
-            state.failedActions += 1;
-            record({ type: "BLOCKED", code: result.code || "ACTION_FAILED" });
-            stop(result.code || "ACTION_FAILED");
-            return;
-          } else {
-            if (Object.hasOwn(state.successfulActions, decision.action.operation)) {
-              state.successfulActions[decision.action.operation] += 1;
-            }
-            state.handledSignature = signature;
-          }
-        } else if (decision.ok) {
-          if (decision.code === "WALK_AWAY") state.walkedNomineeKey = nomineeKey;
-          state.handledSignature = signature;
-          if (decision.code !== "MONITORING") record({ type: "DECISION", code: decision.code });
-        } else if (["PLAYER_POOL_STALE", "CLOCK_TOO_SHORT"].includes(decision.code)) {
-          record({ type: "WAIT", code: decision.code });
-        } else {
-          record({ type: "BLOCKED", code: decision.code });
-          stop(decision.code);
-        }
-        state.errors = 0;
-        const latest = runtime.getContext();
-        if (decision.league && latest.ownRoster?.length >= decision.league.rosterSize) stop("DRAFT_COMPLETE");
-      } catch (error) {
-        state.errors += 1;
-        record({ type: "ERROR", message: String(error) });
-        if (state.errors >= 3) stop("THREE_CONSECUTIVE_ERRORS");
-      } finally {
-        state.busy = false;
-      }
-    };
-    state.timer = setInterval(tick, ${Math.max(75, Number(pollMs) || 100)});
-    state.stop = stop;
-    state.status = () => ({
-      running: state.running,
-      busy: state.busy,
-      errors: state.errors,
-      autopickInterventions: state.autopickInterventions,
-      failedActions: state.failedActions,
-      retriableActions: state.retriableActions,
-      successfulActions: { ...state.successfulActions },
-      events: [...state.events],
-      lastDecision: state.lastDecision,
-      lastAction: state.lastAction,
-      context: runtime.getContext(),
-    });
-    globalThis.__DRAFTFORGE_AUTOPILOT__ = state;
-    tick();
-    return { started: true };
-  })()`;
+export function buildGuardedDraftLoopExpression() {
+  throw new Error("DRAFTFORGE_LAB_AUTOPILOT_DISABLED_USE_COMPANION");
 }

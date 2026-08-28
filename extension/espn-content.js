@@ -15,17 +15,49 @@ const MANDATORY_CANDIDATE_SEARCH_WINDOW_MS = 120;
 const MANDATORY_POSITION_FILTER_WINDOW_MS = 1800;
 const SELECT_CONFIRMATION_WINDOW_MS = 700;
 const NOMINATION_CONFIRMATION_WINDOW_MS = 4000;
-const MAX_SELECT_RETRIES = 1;
+const BID_ACKNOWLEDGEMENT_WINDOW_MS = 650;
+const NOMINATION_ACKNOWLEDGEMENT_WINDOW_MS = 650;
+const OWN_NOMINATION_PENDING_WINDOW_MS = 10000;
 const MAX_BID_CONTROL_RETRIES = 4;
 const MAX_AUCTION_SETTLEMENT_RECOVERY_POLLS = 5;
+const MAX_AUCTION_SALES = 256;
 const SELECT_ACTION_BUDGET_MS = 4500;
 const SNAKE_PLAYER_POOL_STABILITY_MS = 180;
 const auctionSales = [];
 let trackedAuctionOffer = null;
+let trackedOwnNomination = null;
+let trackedAuctionSaleSequence = 0;
 let domRevision = 0;
 let visibleRowsCache = { revision: -1, rows: [] };
 let trackedSnakePoolPick = null;
 let trackedSnakePoolChangedAt = 0;
+let trackedDraftClock = { key: "", seconds: null, observedAt: 0 };
+let trackedDraftNamespace = "";
+let actionExecutionTail = Promise.resolve();
+const inFlightActionResults = new Map();
+const completedActionResults = new Map();
+const actionRequestSignatures = new Map();
+const MAX_COMPLETED_ACTION_RESULTS = 64;
+
+function exactDraftNamespace(url, leagueId, teamId, season) {
+  const draftInstance = url.searchParams.get("draftId")
+    || url.searchParams.get("memberId")
+    || url.searchParams.get("instanceId")
+    || url.pathname;
+  return `${String(leagueId || "unknown")}:${Number(teamId || 0)}:${Number(season || 0)}:${draftInstance}`;
+}
+
+function resetTrackedDraftState(namespace) {
+  if (!namespace || trackedDraftNamespace === namespace) return;
+  trackedDraftNamespace = namespace;
+  auctionSales.length = 0;
+  trackedAuctionOffer = null;
+  trackedOwnNomination = null;
+  trackedAuctionSaleSequence = 0;
+  trackedSnakePoolPick = null;
+  trackedSnakePoolChangedAt = 0;
+  trackedDraftClock = { key: "", seconds: null, observedAt: 0 };
+}
 
 function isElementVisible(node) {
   if (!node || node.disabled) return false;
@@ -62,9 +94,50 @@ function nominationHasStarted(context, playerName) {
     && Number(context?.currentBid) > 0);
 }
 
+function nominationMatchesAction(context, action) {
+  const expectedPlayerId = Number(action?.playerId || 0);
+  const livePlayerId = Number(context?.nominatedPlayerId || 0);
+  if (expectedPlayerId && livePlayerId) return expectedPlayerId === livePlayerId;
+  return nominationHasStarted(context, action?.playerName);
+}
+
+function rememberOwnNomination(context, action) {
+  if (!nominationMatchesAction(context, action) || !["TARGET", "DRAIN"].includes(action?.nominationIntent)) return;
+  trackedOwnNomination = {
+    leagueId: String(context.leagueId || ""),
+    teamId: Number(context.teamId || 0),
+    season: Number(context.season || 0),
+    playerId: Number(action.playerId || context.nominatedPlayerId || 0),
+    playerName: String(action.playerName || context.nominatedPlayer || ""),
+    intent: action.nominationIntent,
+    pendingUntil: null,
+  };
+}
+
+function rememberPendingOwnNomination(context, action) {
+  if (!["TARGET", "DRAIN"].includes(action?.nominationIntent)) return;
+  trackedOwnNomination = {
+    leagueId: String(context.leagueId || ""),
+    teamId: Number(context.teamId || 0),
+    season: Number(context.season || 0),
+    playerId: Number(action.playerId || 0),
+    playerName: String(action.playerName || ""),
+    intent: action.nominationIntent,
+    pendingUntil: Date.now() + OWN_NOMINATION_PENDING_WINDOW_MS,
+  };
+}
+
 function nominationTransition(context, action) {
-  if (nominationHasStarted(context, action.playerName)) {
-    return { ok: true, code: "NOMINATION_STARTED", message: "nomination submitted in ESPN.", action };
+  const expectedOpeningBid = Number(action?.amount || 0);
+  if (nominationMatchesAction(context, action)
+    && Number.isInteger(expectedOpeningBid)
+    && expectedOpeningBid > 0
+    && Number(context?.currentBid) === expectedOpeningBid) {
+    rememberOwnNomination(context, action);
+    return { ok: true, code: "NOMINATION_CONFIRMED", message: `Exact $${expectedOpeningBid} nomination confirmed in ESPN.`, action };
+  }
+  if (nominationMatchesAction(context, action) && Number(context?.currentBid) > 0) {
+    return { ok: false, code: "NOMINATION_OPENING_PRICE_UNCONFIRMED", message: `ESPN did not expose the exact $${expectedOpeningBid || "unknown"} opening offer for this nominee.` };
   }
   if (context.nominatedPlayer || Number(context.currentBid || 0) > 0) {
     return { ok: false, code: "NOMINATION_ACTIVE", message: "ESPN started another salary-cap nomination before this confirmation control appeared." };
@@ -143,9 +216,52 @@ function snakePlayerPoolIsStable(currentPick) {
   return Date.now() - trackedSnakePoolChangedAt >= SNAKE_PLAYER_POOL_STABILITY_MS;
 }
 
+function scopedDraftClock(snakeClock, snakeClockContainer) {
+  const selectors = [
+    "[data-testid='draft-timer']",
+    "[data-testid*='draft-clock' i]",
+    ".draft-timer",
+    ".auction-clock",
+    "[class*='draft-clock' i]",
+    "[class*='countdown' i]",
+  ];
+  const candidates = [snakeClock, snakeClockContainer, ...selectors.map((selector) => document.querySelector(selector))]
+    .filter((node, index, all) => node && all.indexOf(node) === index && isElementVisible(node));
+  for (const node of candidates) {
+    const match = String(node.textContent || "").match(/\b(\d{1,2}):(\d{2})\b/);
+    if (!match) continue;
+    const seconds = Number(match[1]) * 60 + Number(match[2]);
+    if (Number.isFinite(seconds)) return { seconds, source: selectors.find((selector) => document.querySelector(selector) === node) || "ACTIVE_PICK_CLOCK" };
+  }
+  return { seconds: null, source: null };
+}
+
+function monotonicDraftClock(seconds, key) {
+  if (!Number.isFinite(seconds) || !key) return null;
+  const now = Date.now();
+  if (trackedDraftClock.key !== key) {
+    trackedDraftClock = { key, seconds, observedAt: now };
+    return seconds;
+  }
+  // The exact same pick/offer clock may hold or count down. A jump upward is
+  // an ESPN surface reset or a different hidden timer and is never actionable.
+  if (Number.isFinite(trackedDraftClock.seconds) && seconds > trackedDraftClock.seconds + 1) return null;
+  trackedDraftClock = { key, seconds, observedAt: now };
+  return seconds;
+}
+
 function getContext() {
   const url = new URL(window.location.href);
   const text = document.body?.innerText ?? "";
+  const leagueMatch = window.location.href.match(/league(?:Id|\/)(?:=|\/)(\d+)/i);
+  const teamMatch = window.location.href.match(/team(?:Id|\/)(?:=|\/)(\d+)/i);
+  const seasonMatch = window.location.href.match(/(?:seasonId=|\/seasons\/)(\d{4})/i);
+  const waitingTeamLink = [...document.querySelectorAll("a[href*='teamId=']")].find((link) => /edit team settings/i.test(link.textContent || ""));
+  const waitingTeamMatch = waitingTeamLink?.getAttribute("href")?.match(/[?&]teamId=(\d+)/i);
+  const leagueId = url.searchParams.get("leagueId") || leagueMatch?.[1] || null;
+  const teamId = Number(url.searchParams.get("teamId") || teamMatch?.[1] || waitingTeamMatch?.[1] || 0) || null;
+  const season = Number(url.searchParams.get("seasonId") || seasonMatch?.[1] || 0) || null;
+  resetTrackedDraftState(exactDraftNamespace(url, leagueId, teamId, season));
   const snakeClock = document.querySelector(".on-the-clock");
   const snakeClockContainer = snakeClock?.closest?.(".current-pick-module-container") || null;
   // ESPN moves the active pick out of the pick train. On a team's final turn
@@ -167,8 +283,31 @@ function getContext() {
     ? (snakeClockOwnMarker ? "ACTIVE_OWN_PICK" : "TEAM_LABEL")
     : null;
   const currentPickMatch = snakeClock?.textContent?.match(/pick\s+(\d+)/i) || text.match(/on the clock:\s*pick\s+(\d+)/i);
-  const clockMatch = text.slice(0, 1000).match(/\b(\d{1,2}):(\d{2})\b/);
-  const remainingSeconds = clockMatch ? Number(clockMatch[1]) * 60 + Number(clockMatch[2]) : null;
+  const currentBidMatch = text.match(/current (?:bid|offer)\s*:\s*\$?\s*(\d+)/i) || text.match(/high bid\s*\$?\s*(\d+)/i);
+  const activeAuctionPlayer = document.querySelector("[data-testid='player-selected'] .playerinfo__playername");
+  const activeAuctionContainer = activeAuctionPlayer?.closest?.("[data-testid='player-selected']") || null;
+  const nominatedPlayerId = Number(
+    activeAuctionContainer?.querySelector?.("[data-player-id], [data-playerid]")?.getAttribute?.("data-player-id")
+    || activeAuctionContainer?.querySelector?.("[data-player-id], [data-playerid]")?.getAttribute?.("data-playerid")
+    || activeAuctionContainer?.querySelector?.("img[src*='/players/full/']")?.getAttribute?.("src")?.match(/players\/full\/(-?\d+)/)?.[1]
+    || 0
+  ) || null;
+  const nomineeNode = activeAuctionPlayer || document.querySelector("[data-testid*='nominee' i], [class*='nominee' i], [aria-label*='nominated player' i]");
+  const nominatedPlayerName = nomineeNode?.textContent?.trim().replace(/\s+/g, " ") || null;
+  const auctionPickMatch = text.match(/\bPK\s+(\d+)\s+OF\s+\d+\b/i);
+  const scopedClock = scopedDraftClock(snakeClock, snakeClockContainer);
+  const clockIdentity = Number(currentPickMatch?.[1] || 0) > 0
+    ? `${url.pathname}:snake:${Number(currentPickMatch?.[1])}`
+    : nominatedPlayerId
+      ? `${url.pathname}:auction:offer:id:${nominatedPlayerId}:bid:${Number(currentBidMatch?.[1] || 0)}`
+      : nominatedPlayerName
+        ? `${url.pathname}:auction:offer:name:${normalizePlayerName(nominatedPlayerName)}:bid:${Number(currentBidMatch?.[1] || 0)}`
+        : Number(auctionPickMatch?.[1] || 0) > 0
+          ? `${url.pathname}:auction:nomination:${Number(auctionPickMatch?.[1])}`
+          : scopedClock.source
+            ? `${url.pathname}:waiting`
+            : "";
+  const remainingSeconds = monotonicDraftClock(scopedClock.seconds, clockIdentity);
   const availableRows = visiblePlayerRows();
   const availableControls = availableRows.map(playerControlForRow).filter(Boolean);
   const availableNodes = availableControls.length
@@ -209,16 +348,6 @@ function getContext() {
     if (!playerId && !titled && !named) return [];
     return [{ playerId, name: titled || named || null, amount }];
   });
-  const activeAuctionPlayer = document.querySelector("[data-testid='player-selected'] .playerinfo__playername");
-  const activeAuctionContainer = activeAuctionPlayer?.closest?.("[data-testid='player-selected']") || null;
-  const nominatedPlayerId = Number(
-    activeAuctionContainer?.querySelector?.("[data-player-id], [data-playerid]")?.getAttribute?.("data-player-id")
-    || activeAuctionContainer?.querySelector?.("[data-player-id], [data-playerid]")?.getAttribute?.("data-playerid")
-    || activeAuctionContainer?.querySelector?.("img[src*='/players/full/']")?.getAttribute?.("src")?.match(/players\/full\/(-?\d+)/)?.[1]
-    || 0
-  ) || null;
-  const nomineeNode = activeAuctionPlayer || document.querySelector("[data-testid*='nominee' i], [class*='nominee' i], [aria-label*='nominated player' i]");
-  const currentBidMatch = text.match(/current (?:bid|offer)\s*:\s*\$?\s*(\d+)/i) || text.match(/high bid\s*\$?\s*(\d+)/i);
   const maxLegalBidMatch = text.match(/manual (?:bid|offer) \(max \$(\d+)\)/i);
   const selectingAuctionPick = document.querySelector(".auction-pick-component--selecting")
     ?.closest?.(".auction-pick-component") || null;
@@ -247,11 +376,6 @@ function getContext() {
     && !currentBidMatch
     && [...document.querySelectorAll("button[data-player-id], button[data-playerid], button")]
       .some((button) => isElementVisible(button) && /^select$/i.test((button.textContent || "").trim()));
-  const leagueMatch = window.location.href.match(/league(?:Id|\/)(?:=|\/)(\d+)/i);
-  const teamMatch = window.location.href.match(/team(?:Id|\/)(?:=|\/)(\d+)/i);
-  const seasonMatch = window.location.href.match(/(?:seasonId=|\/seasons\/)(\d{4})/i);
-  const waitingTeamLink = [...document.querySelectorAll("a[href*='teamId=']")].find((link) => /edit team settings/i.test(link.textContent || ""));
-  const waitingTeamMatch = waitingTeamLink?.getAttribute("href")?.match(/[?&]teamId=(\d+)/i);
   const inDraftRoom = /\/football\/draft(?:\/|$)/i.test(url.pathname) || /on the clock:\s*pick|you(?:'|’)re on the clock(?!\s+in\b)|your turn to (?:pick|nominate)|nominate player|current (?:bid|offer)/i.test(text);
   // ESPN keeps every volume icon in a hidden SVG sprite, so the mere presence
   // of #icon__controls__volume_mute does not prove the audible control is off.
@@ -260,11 +384,8 @@ function getContext() {
     .find((node) => /icon__controls__volume_/i.test(node.getAttribute("href") || node.getAttribute("xlink:href") || ""));
   const activeVolumeIcon = activeVolumeUse?.getAttribute("href") || activeVolumeUse?.getAttribute("xlink:href") || "";
   const soundMuted = activeVolumeIcon === "#icon__controls__volume_mute";
-  const autopickToggle = visibleAutopickToggle();
-  const autopickActive = /you(?:'|’)re on autopick/i.test(text)
-    || Boolean(autopickToggle?.input?.checked)
-    || [...document.querySelectorAll("button, [role='button']")]
-      .some((node) => isElementVisible(node) && /^disable autopick$/i.test((node.textContent || "").trim()));
+  const autopickActive = authoritativeAutopickState(text);
+  const leadingBid = authoritativeLeadingBidState(ownAuctionTeam);
   const snakePickNumber = Number(currentPickMatch?.[1] || 0);
   // The pre-draft room has a readable player grid but no active pick number.
   // Let the user complete the no-click checklist there; once the draft starts,
@@ -274,16 +395,33 @@ function getContext() {
     : availableControls.length > 0;
   const actionSurfaceReady = Boolean(
     inDraftRoom
-    && !autopickActive
+    && autopickActive === false
     && Number.isFinite(remainingSeconds)
     && availableControls.length
     && (ownAuctionTeam ? budgetMaxLegalBid > 0 : ((snakeClockOwnMarker || ownDraftTeam) && snakePoolStable)),
   );
+  const trackedRoomMatches = trackedOwnNomination
+    && String(trackedOwnNomination.leagueId) === String(leagueId || "")
+    && Number(trackedOwnNomination.teamId) === Number(teamId || 0)
+    && Number(trackedOwnNomination.season) === Number(season || 0);
+  const trackedPlayerMatches = trackedRoomMatches && (
+    (Number(trackedOwnNomination.playerId) !== 0
+      && Number(nominatedPlayerId) !== 0
+      && Number(trackedOwnNomination.playerId) === Number(nominatedPlayerId))
+    || playerNamesMatch(trackedOwnNomination.playerName, nomineeNode?.textContent || "")
+  );
+  const trackedNominationPending = trackedRoomMatches
+    && Number(trackedOwnNomination?.pendingUntil || 0) > Date.now();
+  if (trackedOwnNomination && (!trackedRoomMatches
+    || (Number(currentBidMatch?.[1] || 0) > 0 && !trackedPlayerMatches)
+    || (!trackedNominationPending && !nomineeNode && Number(currentBidMatch?.[1] || 0) === 0))) {
+    trackedOwnNomination = null;
+  }
   return {
     url: window.location.href,
-    leagueId: url.searchParams.get("leagueId") || leagueMatch?.[1] || null,
-    teamId: Number(url.searchParams.get("teamId") || teamMatch?.[1] || waitingTeamMatch?.[1] || 0) || null,
-    season: Number(url.searchParams.get("seasonId") || seasonMatch?.[1] || 0) || null,
+    leagueId,
+    teamId,
+    season,
     inDraftRoom,
     // A generic ESPN banner can remain mounted while another team is picking.
     // Snake authorization therefore comes only from the exact active-clock
@@ -291,6 +429,7 @@ function getContext() {
     // exact selecting/own pick component identity above.
     onClock: snakeOnClock || nominationSelectionActive,
     snakeClockSource,
+    draftClockSource: scopedClock.source,
     snakeClockOwnMarker,
     snakeClockTeam: snakeClockTeam || null,
     ownDraftTeam: ownDraftTeam || null,
@@ -301,15 +440,17 @@ function getContext() {
     availablePlayerNames,
     ownRoster,
     auctionActive: /current (?:bid|offer)|your (?:bid|offer)|nominate player|salary cap/i.test(text),
-    nominatedPlayer: nomineeNode?.textContent?.trim().replace(/\s+/g, " ") || null,
+    nominatedPlayer: nominatedPlayerName,
     nominatedPlayerId,
     currentBid: Number(currentBidMatch?.[1] || 0),
     maxLegalBid: Number(maxLegalBidMatch?.[1] || budgetMaxLegalBid || 0),
-    leadingBid: /you(?:'|’)re (?:the )?(?:high bidder|winning)|your bid is winning/i.test(text),
+    leadingBid,
     soundMuted,
     autopickActive,
     actionSurfaceReady,
     auctionBudgets,
+    ownNominationIntent: trackedPlayerMatches ? trackedOwnNomination?.intent || null : null,
+    ownNominationPlayerId: trackedPlayerMatches ? Number(trackedOwnNomination?.playerId || 0) || null : null,
   };
 }
 
@@ -319,6 +460,38 @@ function visibleAutopickToggle() {
   const input = container.querySelector("input[type='checkbox']");
   const control = container.querySelector("label");
   return input && isElementVisible(control) ? { input, control } : null;
+}
+
+function authoritativeAutopickState(text) {
+  const evidence = [];
+  const toggle = visibleAutopickToggle();
+  if (toggle && typeof toggle.input?.checked === "boolean") evidence.push(toggle.input.checked);
+  const visibleButtons = [...document.querySelectorAll("button, [role='button']")].filter(isElementVisible);
+  if (visibleButtons.some((node) => /^disable autopick$/i.test((node.textContent || "").trim()))) evidence.push(true);
+  if (visibleButtons.some((node) => /^enable autopick$/i.test((node.textContent || "").trim()))) evidence.push(false);
+  if (/you(?:'|’)re on autopick/i.test(text)) evidence.push(true);
+  const uniqueEvidence = new Set(evidence);
+  return uniqueEvidence.size === 1 ? [...uniqueEvidence][0] : null;
+}
+
+function authoritativeLeadingBidState(ownAuctionTeam) {
+  // Never infer current leadership from document.body text. ESPN can leave
+  // stale toasts and activity-rail messages from a prior offer mounted while
+  // the next nomination is already active. Only one visible, dedicated
+  // current-leader element is authoritative; ambiguity fails closed.
+  const leaderNodes = [
+    ...document.querySelectorAll("[data-testid*='high-bidder' i], [class*='high-bidder' i], [aria-label*='high bidder' i]"),
+  ].filter(isElementVisible);
+  if (leaderNodes.length !== 1) return null;
+  const ownTeamKey = normalizePlayerName(ownAuctionTeam);
+  const node = leaderNodes[0];
+  const leaderText = String(node.textContent || node.getAttribute?.("aria-label") || "").trim();
+  const match = leaderText.match(/(?:high bidder|leader)\s*:?\s*(.+)$/i)
+    || leaderText.match(/^(.+?)\s+is\s+(?:the\s+)?(?:high bidder|leader)$/i);
+  const leaderKey = normalizePlayerName(match?.[1]);
+  if (leaderKey && ownTeamKey && leaderKey === ownTeamKey) return true;
+  if (leaderKey && ownTeamKey && leaderKey !== ownTeamKey) return false;
+  return null;
 }
 
 function visibleDisableAutopickControl() {
@@ -335,7 +508,14 @@ async function disableEspnAutopick(action = {}) {
   if (action.expectedLeagueId && String(context.leagueId) !== String(action.expectedLeagueId)) {
     return { ok: false, code: "WRONG_LEAGUE", message: "The open ESPN draft room is for a different league." };
   }
-  if (!context.autopickActive) return { ok: true, code: "AUTOPICK_ALREADY_OFF", message: "ESPN Autopick is already off." };
+  if (Number.isInteger(Number(action.expectedTeamId)) && Number(context.teamId) !== Number(action.expectedTeamId)) {
+    return { ok: false, code: "WRONG_TEAM", message: "The open ESPN draft room is for a different team." };
+  }
+  if (Number.isInteger(Number(action.expectedSeason)) && Number(context.season) !== Number(action.expectedSeason)) {
+    return { ok: false, code: "WRONG_SEASON", message: "The open ESPN draft room is for a different season." };
+  }
+  if (context.autopickActive === false) return { ok: true, code: "AUTOPICK_ALREADY_OFF", message: "ESPN Autopick is already off." };
+  if (context.autopickActive !== true) return { ok: false, code: "AUTOPICK_STATE_UNKNOWN", message: "ESPN does not expose an exact visible Autopick state, so DraftForge cannot safely change it." };
   const control = visibleDisableAutopickControl();
   if (!control) return { ok: false, code: "AUTOPICK_CONTROL_NOT_FOUND", message: "ESPN Autopick is active, but its exact visible disable control is unavailable." };
 
@@ -344,7 +524,7 @@ async function disableEspnAutopick(action = {}) {
   do {
     await new Promise((resolve) => setTimeout(resolve, 40));
     context = getContext();
-    if (!context.autopickActive) return { ok: true, code: "AUTOPICK_DISABLED", message: "ESPN Autopick was disabled in the exact draft room." };
+    if (context.autopickActive === false) return { ok: true, code: "AUTOPICK_DISABLED", message: "ESPN Autopick was disabled in the exact draft room." };
   } while (Date.now() < deadline);
   return { ok: false, code: "AUTOPICK_DISABLE_UNCONFIRMED", message: "ESPN did not confirm that Autopick was disabled." };
 }
@@ -372,8 +552,9 @@ function updateAuctionSales(context) {
         playerName: trackedAuctionOffer.playerName,
         teamName: winnerBudget.teamName,
         amount: winner.delta,
-        sequence: auctionSales.length + 1,
+        sequence: ++trackedAuctionSaleSequence,
       });
+      if (auctionSales.length > MAX_AUCTION_SALES) auctionSales.splice(0, auctionSales.length - MAX_AUCTION_SALES);
     }
     if (!winner || !winnerBudget) {
       trackedAuctionOffer.settlementRecoveryPolls = Number(trackedAuctionOffer.settlementRecoveryPolls || 0) + 1;
@@ -406,7 +587,7 @@ function getTrackedContext() {
 }
 
 function hasSafeActionWindow(context, minimumSeconds = MIN_ACTION_WINDOW_SECONDS) {
-  return !context.autopickActive
+  return context.autopickActive === false
     && Number.isFinite(context.remainingSeconds)
     && Number(context.remainingSeconds) >= minimumSeconds;
 }
@@ -517,12 +698,90 @@ function visiblePlayerSearchInput() {
   }) || null;
 }
 
+function customBidStructure() {
+  const forms = [...document.querySelectorAll(".bidding-form__custom")].filter(isElementVisible);
+  if (forms.length !== 1) return null;
+  const form = forms[0];
+  const inputs = [...form.querySelectorAll("#bid__input, input[type='number']")]
+    .filter((input) => input instanceof HTMLInputElement && isElementVisible(input));
+  const submits = [...form.querySelectorAll("button, [role='button']")].filter((node) => (
+    isElementVisible(node)
+    && /^(?:bid|offer|place bid)$/i.test((node.textContent || "").trim().replace(/\s+/g, " "))
+  ));
+  return inputs.length === 1 && submits.length === 1 ? { form, input: inputs[0], submit: submits[0] } : null;
+}
+
+function exactSettledCustomBidSurface(amount) {
+  const expectedAmount = Number(amount);
+  if (!Number.isInteger(expectedAmount) || expectedAmount < 1) return null;
+  const structure = customBidStructure();
+  return structure && Number(structure.input.value) === expectedAmount ? structure : null;
+}
+
+async function settleCustomBidSurface(amount, deadline) {
+  const expectedAmount = Number(amount);
+  if (!Number.isInteger(expectedAmount) || expectedAmount < 1) return null;
+  while (Date.now() < deadline) {
+    const initial = customBidStructure();
+    if (initial) {
+      setNativeValue(initial.input, String(expectedAmount));
+      const crossedRenderBoundary = await new Promise((resolve) => {
+        let settled = false;
+        const finish = (value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          resolve(value);
+        };
+        const timeout = setTimeout(() => finish(false), Math.max(1, Math.min(50, deadline - Date.now())));
+        if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => finish(true));
+      });
+      if (!crossedRenderBoundary) continue;
+      const settled = exactSettledCustomBidSurface(expectedAmount);
+      if (settled) return settled;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  return null;
+}
+
+function exactVisibleModalConfirmation(action) {
+  const dialogs = [...document.querySelectorAll("[role='dialog'], [aria-modal='true'], [class*='modal' i]")]
+    .filter(isElementVisible);
+  const matches = dialogs.flatMap((dialog) => {
+    const identityNodes = [...dialog.querySelectorAll("[data-player-id], [data-playerid], [data-testid*='player-name' i], [class*='playername' i]")];
+    const identityIds = identityNodes
+      .map((node) => Number(node.getAttribute?.("data-player-id") || node.getAttribute?.("data-playerid") || 0))
+      .filter((playerId) => Number.isInteger(playerId) && playerId !== 0);
+    const exactIdentity = Number(action?.playerId || 0) && identityIds.length
+      ? identityIds.length === 1 && identityIds[0] === Number(action.playerId)
+      : identityNodes.some((node) => playerNamesMatch(node.textContent || "", action?.playerName || ""));
+    if (!exactIdentity) return [];
+    if (["BID", "NOMINATE"].includes(action?.operation)) {
+      const expectedAmount = Number(action?.amount);
+      if (!Number.isInteger(expectedAmount) || !new RegExp(`\\$\\s*${expectedAmount}(?:\\D|$)`).test(String(dialog.textContent || ""))) return [];
+    }
+    return [...dialog.querySelectorAll("button, [role='button']")].filter((node) => (
+      isElementVisible(node)
+      && /^(?:confirm|submit|yes)(?:\s|$)|^confirm (?:pick|bid|nomination)$|^yes,? (?:draft|bid|nominate)$/i.test((node.textContent || "").trim())
+    ));
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
+
 function preflightAction(action, context) {
   if (!context.inDraftRoom) return { ok: false, code: "NOT_IN_DRAFT_ROOM", message: "Open the ESPN draft room first." };
-  if (context.autopickActive) return { ok: false, code: "AUTOPICK_ACTIVE", message: "ESPN Autopick is active. DraftForge stopped without sending another action." };
+  if (context.autopickActive === true) return { ok: false, code: "AUTOPICK_ACTIVE", message: "ESPN Autopick is active. DraftForge stopped without sending another action." };
+  if (context.autopickActive !== false) return { ok: false, code: "AUTOPICK_STATE_UNKNOWN", message: "ESPN does not expose an exact visible Autopick-off control. DraftForge stopped without sending an action." };
   if (context.soundMuted !== true) return { ok: false, code: "SOUND_NOT_MUTED", message: "ESPN draft sound is still on. DraftForge stopped before sending the action." };
   if (action.expectedLeagueId && String(context.leagueId) !== String(action.expectedLeagueId)) {
     return { ok: false, code: "WRONG_LEAGUE", message: "The open ESPN draft room is for a different league." };
+  }
+  if (Number.isInteger(Number(action.expectedTeamId)) && Number(context.teamId) !== Number(action.expectedTeamId)) {
+    return { ok: false, code: "WRONG_TEAM", message: "The open ESPN draft room is for a different team." };
+  }
+  if (Number.isInteger(Number(action.expectedSeason)) && Number(context.season) !== Number(action.expectedSeason)) {
+    return { ok: false, code: "WRONG_SEASON", message: "The open ESPN draft room is for a different season." };
   }
   if (action.operation === "NOMINATE" && (context.nominatedPlayer || Number(context.currentBid || 0) > 0)) {
     return { ok: false, code: "NOMINATION_ACTIVE", message: "ESPN already has an active salary-cap nominee, so no nomination was sent." };
@@ -540,14 +799,29 @@ function preflightAction(action, context) {
   if ((action.operation === "SELECT" || action.operation === "NOMINATE") && context.actionSurfaceReady !== true) {
     return { ok: false, code: "PLAYER_POOL_STALE", message: "ESPN's live player pool has not stabilized for this exact turn." };
   }
-  if (action.operation === "BID" && Number.isFinite(Number(action.maxApprovedBid))) {
-    const nextOffer = Number(context.currentBid || 0) + 1;
-    if (nextOffer > Number(action.maxApprovedBid)) {
-      return { ok: true, code: "WALK_AWAY", message: `Offer is above the approved $${Number(action.maxApprovedBid)} walk-away price.`, action };
+  if (action.operation === "BID" && context.leadingBid === true) {
+    return { ok: true, code: "HOLD_LEADING_BID", message: "ESPN confirms that we already lead this offer; no bid was sent." };
+  }
+  if (action.operation === "BID" && context.leadingBid !== false) {
+    return { ok: false, code: "LEADING_BID_UNKNOWN", message: "ESPN does not expose authoritative proof that another team leads, so no bid was sent." };
+  }
+  if (action.operation === "BID" && (!Number.isFinite(Number(action.maxApprovedBid)) || Number(action.maxApprovedBid) < 0)) {
+    return { ok: false, code: "BID_CEILING_UNKNOWN", message: "The source-backed walk-away ceiling is missing, so no bid was sent." };
+  }
+  if (action.operation === "BID") {
+    const expectedCurrentBid = Number(action.expectedCurrentBid);
+    const expectedNextOffer = expectedCurrentBid + 1;
+    if (!Number.isFinite(expectedCurrentBid) || expectedCurrentBid < 0) {
+      return { ok: false, code: "BID_CONTEXT_INVALID", message: "The expected ESPN offer is missing, so no bid was sent." };
     }
-    action = { ...action, amount: nextOffer, expectedCurrentBid: Number(context.currentBid || 0) };
+    if (expectedNextOffer > Number(action.maxApprovedBid)) {
+      return { ok: true, code: "WALK_AWAY", message: `Offer is above the approved $${Number(action.maxApprovedBid)} walk-away price.` };
+    }
   }
   if (action.operation === "NOMINATE") {
+    if (!["TARGET", "DRAIN"].includes(action.nominationIntent)) {
+      return { ok: false, code: "NOMINATION_INTENT_UNKNOWN", message: "The nomination intent is missing, so no player was selected." };
+    }
     const openingBid = Number(action.amount || 1);
     if (!Number.isInteger(openingBid) || openingBid < 1) {
       return { ok: false, code: "INVALID_OPENING_BID", message: "The ESPN opening offer must be a positive whole dollar." };
@@ -558,7 +832,7 @@ function preflightAction(action, context) {
   }
   if (action.operation === "BID") {
     if (!context.nominatedPlayer) return { ok: false, code: "NOMINEE_UNKNOWN", message: "ESPN does not expose an active nominee, so the bid was not sent." };
-    if (!context.nominatedPlayer.toLowerCase().includes(action.playerName.toLowerCase())) {
+    if (!nominationMatchesAction(context, action)) {
       return { ok: false, code: "NOMINEE_MISMATCH", message: "The ESPN nominee no longer matches the recommended player." };
     }
     const expectedCurrentBid = Number(action.expectedCurrentBid);
@@ -578,7 +852,107 @@ function preflightAction(action, context) {
   return { ok: true, action };
 }
 
+function actionExecutionSignature(action) {
+  const candidateSignature = (Array.isArray(action?.candidates) ? action.candidates : [])
+    .map((candidate) => `${Number(candidate?.playerId || 0)}-${normalizePlayerName(candidate?.playerName)}`)
+    .join(",");
+  return [
+    action?.commandCenterSessionId || "",
+    action?.operation || "",
+    action?.expectedLeagueId || "",
+    Number(action?.expectedTeamId || 0),
+    Number(action?.expectedSeason || 0),
+    Number(action?.expectedPick || 0),
+    Number(action?.playerId || 0),
+    normalizePlayerName(action?.playerName),
+    Number(action?.expectedCurrentBid ?? -1),
+    Number(action?.amount || 0),
+    Number(action?.maxApprovedBid || 0),
+    action?.nominationIntent || "",
+    candidateSignature,
+  ].join(":");
+}
+
+function safeCommandCenterSessionId(value) {
+  return typeof value === "string"
+    && value.length >= 8
+    && value.length <= 128
+    && /^[A-Za-z0-9._:-]+$/.test(value);
+}
+
+function resultForAction(result, action) {
+  return {
+    ...result,
+    action: {
+      ...(result?.action || action),
+      ...(action?.actionRequestId !== undefined ? { actionRequestId: action.actionRequestId } : {}),
+    },
+  };
+}
+
+function rememberCompletedAction(key, result) {
+  completedActionResults.set(key, result);
+  while (completedActionResults.size > MAX_COMPLETED_ACTION_RESULTS) {
+    const oldest = completedActionResults.keys().next().value;
+    if (oldest === undefined) break;
+    completedActionResults.delete(oldest);
+    if (String(oldest).startsWith("request:")) {
+      actionRequestSignatures.delete(String(oldest).slice("request:".length));
+    }
+  }
+}
+
 async function executeAction(action) {
+  const commandCenterSessionId = action?.commandCenterSessionId;
+  if (!safeCommandCenterSessionId(commandCenterSessionId)) {
+    return { ok: false, code: "COMMAND_CENTER_SESSION_INVALID", message: "The draft action is missing a safe command-center session identity.", action };
+  }
+  const signature = actionExecutionSignature(action);
+  const requestId = Number(action?.actionRequestId);
+  const requestKey = Number.isInteger(requestId) ? `${commandCenterSessionId}:${requestId}` : null;
+  if (requestKey) {
+    const previousSignature = actionRequestSignatures.get(requestKey);
+    if (previousSignature && previousSignature !== signature) {
+      return { ok: false, code: "ACTION_REQUEST_CONFLICT", message: "The same action request id was reused for different ESPN state.", action };
+    }
+    actionRequestSignatures.set(requestKey, signature);
+  }
+  const requestResultKey = requestKey ? `request:${requestKey}` : null;
+  if (requestResultKey && completedActionResults.has(requestResultKey)) {
+    return resultForAction(completedActionResults.get(requestResultKey), action);
+  }
+  if (completedActionResults.has(signature)) {
+    const cached = completedActionResults.get(signature);
+    if (requestResultKey) rememberCompletedAction(requestResultKey, cached);
+    return resultForAction(cached, action);
+  }
+  if (inFlightActionResults.has(signature)) {
+    const shared = await inFlightActionResults.get(signature);
+    if (requestResultKey) rememberCompletedAction(requestResultKey, shared);
+    return resultForAction(shared, action);
+  }
+
+  const execution = actionExecutionTail
+    .catch(() => {})
+    .then(() => executeActionNow(action));
+  actionExecutionTail = execution.catch(() => {});
+  inFlightActionResults.set(signature, execution);
+  try {
+    const result = await execution;
+    // Successful, deliberately terminal, or post-click-uncertain outcomes are
+    // idempotent for this exact offer. Pre-click selector failures remain
+    // eligible for a new request after ESPN rerenders.
+    if (result?.ok === true || result?.clicked === true || ["WALK_AWAY", "HOLD_LEADING_BID"].includes(result?.code)) {
+      rememberCompletedAction(signature, result);
+    }
+    if (requestResultKey) rememberCompletedAction(requestResultKey, result);
+    return resultForAction(result, action);
+  } finally {
+    inFlightActionResults.delete(signature);
+  }
+}
+
+async function executeActionNow(action) {
   const actionDeadlineAt = Date.now() + SELECT_ACTION_BUDGET_MS;
   let currentAction = { ...action, actionDeadlineAt };
   while (true) {
@@ -591,6 +965,48 @@ async function executeAction(action) {
   }
 }
 
+async function acknowledgeBid(action) {
+  const deadline = Math.min(
+    Number(action.actionDeadlineAt || Infinity),
+    Date.now() + BID_ACKNOWLEDGEMENT_WINDOW_MS,
+  );
+  let context = getContext();
+  while (Date.now() < deadline) {
+    const livePlayerMatches = nominationMatchesAction(context, action);
+    const liveBid = Number(context.currentBid || 0);
+    if (livePlayerMatches && liveBid === Number(action.amount) && context.leadingBid === true) {
+      return { ok: true, code: "BID_CONFIRMED", message: `ESPN confirmed the exact $${action.amount} bid and our lead.`, action };
+    }
+    if (livePlayerMatches && liveBid > Number(action.amount)) {
+      return { ok: true, code: "BID_SUPERSEDED", message: `ESPN advanced the offer beyond $${action.amount}; re-evaluate from the new exact price.`, action };
+    }
+    if ((context.nominatedPlayer || liveBid > 0) && !livePlayerMatches) {
+      return { ok: false, clicked: true, retryable: false, code: "BID_ACK_UNCERTAIN", message: "ESPN changed nominees before confirming the clicked bid. DraftForge will not retry it blindly.", action };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    context = getContext();
+  }
+  return { ok: false, clicked: true, retryable: false, code: "BID_ACK_UNCERTAIN", message: "ESPN did not acknowledge the clicked bid before the bounded deadline. DraftForge will not retry it blindly.", action };
+}
+
+async function acknowledgeNomination(action) {
+  const deadline = Math.min(
+    Number(action.actionDeadlineAt || Infinity),
+    Date.now() + NOMINATION_ACKNOWLEDGEMENT_WINDOW_MS,
+  );
+  let context = getContext();
+  while (Date.now() < deadline) {
+    const transition = nominationTransition(context, action);
+    if (transition?.ok) return transition;
+    if (transition && !transition.ok) {
+      return { ...transition, clicked: true, retryable: false, code: "NOMINATION_ACK_UNCERTAIN", message: `${transition.message} DraftForge will not retry the clicked confirmation blindly.`, action };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    context = getContext();
+  }
+  return { ok: false, clicked: true, retryable: false, code: "NOMINATION_ACK_UNCERTAIN", message: "ESPN did not acknowledge the clicked nomination before the bounded deadline. DraftForge will not retry it blindly.", action };
+}
+
 async function executeActionAttempt(action) {
   const context = getContext();
   const preflight = preflightAction(action, context);
@@ -601,9 +1017,25 @@ async function executeActionAttempt(action) {
   let usedPlayerSearch = null;
   let usedPositionFilter = null;
   if (action.operation === "SELECT" || action.operation === "NOMINATE") {
-    const requestedCandidates = Array.isArray(action.candidates) && action.candidates.length
-      ? action.candidates
-      : [{ playerId: action.playerId, playerName: action.playerName }];
+    const exactNominationMetadata = action.operation === "NOMINATE"
+      ? (Array.isArray(action.candidates) ? action.candidates : []).find((candidate) => (
+          Number(candidate?.playerId || 0) === Number(action.playerId || 0)
+          && playerNamesMatch(candidate?.playerName, action.playerName)
+        ))
+      : null;
+    const requestedCandidates = action.operation === "NOMINATE"
+      // TARGET/DRAIN is part of the nomination decision. A different player is
+      // not a safe fallback because it can invert that intent. Return to the
+      // production engine instead of silently resolving another candidate.
+      ? [{
+          playerId: action.playerId,
+          playerName: action.playerName,
+          position: action.position || exactNominationMetadata?.position,
+          fillsMandatoryStarter: action.fillsMandatoryStarter ?? exactNominationMetadata?.fillsMandatoryStarter,
+        }]
+      : Array.isArray(action.candidates) && action.candidates.length
+        ? action.candidates
+        : [{ playerId: action.playerId, playerName: action.playerName }];
     // The pick message rail updates before the virtualized player pool. Remove
     // exact players ESPN already proves were drafted so late-round resolution
     // never spends sequential search windows on stale recommendations. This
@@ -786,29 +1218,36 @@ async function executeActionAttempt(action) {
         return new RegExp(`^(?:offer|bid) \\$${Number(action.amount)}$`, "i").test(label);
       }) || null
     : null;
-  if (action.amount && !exactIncrementalBidControl()) {
-    const bidInput = document.querySelector("#bid__input") || findByText("input", [/bid/i, /amount/i, /salary/i]) || document.querySelector("input[type='number']");
-    if (bidInput instanceof HTMLInputElement) setNativeValue(bidInput, String(action.amount));
-  }
-
   const patterns = action.operation === "NOMINATE"
     ? [/^nominate$/i, /nominate player/i, /nominate\s+\w+/i]
     : action.operation === "BID"
       ? [/^bid$/i, /place bid/i, /bid \$/i, /^offer(?:\s+\$\d+)?$/i]
       : [/^draft$/i, /^select$/i, /draft player/i, /make pick/i];
+  const exactNominationControl = () => action.operation === "NOMINATE"
+    ? (Number(action.amount) === 1
+        ? findByText("button, [role='button']", patterns)
+        : null)
+    : null;
   const exactDraftControl = () => [...document.querySelectorAll(`button.Button--draft[data-player-id="${CSS.escape(String(resolvedPlayerId))}"], button.Button--draft[data-playerid="${CSS.escape(String(resolvedPlayerId))}"]`)]
     .find(isElementVisible) || null;
-  let submit = directSelect || (action.operation === "SELECT"
-    ? exactDraftControl()
-    : action.operation === "BID"
-      ? exactIncrementalBidControl() || document.querySelector(".bidding-form__custom button:not([disabled])")
-      : findByText("button, [role='button']", patterns));
   const submitWindowMs = action.operation === "BID"
     ? 180
     : action.operation === "NOMINATE"
       ? NOMINATION_CONFIRMATION_WINDOW_MS
       : 1500;
   const submitDeadline = Math.min(Number(action.actionDeadlineAt || Infinity), Date.now() + submitWindowMs);
+  let customAmountSurface = null;
+  let submit = directSelect || (action.operation === "SELECT"
+    ? exactDraftControl()
+    : action.operation === "BID"
+      ? exactIncrementalBidControl()
+      : exactNominationControl());
+  const needsCustomAmountSurface = (action.operation === "BID" && !submit)
+    || (action.operation === "NOMINATE" && Number(action.amount) !== 1);
+  if (needsCustomAmountSurface) {
+    customAmountSurface = await settleCustomBidSurface(action.amount, submitDeadline);
+    submit = customAmountSurface?.submit || null;
+  }
   while (!submit && Date.now() < submitDeadline) {
     await new Promise((resolve) => setTimeout(resolve, 40));
     if (action.operation === "NOMINATE") {
@@ -821,8 +1260,8 @@ async function executeActionAttempt(action) {
     submit = action.operation === "SELECT"
       ? exactDraftControl()
       : action.operation === "BID"
-        ? exactIncrementalBidControl() || document.querySelector(".bidding-form__custom button:not([disabled])")
-        : findByText("button, [role='button']", patterns);
+        ? exactIncrementalBidControl()
+        : exactNominationControl();
   }
   if (!submit) {
     const latest = getContext();
@@ -853,6 +1292,15 @@ async function executeActionAttempt(action) {
     }
   }
 
+  if (customAmountSurface) {
+    const settledAgain = exactSettledCustomBidSurface(action.amount);
+    if (!settledAgain) {
+      return { ok: false, code: "CUSTOM_AMOUNT_UNCONFIRMED", message: "ESPN did not preserve the exact custom dollar amount on one unique visible bid form." };
+    }
+    customAmountSurface = settledAgain;
+    submit = settledAgain.submit;
+  }
+
   const preSubmitContext = getContext();
   const minimumPreSubmitWindow = action.operation === "SELECT" ? MIN_SNAKE_SELECTION_WINDOW_SECONDS : MIN_ACTION_WINDOW_SECONDS;
   if (!hasSafeActionWindow(preSubmitContext, minimumPreSubmitWindow)) {
@@ -868,26 +1316,31 @@ async function executeActionAttempt(action) {
   if (action.operation === "SELECT" && Number(action.expectedPick) > 0 && Number(preSubmitContext.currentPick) !== Number(action.expectedPick)) {
     return { ok: false, code: "PICK_CHANGED", message: "The active ESPN pick changed before the selection could be sent." };
   }
-  if (action.operation === "BID" && Number(preSubmitContext.currentBid) !== Number(action.expectedCurrentBid)) {
-    const retryAction = retryBidAction(action, preSubmitContext);
-    if (retryAction) return { retryAction };
-    return { ok: false, code: "BID_CHANGED", message: "The ESPN offer changed before the exact incremental bid could be clicked." };
+  if (action.operation === "BID") {
+    const bidPreflight = preflightAction(action, preSubmitContext);
+    if (!bidPreflight.action) return bidPreflight;
+    action = bidPreflight.action;
+  }
+  if (customAmountSurface) {
+    const finalSurface = exactSettledCustomBidSurface(action.amount);
+    if (!finalSurface) {
+      return { ok: false, code: "CUSTOM_AMOUNT_DRIFT", message: "ESPN changed the exact custom dollar form immediately before submission." };
+    }
+    submit = finalSurface.submit;
   }
 
   if (action.operation === "SELECT") {
     sendToCompanion({ type: "ESPN_ACTION_RESOLVED", payload: resolvedAction });
   }
   submit.click();
+  if (action.operation === "NOMINATE") rememberPendingOwnNomination(preSubmitContext, resolvedAction);
   let submittedAt = Date.now();
   await new Promise((resolve) => setTimeout(resolve, 75));
   if (usedPositionFilter && String(usedPositionFilter.value) !== "-1") {
     setNativeSelectValue(usedPositionFilter, "-1");
     visibleRowsCache.revision = -1;
   }
-  const dialog = document.querySelector("[role='dialog'], [aria-modal='true'], [class*='modal' i]");
-  const confirmation = dialog && [...dialog.querySelectorAll("button, [role='button']")].find((node) =>
-    /^(confirm|submit|yes)|confirm (pick|bid|nomination)|yes,? (draft|bid|nominate)/i.test((node.textContent || "").trim())
-  );
+  const confirmation = exactVisibleModalConfirmation(resolvedAction);
   confirmation?.click();
   if (confirmation) submittedAt = Date.now();
   resolvedAction = { ...resolvedAction, submittedAt };
@@ -905,21 +1358,23 @@ async function executeActionAttempt(action) {
       if (usedPlayerSearch instanceof HTMLInputElement) setNativeValue(usedPlayerSearch, "");
       return { ok: true, code: "ROSTER_CONFIRMED", message: `${resolvedAction.playerName} confirmed on the ESPN roster.`, action: resolvedAction };
     }
-    if (Number(confirmedContext.currentPick) === Number(action.expectedPick)
-      && hasSafeActionWindow(confirmedContext, MIN_SNAKE_SELECTION_WINDOW_SECONDS)
-      && Number(action.selectRetryCount || 0) < MAX_SELECT_RETRIES) {
-      if (usedPlayerSearch instanceof HTMLInputElement) setNativeValue(usedPlayerSearch, "");
-      const retryCandidates = [resolvedAction, ...(Array.isArray(action.candidates) ? action.candidates : [])]
-        .filter((candidate, index, all) => all.findIndex((item) => Number(item.playerId) === Number(candidate.playerId)) === index);
-      return { retryAction: { ...action, candidates: retryCandidates, selectRetryCount: Number(action.selectRetryCount || 0) + 1 } };
-    }
     if (usedPlayerSearch instanceof HTMLInputElement) setNativeValue(usedPlayerSearch, "");
     return {
       ok: false,
+      clicked: true,
+      retryable: false,
       code: "ROSTER_NOT_CONFIRMED",
-      message: `ESPN did not confirm ${resolvedAction.playerName} on the exact roster before the turn changed.`,
+      message: `ESPN did not confirm ${resolvedAction.playerName} on the exact roster. DraftForge will not click any candidate again until the room state is reconciled.`,
       action: resolvedAction,
     };
+  }
+  if (action.operation === "BID") {
+    if (usedPlayerSearch instanceof HTMLInputElement) setNativeValue(usedPlayerSearch, "");
+    return acknowledgeBid(resolvedAction);
+  }
+  if (action.operation === "NOMINATE") {
+    if (usedPlayerSearch instanceof HTMLInputElement) setNativeValue(usedPlayerSearch, "");
+    return acknowledgeNomination(resolvedAction);
   }
   if (usedPlayerSearch instanceof HTMLInputElement) setNativeValue(usedPlayerSearch, "");
   return { ok: true, code: "SUBMITTED", message: `${action.operation.toLowerCase()} submitted in ESPN.`, action: resolvedAction };
@@ -988,7 +1443,7 @@ function scanAndPublishContext(forceHeartbeat = false) {
   } else if (forceHeartbeat && context.inDraftRoom && context.leagueId) {
     sendToCompanion({ type: "ESPN_HEARTBEAT", payload: context });
   }
-  if (context.onClock && !context.autopickActive && !context.actionSurfaceReady && !scheduledContextRefresh) {
+  if (context.onClock && context.autopickActive === false && !context.actionSurfaceReady && !scheduledContextRefresh) {
     scheduledContextRefresh = setTimeout(() => scanAndPublishContext(false), SNAKE_PLAYER_POOL_STABILITY_MS + 25);
   }
 }

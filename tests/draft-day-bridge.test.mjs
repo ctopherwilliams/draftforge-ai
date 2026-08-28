@@ -60,6 +60,7 @@ function room(overrides = {}) {
   return {
     leagueId: "44050",
     teamId: 7,
+    season: 2026,
     inDraftRoom: true,
     onClock: false,
     remainingSeconds: 20,
@@ -102,6 +103,10 @@ test("chat bridge fails closed when sound, team, sources, or ESPN identity are u
   assert.equal(wrongTeam.ok, false);
   assert.ok(wrongTeam.blockers.includes("WRONG_ESPN_TEAM"));
 
+  const wrongSeason = result({ room: { season: 2025 } });
+  assert.equal(wrongSeason.ok, false);
+  assert.ok(wrongSeason.blockers.includes("WRONG_ESPN_SEASON"));
+
   const staleSources = sources();
   staleSources[0].updatedAt = "2025-01-01T00:00:00.000Z";
   const stale = buildDraftDayBridgeResult({
@@ -116,6 +121,8 @@ test("snake command is legal, ordered, clock-bound, and exact-pick-bound", () =>
   assert.equal(decision.code, "SELECT_READY");
   assert.equal(decision.action.operation, "SELECT");
   assert.equal(decision.action.expectedLeagueId, "44050");
+  assert.equal(decision.action.expectedTeamId, 7);
+  assert.equal(decision.action.expectedSeason, 2026);
   assert.equal(decision.action.expectedPick, 9);
   assert.equal(decision.action.playerId, decision.recommendations[0].id);
   assert.deepEqual(
@@ -146,6 +153,8 @@ test("salary-cap bidding increments by one, respects both ceilings, and never ra
   assert.equal(ready.code, "BID_READY");
   assert.equal(ready.action.amount, 2);
   assert.equal(ready.action.maxApprovedBid, Math.min(nominee.maxBid, 19));
+  assert.equal(ready.action.expectedTeamId, 7);
+  assert.equal(ready.action.expectedSeason, 2026);
 
   const walk = result({
     draftType: "AUCTION",
@@ -193,12 +202,50 @@ test("salary-cap nomination uses the production strategy and ESPN reserve maximu
   assert.equal(ready.action.operation, "NOMINATE");
   assert.ok(ready.action.amount >= 1);
   assert.ok(ready.action.amount <= 19);
-  assert.ok(ready.action.candidates.length > 1);
+  assert.equal(ready.action.candidates.length, 1);
   assert.equal(ready.action.candidates[0].playerId, ready.action.playerId);
+  assert.ok(["TARGET", "DRAIN"].includes(ready.action.nominationIntent));
+  assert.equal(ready.action.expectedTeamId, 7);
+  assert.equal(ready.action.expectedSeason, 2026);
 
   const blocked = result({ draftType: "AUCTION", room: { onClock: true, maxLegalBid: 0 } });
   assert.equal(blocked.code, "BUDGET_RESERVE");
   assert.equal(blocked.action, null);
+});
+
+test("salary-cap bridge never bids on its own exact drain nomination", () => {
+  const monitoring = result({ draftType: "AUCTION" });
+  const nominee = monitoring.recommendations.find((player) => player.maxBid >= 2);
+  assert.ok(nominee, "fixture needs a legal salary-cap nominee");
+
+  const drain = result({
+    draftType: "AUCTION",
+    room: {
+      nominatedPlayer: nominee.name,
+      nominatedPlayerId: nominee.id,
+      currentBid: 1,
+      maxLegalBid: 19,
+      leadingBid: false,
+      ownNominationIntent: "DRAIN",
+      ownNominationPlayerId: nominee.id,
+    },
+  });
+  assert.equal(drain.code, "PASS_DRAIN_NOMINEE");
+  assert.equal(drain.action, null);
+
+  const unrelatedDrainRecord = result({
+    draftType: "AUCTION",
+    room: {
+      nominatedPlayer: nominee.name,
+      nominatedPlayerId: nominee.id,
+      currentBid: 1,
+      maxLegalBid: 19,
+      leadingBid: false,
+      ownNominationIntent: "DRAIN",
+      ownNominationPlayerId: nominee.id + 100,
+    },
+  });
+  assert.equal(unrelatedDrainRecord.code, "BID_READY");
 });
 
 test("duplicate ESPN draft outcomes fail closed before another action", () => {

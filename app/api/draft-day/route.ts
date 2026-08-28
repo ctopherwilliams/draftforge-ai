@@ -13,6 +13,7 @@ import {
   isDraftAuditSnapshot,
   type DraftAuditSnapshot,
 } from "../../lib/draft-audit.ts";
+import { buildLiveControlCompactView, validateLiveControlTransition } from "../../lib/live-control.ts";
 import { normalizeImportPicks, normalizePicks } from "../../../extension/draft-normalizers.js";
 import { normalizeSettings } from "../../../extension/league-import.js";
 import { normalizePlayers } from "../../../extension/player-normalizers.js";
@@ -109,6 +110,17 @@ function mergePicks(primary: DraftPick[], fallback: DraftPick[]) {
   return [...byPlayer.values()].sort((left, right) => left.overall - right.overall);
 }
 
+function hasIrreversibleLiveControlHistory(control: DraftAuditSnapshot["liveControl"]) {
+  if (!control) return false;
+  return control.pendingActionCount > 0
+    || control.decision !== null
+    || control.rosterAttributions.length > 0
+    || control.unattributedRosterCount > 0
+    || control.historicalAutopickDetected
+    || control.uncontrolledRosterAdditionDetected
+    || control.events.some((event) => event.kind === "ACTION_LIFECYCLE" || event.kind === "ROSTER_ATTRIBUTION");
+}
+
 export async function OPTIONS(request: Request) {
   const origin = request.headers.get("origin");
   if (!isLoopbackRequest(request) || !requestOriginAllowed(origin)) {
@@ -126,10 +138,46 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const leagueId = String(url.searchParams.get("leagueId") || "").trim();
   const teamId = Number(url.searchParams.get("teamId"));
+  const view = String(url.searchParams.get("view") || "");
+  if (view === "control" && (!leagueId || !Number.isInteger(teamId) || teamId <= 0)) {
+    return response(origin, { ok: false, code: "LIVE_CONTROL_IDENTITY_REQUIRED" }, 400);
+  }
   const snapshot = leagueId && Number.isInteger(teamId) && teamId > 0
     ? draftAuditSnapshots.get(auditKey(leagueId, teamId))
     : [...draftAuditSnapshots.values()].sort((left, right) => Date.parse(right.capturedAt) - Date.parse(left.capturedAt))[0];
   if (!snapshot) return response(origin, { ok: false, code: "DRAFT_AUDIT_NOT_FOUND" }, 404);
+  if (view === "control") {
+    const rawSince = url.searchParams.get("since");
+    if (rawSince !== null && !/^\d+$/.test(rawSince)) {
+      return response(origin, { ok: false, code: "LIVE_CONTROL_SEQUENCE_INVALID" }, 400);
+    }
+    const since = Number(rawSince || 0);
+    if (!Number.isSafeInteger(since) || since < 0) {
+      return response(origin, { ok: false, code: "LIVE_CONTROL_SEQUENCE_INVALID" }, 400);
+    }
+    if (!snapshot.liveControl) {
+      return response(origin, {
+        ok: false,
+        code: "DRAFT_LIVE_CONTROL_NOT_PUBLISHED",
+        capturedAt: snapshot.capturedAt,
+        league: { id: snapshot.league.id, teamId: snapshot.league.teamId, draftType: snapshot.league.draftType },
+      }, 404);
+    }
+    const evaluation = evaluateDraftAuditSnapshot(snapshot);
+    return response(origin, {
+      ok: true,
+      code: "DRAFT_LIVE_CONTROL_READY",
+      capturedAt: snapshot.capturedAt,
+      league: { id: snapshot.league.id, teamId: snapshot.league.teamId, draftType: snapshot.league.draftType },
+      control: buildLiveControlCompactView(snapshot.liveControl, since),
+      evaluation: {
+        complete: evaluation.complete,
+        finalReady: evaluation.finalReady,
+        parity: evaluation.parity,
+        finalViolations: evaluation.finalViolations,
+      },
+    });
+  }
   return response(origin, {
     ok: true,
     code: "DRAFT_AUDIT_READY",
@@ -174,6 +222,29 @@ export async function POST(request: Request) {
         ok: false,
         code: "DRAFT_AUDIT_STALE_PUBLISHER",
         evaluation: evaluateDraftAuditSnapshot(previous),
+      }, 409);
+    }
+    if (newerPublisher && previous && hasIrreversibleLiveControlHistory(previous.liveControl)) {
+      return response(origin, {
+        ok: false,
+        code: "DRAFT_AUDIT_CONTROL_SESSION_REPLACEMENT",
+        evaluation: evaluateDraftAuditSnapshot(previous),
+      }, 409);
+    }
+    // A genuinely newer command-center publisher starts a new bounded control
+    // session only while the prior publisher is still pre-action and clean.
+    // Once any action, attribution, or sticky incident exists, publisher
+    // replacement is rejected above so a restart cannot erase history.
+    const controlTransition = validateLiveControlTransition(
+      newerPublisher ? undefined : previous?.liveControl,
+      body.audit.liveControl,
+    );
+    if (!controlTransition.ok) {
+      return response(origin, {
+        ok: false,
+        code: "DRAFT_AUDIT_CONTROL_REGRESSION",
+        controlCode: controlTransition.code,
+        ...(previous ? { evaluation: evaluateDraftAuditSnapshot(previous) } : {}),
       }, 409);
     }
     if (!previous || newerPublisher || (samePublisher && Date.parse(body.audit.capturedAt) >= Date.parse(previous.capturedAt)) || (!previousPublisher && !nextPublisher && Date.parse(body.audit.capturedAt) >= Date.parse(previous.capturedAt))) {

@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "draftforge.availability/v1",
+  "generatedAt": "2026-08-27T23:50:00.000Z",
+  "records": [
+    {
+      "identity": {
+        "espnPlayerId": 103,
+        "normalizedName": "conflictedplayer",
+        "team": "DAL",
+        "position": "TE"
+      },
+      "classification": "retirement",
+      "reasonCode": "retirement",
+      "eventAt": "2026-08-27T23:30:00.000Z",
+      "retrievedAt": "2026-08-27T23:49:00.000Z",
+      "evidence": [
+        {
+          "kind": "official_nfl",
+          "url": "https://www.nfl.com/news/example-retirement",
+          "domain": "www.nfl.com",
+          "publishedAt": "2026-08-27T23:30:00.000Z",
+          "supportsClassification": "retirement"
+        }
+      ]
+    },
+    {
+      "identity": {
+        "espnPlayerId": 103,
+        "normalizedName": "conflictedplayer",
+        "team": "NYG",
+        "position": "TE"
+      },
+      "classification": "retirement",
+      "reasonCode": "retirement",
+      "eventAt": "2026-08-27T23:31:00.000Z",
+      "retrievedAt": "2026-08-27T23:49:00.000Z",
+      "evidence": [
+        {
+          "kind": "reputable_report",
+          "url": "https://www.espn.com/nfl/story/_/id/2/example-retirement",
+          "domain": "www.espn.com",
+          "publishedAt": "2026-08-27T23:31:00.000Z",
+          "supportsClassification": "retirement"
+        },
+        {
+          "kind": "reputable_report",
+          "url": "https://apnews.com/article/example-retirement",
+          "domain": "apnews.com",
+          "publishedAt": "2026-08-27T23:31:00.000Z",
+          "supportsClassification": "retirement"
+        }
+      ]
+    }
+  ]
+}

@@ -129,6 +129,11 @@ type TradyrPayload = {
   meta?: {
     generatedAt?: string;
     total?: number;
+    offset?: number;
+    access?: {
+      limited?: boolean;
+      offsetIgnored?: boolean;
+    };
   };
 };
 
@@ -136,38 +141,57 @@ const TRADYR_PAGE_SIZE = 50;
 const TRADYR_MAX_PLAYERS = 1000;
 
 export async function fetchTradyrRedraftPages(
-  request: (url: string) => Promise<TradyrPayload> = (url) => fetchJson(url, undefined, 15000),
+  request: (url: string, init?: RequestInit) => Promise<TradyrPayload> = (url, init) => fetchJson(url, init, 15000),
   retryDelayMs = 250,
   numQbs: 1 | 2 = 1,
+  apiKey = process.env.TRADYR_API_KEY,
 ) {
+  const credential = String(apiKey || "").trim();
+  if (!credential) throw new Error("TRADYR_API_KEY_REQUIRED");
   const players: Record<string, unknown>[] = [];
+  const identities = new Set<string>();
   let generatedAt: string | null = null;
   let expectedTotal = TRADYR_PAGE_SIZE;
+  let declaredTotal: number | null = null;
+  const init = { headers: { Authorization: `Bearer ${credential}` } };
 
   for (let offset = 0; offset < Math.min(expectedTotal, TRADYR_MAX_PLAYERS); offset += TRADYR_PAGE_SIZE) {
     const url = `https://api.tradyr.app/v1/players?format=redraft&numQbs=${numQbs}&limit=${TRADYR_PAGE_SIZE}&offset=${offset}`;
     let payload: TradyrPayload;
     try {
-      payload = await request(url);
+      payload = await request(url, init);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (!/(abort|timeout|timed out|fetch failed|ECONNRESET|ETIMEDOUT)/i.test(message)) throw error;
       if (retryDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
-      payload = await request(url);
+      payload = await request(url, init);
     }
     const page = Array.isArray(payload.data) ? payload.data : [];
+    if (payload.meta?.access?.limited === true) throw new Error("TRADYR_ACCESS_LIMITED");
+    if (payload.meta?.access?.offsetIgnored === true) throw new Error("TRADYR_OFFSET_IGNORED");
+    if (payload.meta?.offset !== undefined && Number(payload.meta.offset) !== offset) {
+      throw new Error("TRADYR_OFFSET_MISMATCH");
+    }
     if (!generatedAt && payload.meta?.generatedAt) generatedAt = payload.meta.generatedAt;
-    expectedTotal = Math.max(0, Math.min(TRADYR_MAX_PLAYERS, Number(payload.meta?.total || page.length)));
-    players.push(...page);
+    const total = Number(payload.meta?.total);
+    if (!Number.isSafeInteger(total) || total < 0 || total > TRADYR_MAX_PLAYERS) {
+      throw new Error("TRADYR_TOTAL_INVALID");
+    }
+    if (declaredTotal !== null && total !== declaredTotal) throw new Error("TRADYR_TOTAL_CHANGED");
+    declaredTotal = total;
+    expectedTotal = total;
+    for (const player of page) {
+      const identity = `${String(player.slug || player.name || "").trim().toLowerCase()}|${String(player.position || "")}`;
+      if (identity === "|") throw new Error("TRADYR_PLAYER_IDENTITY_INVALID");
+      if (identities.has(identity)) throw new Error("TRADYR_DUPLICATE_PAGE");
+      identities.add(identity);
+      players.push(player);
+    }
     if (page.length < TRADYR_PAGE_SIZE) break;
   }
 
-  const unique = new Map<string, Record<string, unknown>>();
-  for (const player of players) {
-    const key = `${String(player.slug || player.name || "").trim().toLowerCase()}|${String(player.position || "")}`;
-    if (key !== "|" && !unique.has(key)) unique.set(key, player);
-  }
-  return { players: [...unique.values()], generatedAt, expectedTotal };
+  if (players.length !== expectedTotal) throw new Error("TRADYR_INCOMPLETE_PAGINATION");
+  return { players, generatedAt, expectedTotal };
 }
 
 async function fetchTradyr(numQbs: 1 | 2): Promise<IntelligenceSource> {
@@ -280,12 +304,21 @@ export async function fetchIntelligenceSnapshot(input: Partial<IntelligenceReque
     promise: Promise.resolve(null as unknown as IntelligenceResponse),
   };
   entry.promise = (async () => {
-    const sources = await Promise.all([
+    const fetchedSources = await Promise.all([
       fetchFfc(request.scoring, request.teams, request.season),
       fetchMfl(request.teams, request.scoring, request.season),
       fetchTradyr(request.qbs),
       fetchGng(request.scoring),
     ]);
+    const sources = fetchedSources.map((source) => ({
+      ...source,
+      coverage: {
+        players: source.players.length,
+        corePositions: [...new Set(source.players.map((player) => String(player.pos || "").toUpperCase()))]
+          .filter((position) => ["QB", "RB", "WR", "TE"].includes(position))
+          .sort(),
+      },
+    }));
     entry.expiresAt = Date.now() + (sources.every((source) => source.status === "ok")
       ? SUCCESSFUL_SNAPSHOT_CACHE_MS
       : FAILED_SNAPSHOT_CACHE_MS);

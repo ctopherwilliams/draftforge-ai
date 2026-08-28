@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import vm from "node:vm";
+import { actionPayloadMatchesBinding, validCommandCenterSessionId } from "../extension/action-binding.js";
 import { authorizeRuntimeMessage } from "../extension/origin-policy.js";
 
 const root = new URL("../extension/", import.meta.url);
@@ -11,6 +13,7 @@ test("extension is a narrowly scoped Manifest V3 ESPN companion", async () => {
   const release = JSON.parse(await readFile(new URL("../config/draft-day-release.json", import.meta.url), "utf8"));
   const companionZip = await readFile(new URL("../public/draftforge-espn-companion.zip", import.meta.url));
   assert.equal(manifest.manifest_version, 3);
+  assert.deepEqual([...manifest.permissions].sort(), ["storage", "tabs"]);
   assert.equal(manifest.version, release.extensionVersion);
   assert.equal(createHash("sha256").update(companionZip).digest("hex"), release.extensionPackageSha256);
   assert.ok(manifest.host_permissions.every((host) => /espn\.com/.test(host)));
@@ -44,6 +47,29 @@ test("privileged runtime messages require the exact DraftForge or ESPN sender or
   assert.equal(authorizeRuntimeMessage("FUTURE_UNCLASSIFIED_ACTION", production).code, "UNKNOWN_MESSAGE");
 });
 
+test("bound draft actions require the exact tab, league, team, and season", async () => {
+  const background = await readFile(new URL("background.js", root), "utf8");
+  const helpers = background.match(/function bindDraftActions[\s\S]+?(?=\nfunction originForTab)/)?.[0];
+  assert.ok(helpers, "background should expose the pure action-binding helpers");
+  const sandbox = { actionPayloadMatchesBinding, validCommandCenterSessionId };
+  vm.runInNewContext(`let actionBinding = null;\n${helpers}\nglobalThis.bind = bindDraftActions; globalThis.matches = actionMatchesBinding;`, sandbox);
+  sandbox.bind(
+    { leagueId: "701", teamId: 5, season: 2026, tabId: 41 },
+    { id: "701", teamId: 5, season: 2026 },
+    41,
+    17,
+    "command-center-test",
+  );
+  const payload = { expectedLeagueId: "701", expectedTeamId: 5, expectedSeason: 2026, commandCenterSessionId: "command-center-test" };
+  const context = { leagueId: "701", teamId: 5, season: 2026, tabId: 41, inDraftRoom: true };
+
+  assert.equal(sandbox.matches(payload, context, 41), true);
+  assert.equal(sandbox.matches({ ...payload, expectedTeamId: 6 }, context, 41), false);
+  assert.equal(sandbox.matches({ ...payload, expectedSeason: 2025 }, context, 41), false);
+  assert.equal(sandbox.matches(payload, { ...context, leagueId: "702" }, 41), false);
+  assert.equal(sandbox.matches(payload, { ...context, tabId: 42 }, 41), false);
+});
+
 test("draft actions fail closed and private ESPN credentials are not persisted", async () => {
   const [background, content, bridge, page, workspaceLifecycle] = await Promise.all([
     readFile(new URL("background.js", root), "utf8"),
@@ -52,7 +78,12 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("workspace-lifecycle.js", root), "utf8"),
   ]);
-  assert.doesNotMatch(background, /chrome\.storage|espn_s2|SWID/);
+  assert.match(background, /chrome\.storage\.session/);
+  assert.match(background, /LIVE_ROOM_WATCH_STORAGE_KEY/);
+  assert.match(background, /sanitizedLiveRoomWatch/);
+  assert.match(background, /persistLiveRoomWatch/);
+  assert.match(background, /restoreLiveRoomWatch/);
+  assert.doesNotMatch(background, /espn_s2|SWID|memberId|cookie/i);
   assert.match(background, /authorizeRuntimeMessage\(message\?\.type, sender\.url \|\| sender\.tab\?\.url \|\| ""\)/);
   assert.doesNotMatch(content, /espn_s2|SWID/);
   assert.match(background, /findEspnContext\(expectedLeagueId, expectedTabId\)/);
@@ -61,6 +92,10 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(background, /waitForEspnContext\(requestedLeagueId\)/);
   assert.match(background, /DRAFT_TAB_REQUIRED/);
   assert.match(background, /DRAFT_TAB_CHANGED/);
+  assert.match(background, /function actionMatchesBinding\(payload, context, expectedTabId\)/);
+  assert.match(background, /DRAFT_ACTION_IDENTITY_CHANGED/);
+  assert.match(background, /expectedTeamId: actionBinding\.teamId/);
+  assert.match(background, /expectedSeason: actionBinding\.season/);
   assert.match(background, /chrome\.tabs\.get\(expectedTabId\)/);
   assert.match(background, /findUniqueDraftRoomContext/);
   assert.match(background, /matches\.length === 1/);
@@ -91,14 +126,14 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(background, /ESPN_HEARTBEAT/);
   assert.match(background, /ESPN_ACTION_RESOLVED/);
   assert.match(background, /ESPN_ACTION_SUBMITTED/);
-  assert.match(background, /senderTabId !== expectedTabId/);
+  assert.match(background, /resultMatchesActionBinding\(actionBinding, action, context, senderTabId\)/);
   assert.match(background, /DF_ACTION_RESOLVED/);
   assert.match(background, /DISABLE_ESPN_AUTOPICK/);
   assert.match(background, /DF_DISABLE_AUTOPICK/);
   assert.match(content, /MIN_ACTION_WINDOW_SECONDS = 5/);
   assert.match(content, /AUTOPICK_ACTIVE/);
   assert.match(content, /SOUND_NOT_MUTED/);
-  assert.match(content, /season: Number\(url\.searchParams\.get\("seasonId"\)/);
+  assert.match(content, /const season = Number\(url\.searchParams\.get\("seasonId"\)/);
   assert.match(content, /autopickActive/);
   assert.match(content, /snakeClockOwnMarker/);
   assert.match(content, /snakeClockSource/);
@@ -123,6 +158,14 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(content, /WRONG_LEAGUE/);
   assert.match(content, /NOMINEE_MISMATCH/);
   assert.match(content, /BID_CHANGED/);
+  assert.match(content, /HOLD_LEADING_BID/);
+  assert.match(content, /WALK_AWAY/);
+  assert.match(content, /BID_ACK_UNCERTAIN/);
+  assert.match(content, /NOMINATION_ACK_UNCERTAIN/);
+  assert.match(content, /actionExecutionTail/);
+  assert.match(content, /inFlightActionResults/);
+  assert.match(content, /expectedTeamId/);
+  assert.match(content, /expectedSeason/);
   assert.match(content, /BUDGET_RESERVE/);
   assert.match(content, /#icon__controls__volume_mute/);
   assert.match(content, /function enforceMutedDraftSound\(context\)/);

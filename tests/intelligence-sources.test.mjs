@@ -41,6 +41,15 @@ test("a decision-time intelligence snapshot requires every distinct fresh source
   assert.equal(isCompleteFreshIntelligenceSnapshot([
     source("ffc"), source("mfl", { status: "error", players: [] }), source("tradyr"), source("gng"),
   ], evaluatedAt), false);
+  assert.equal(isCompleteFreshIntelligenceSnapshot([
+    source("ffc"), source("mfl", { updatedAt: null, retrievedAt: null, coverage: { players: 100, corePositions: ["QB", "RB", "WR", "TE"] } }), source("tradyr"), source("gng"),
+  ], evaluatedAt), false, "missing timestamps must fail closed");
+  assert.equal(isCompleteFreshIntelligenceSnapshot([
+    source("ffc"), source("mfl", { coverage: { players: 1, corePositions: ["RB"] } }), source("tradyr"), source("gng"),
+  ], evaluatedAt), false, "production coverage metadata must prove a meaningful multi-position board");
+  assert.equal(isCompleteFreshIntelligenceSnapshot([
+    source("ffc"), source("mfl", { updatedAt: "2026-08-15T09:00:00.000Z" }), source("tradyr"), source("gng"),
+  ], evaluatedAt), false, "future-dated source truth must fail closed");
 });
 
 test("a degraded HTTP 200 refresh cannot replace the last complete snapshot", () => {
@@ -126,22 +135,26 @@ test("the shared source queue serializes concurrent profiles and retries one HTT
 
 test("Tradyr redraft pagination expands the same source deterministically and stays bounded", async () => {
   const urls = [];
+  const authorizations = [];
   const pages = new Map([
     [0, Array.from({ length: 50 }, (_, index) => ({ slug: `player-${index}`, name: `Player ${index}`, position: "WR", rank: index + 1 }))],
     [50, Array.from({ length: 50 }, (_, index) => ({ slug: `player-${index + 50}`, name: `Player ${index + 50}`, position: "RB", rank: index + 51 }))],
     [100, Array.from({ length: 20 }, (_, index) => ({ slug: `player-${index + 100}`, name: `Player ${index + 100}`, position: "TE", rank: index + 101 }))],
   ]);
-  const result = await fetchTradyrRedraftPages(async (url) => {
+  const result = await fetchTradyrRedraftPages(async (url, init) => {
     urls.push(url);
+    authorizations.push(init?.headers?.Authorization);
     const offset = Number(new URL(url).searchParams.get("offset"));
-    return { data: pages.get(offset) || [], meta: { total: 120, generatedAt: "2026-08-19T00:00:00.000Z" } };
-  });
+    return { data: pages.get(offset) || [], meta: { total: 120, offset, generatedAt: "2026-08-19T00:00:00.000Z", access: { limited: false } } };
+  }, 0, 1, "test-key");
 
   assert.equal(result.players.length, 120);
   assert.equal(result.expectedTotal, 120);
   assert.equal(result.generatedAt, "2026-08-19T00:00:00.000Z");
   assert.deepEqual(urls.map((url) => Number(new URL(url).searchParams.get("offset"))), [0, 50, 100]);
   assert.ok(urls.every((url) => new URL(url).searchParams.get("numQbs") === "1"));
+  assert.deepEqual(authorizations, ["Bearer test-key", "Bearer test-key", "Bearer test-key"]);
+  assert.ok(urls.every((url) => !url.includes("test-key")), "the credential must never enter a URL");
 });
 
 test("Tradyr retries one transient page timeout without changing pagination order", async () => {
@@ -163,7 +176,7 @@ test("Tradyr retries one transient page timeout without changing pagination orde
       })),
       meta: { total: 10, generatedAt: "2026-08-19T00:00:00.000Z" },
     };
-  }, 0);
+  }, 0, 1, "test-key");
 
   assert.deepEqual(offsets, [0, 0]);
   assert.equal(result.players.length, 10);
@@ -174,8 +187,60 @@ test("Tradyr requests a two-QB board for ESPN QB-plus-OP leagues", async () => {
   await fetchTradyrRedraftPages(async (url) => {
     urls.push(url);
     return { data: [], meta: { total: 0, generatedAt: "2026-08-20T00:00:00.000Z" } };
-  }, 0, 2);
+  }, 0, 2, "test-key");
 
   assert.equal(urls.length, 1);
   assert.equal(new URL(urls[0]).searchParams.get("numQbs"), "2");
+});
+
+test("Tradyr fails closed without a server-side API key", async () => {
+  let called = false;
+  await assert.rejects(
+    fetchTradyrRedraftPages(async () => {
+      called = true;
+      return { data: [], meta: { total: 0 } };
+    }, 0, 1, ""),
+    /TRADYR_API_KEY_REQUIRED/,
+  );
+  assert.equal(called, false);
+});
+
+test("Tradyr rejects capped or ignored-offset responses even when HTTP succeeds", async () => {
+  await assert.rejects(
+    fetchTradyrRedraftPages(async () => ({
+      data: [{ slug: "decoy", name: "Decoy", position: "WR", rank: 1 }],
+      meta: { total: 192, offset: 0, access: { limited: true } },
+    }), 0, 2, "test-key"),
+    /TRADYR_ACCESS_LIMITED/,
+  );
+  await assert.rejects(
+    fetchTradyrRedraftPages(async () => ({
+      data: [{ slug: "player", name: "Player", position: "WR", rank: 1 }],
+      meta: { total: 100, offset: 0, access: { limited: false, offsetIgnored: true } },
+    }), 0, 2, "test-key"),
+    /TRADYR_OFFSET_IGNORED/,
+  );
+});
+
+test("Tradyr rejects duplicate pages and incomplete pagination", async () => {
+  const firstPage = Array.from({ length: 50 }, (_, index) => ({
+    slug: `player-${index}`,
+    name: `Player ${index}`,
+    position: "WR",
+    rank: index + 1,
+  }));
+  await assert.rejects(
+    fetchTradyrRedraftPages(async (url) => ({
+      data: firstPage,
+      meta: { total: 100, offset: Number(new URL(url).searchParams.get("offset")), access: { limited: false } },
+    }), 0, 1, "test-key"),
+    /TRADYR_DUPLICATE_PAGE/,
+  );
+  await assert.rejects(
+    fetchTradyrRedraftPages(async () => ({
+      data: firstPage.slice(0, 20),
+      meta: { total: 40, offset: 0, access: { limited: false } },
+    }), 0, 1, "test-key"),
+    /TRADYR_INCOMPLETE_PAGINATION/,
+  );
 });

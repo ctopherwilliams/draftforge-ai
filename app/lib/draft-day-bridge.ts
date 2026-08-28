@@ -42,6 +42,8 @@ export type DraftDayCandidate = {
 export type DraftDayAction = {
   operation: "SELECT" | "BID" | "NOMINATE";
   expectedLeagueId: string;
+  expectedTeamId: number;
+  expectedSeason: number;
   expectedPick?: number;
   expectedCurrentBid?: number;
   requireOnClock?: boolean;
@@ -51,6 +53,7 @@ export type DraftDayAction = {
   fillsMandatoryStarter: boolean;
   amount?: number;
   maxApprovedBid?: number;
+  nominationIntent?: "TARGET" | "DRAIN";
   candidates?: DraftDayCandidate[];
 };
 
@@ -86,12 +89,14 @@ function duplicatePickIds(picks: DraftPick[]) {
 
 function globalBlockers(input: DraftDayBridgeInput) {
   const { league, espnPlayers, picks, room, sources } = input;
+  const roomSeason = Number((room as EspnContext & { season?: number | null }).season);
   const blockers: string[] = [];
   if (!isCompleteFreshIntelligenceSnapshot(sources, input.evaluatedAt)) blockers.push("FIVE_SOURCE_SNAPSHOT_NOT_READY");
   if (espnPlayers.length < league.size * league.rosterSize) blockers.push("ESPN_PLAYER_POOL_INCOMPLETE");
   if (!Number.isInteger(league.teamId) || Number(league.teamId) <= 0) blockers.push("ESPN_TEAM_UNKNOWN");
   if (String(room.leagueId || "") !== String(league.id)) blockers.push("WRONG_ESPN_LEAGUE");
   if (Number(room.teamId) !== Number(league.teamId)) blockers.push("WRONG_ESPN_TEAM");
+  if (roomSeason !== Number(league.season)) blockers.push("WRONG_ESPN_SEASON");
   if (room.inDraftRoom !== true) blockers.push("NOT_IN_ESPN_DRAFT_ROOM");
   if (room.soundMuted !== true) blockers.push("ESPN_SOUND_NOT_MUTED");
   if (room.autopickActive === true) blockers.push("ESPN_AUTOPICK_ACTIVE");
@@ -106,22 +111,6 @@ function candidate(player: Recommendation): DraftDayCandidate {
     position: player.pos,
     fillsMandatoryStarter: player.fillsMandatoryStarter,
   };
-}
-
-function nominationShortlist(
-  recommendations: Recommendation[],
-  league: LeagueSettings,
-  auctionPlan: ReturnType<typeof buildDraftDecision>["auctionPlan"],
-) {
-  const ordered: DraftDayCandidate[] = [];
-  let remaining = [...recommendations];
-  while (ordered.length < MAX_ACTION_CANDIDATES && remaining.length) {
-    const next = chooseAuctionNomination(remaining, league, auctionPlan);
-    if (!next) break;
-    ordered.push(candidate(next.player));
-    remaining = remaining.filter((player) => player.id !== next.player.id);
-  }
-  return ordered;
 }
 
 function actionWindowReady(room: EspnContext) {
@@ -174,6 +163,8 @@ export function buildDraftDayBridgeResult(input: DraftDayBridgeInput): DraftDayB
       action: {
         operation: "SELECT",
         expectedLeagueId: league.id,
+        expectedTeamId: Number(league.teamId),
+        expectedSeason: league.season,
         expectedPick: Number(room.currentPick || input.picks.length + 1),
         requireOnClock: true,
         ...candidate(top),
@@ -186,6 +177,14 @@ export function buildDraftDayBridgeResult(input: DraftDayBridgeInput): DraftDayB
   if (room.nominatedPlayer && Number(room.currentBid) > 0) {
     const nominated = resolveEspnNominatedPlayer(recommendations, room);
     if (!nominated) return { ok: true, code: "PASS_UNRANKED_NOMINEE", blockers: [], action: null, actionReason: "The nominee is unavailable, already rostered, or outside the legal player pool.", ...base };
+    const ownNomination = room as EspnContext & {
+      ownNominationIntent?: "TARGET" | "DRAIN" | null;
+      ownNominationPlayerId?: number | null;
+    };
+    if (ownNomination.ownNominationIntent === "DRAIN"
+      && Number(ownNomination.ownNominationPlayerId) === nominated.id) {
+      return { ok: true, code: "PASS_DRAIN_NOMINEE", blockers: [], action: null, actionReason: "This is DraftForge's exact budget-drain nomination; never price-enforce or bid.", ...base };
+    }
     if (room.leadingBid) return { ok: true, code: "HOLD_LEADING_BID", blockers: [], action: null, actionReason: "Already leading; never raise our own offer.", ...base };
     if (!actionWindowReady(room)) return { ok: false, code: "CLOCK_TOO_SHORT", blockers: ["CLOCK_TOO_SHORT"], action: null, actionReason: "The safe action window has closed.", ...base };
     const nextOffer = Number(room.currentBid) + 1;
@@ -205,6 +204,8 @@ export function buildDraftDayBridgeResult(input: DraftDayBridgeInput): DraftDayB
       action: {
         operation: "BID",
         expectedLeagueId: league.id,
+        expectedTeamId: Number(league.teamId),
+        expectedSeason: league.season,
         expectedCurrentBid: Number(room.currentBid),
         requireOnClock: false,
         ...candidate(nominated),
@@ -232,10 +233,16 @@ export function buildDraftDayBridgeResult(input: DraftDayBridgeInput): DraftDayB
       action: {
         operation: "NOMINATE",
         expectedLeagueId: league.id,
+        expectedTeamId: Number(league.teamId),
+        expectedSeason: league.season,
         requireOnClock: true,
         ...candidate(nomination.player),
         amount: nomination.openingBid,
-        candidates: nominationShortlist(recommendations, league, decision.auctionPlan),
+        nominationIntent: nomination.intent,
+        // Nomination intent is stateful. Falling through to a different player
+        // can turn a DRAIN into a TARGET (or vice versa), so the actuator must
+        // either resolve this exact player or return for a fresh engine decision.
+        candidates: [candidate(nomination.player)],
       },
       ...base,
     };

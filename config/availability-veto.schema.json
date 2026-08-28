@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://draftforge.local/schemas/availability-veto-v1.json",
+  "title": "DraftForge sanitized player availability artifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "generatedAt", "records"],
+  "properties": {
+    "schemaVersion": { "const": "draftforge.availability/v1" },
+    "generatedAt": { "$ref": "#/$defs/timestamp" },
+    "records": {
+      "type": "array",
+      "maxItems": 512,
+      "items": { "$ref": "#/$defs/record" }
+    }
+  },
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "classification": {
+      "enum": [
+        "season_ending_injury",
+        "injured_reserve_unavailable",
+        "pup_unavailable",
+        "nfi_unavailable",
+        "retirement",
+        "release_without_team",
+        "suspension_covering_fantasy_season",
+        "death",
+        "league_ineligibility",
+        "questionable",
+        "doubtful",
+        "day_to_day",
+        "limited_practice",
+        "legal_allegation",
+        "rumor",
+        "opinion"
+      ]
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["normalizedName", "team", "position"],
+      "properties": {
+        "espnPlayerId": { "type": "integer", "not": { "const": 0 } },
+        "normalizedName": { "type": "string", "pattern": "^[a-z0-9]{2,80}$" },
+        "team": { "type": "string", "pattern": "^(?:[A-Z]{2,4}|FA)$" },
+        "position": { "enum": ["QB", "RB", "WR", "TE", "DST", "K"] }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "url", "domain", "publishedAt", "supportsClassification"],
+      "properties": {
+        "kind": { "enum": ["official_nfl", "official_team", "official_league", "reputable_report"] },
+        "url": { "type": "string", "format": "uri", "pattern": "^https://", "maxLength": 2048 },
+        "domain": {
+          "type": "string",
+          "pattern": "^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$"
+        },
+        "publishedAt": { "$ref": "#/$defs/timestamp" },
+        "supportsClassification": { "$ref": "#/$defs/classification" }
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "classification", "reasonCode", "eventAt", "retrievedAt", "evidence"],
+      "properties": {
+        "identity": { "$ref": "#/$defs/identity" },
+        "classification": { "$ref": "#/$defs/classification" },
+        "reasonCode": { "$ref": "#/$defs/classification" },
+        "eventAt": { "$ref": "#/$defs/timestamp" },
+        "retrievedAt": { "$ref": "#/$defs/timestamp" },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/evidence" }
+        }
+      }
+    }
+  }
+}

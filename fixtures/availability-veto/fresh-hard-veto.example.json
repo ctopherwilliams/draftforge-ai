@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "draftforge.availability/v1",
+  "generatedAt": "2026-08-27T23:50:00.000Z",
+  "records": [
+    {
+      "identity": {
+        "espnPlayerId": 101,
+        "normalizedName": "exampleplayer",
+        "team": "BUF",
+        "position": "WR"
+      },
+      "classification": "season_ending_injury",
+      "reasonCode": "season_ending_injury",
+      "eventAt": "2026-08-27T23:40:00.000Z",
+      "retrievedAt": "2026-08-27T23:49:00.000Z",
+      "evidence": [
+        {
+          "kind": "official_nfl",
+          "url": "https://www.nfl.com/news/example-player-status",
+          "domain": "www.nfl.com",
+          "publishedAt": "2026-08-27T23:40:00.000Z",
+          "supportsClassification": "season_ending_injury"
+        }
+      ]
+    }
+  ]
+}

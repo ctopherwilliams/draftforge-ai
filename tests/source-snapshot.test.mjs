@@ -63,7 +63,7 @@ function fixture() {
     scoringRules: 45,
     keeperCount: 0,
   };
-  return { league, espnPlayers, intelligence: { scoring: "PPR", teams: 8, season: 2026, sources } };
+  return { league, espnPlayers, intelligence: { scoring: "PPR", teams: 8, season: 2026, qbs: 1, sources } };
 }
 
 test("five-source snapshots are sanitized, content-addressed, and deterministically replayable", () => {
@@ -71,6 +71,7 @@ test("five-source snapshots are sanitized, content-addressed, and deterministica
   assert.equal(snapshot.validation.valid, true);
   assert.equal(snapshot.league.name, "Sanitized ESPN snapshot");
   assert.equal(snapshot.league.teams[0].name, "Snapshot Team 1");
+  assert.equal(snapshot.parameters.qbs, 1);
   assert.equal(snapshot.digest, sourceSnapshotDigest(snapshot));
   const first = replayConsensusSnapshot(snapshot);
   const second = replayConsensusSnapshot(JSON.parse(JSON.stringify(snapshot)));
@@ -150,6 +151,31 @@ test("ESPN negative defense IDs survive snapshot sanitization and replay", () =>
   assert.ok(snapshot.espnPlayers.some((player) => player.id === -16034));
   assert.equal(snapshot.espnPlayers.some((player) => player.id === oldId), false);
   assert.ok(replayConsensusSnapshot(snapshot).some((player) => player.id === -16034));
+});
+
+test("snapshot validation and replay bind source truth to the ESPN quarterback profile", () => {
+  const input = fixture();
+  input.league.lineupSlotCounts = { ...input.league.lineupSlotCounts, "7": 1 };
+  input.intelligence.qbs = 2;
+  const snapshot = createSourceSnapshot({ capturedAt: CAPTURED_AT, ...input });
+  assert.equal(snapshot.parameters.qbs, 2);
+  assert.equal(snapshot.validation.valid, true);
+  assert.doesNotThrow(() => replayConsensusSnapshot(snapshot));
+
+  const oneQbOverride = { ...snapshot.league, lineupSlotCounts: { ...snapshot.league.lineupSlotCounts, "7": 0 } };
+  assert.throws(() => replayConsensusSnapshot(snapshot, oneQbOverride), /quarterback profile mismatch/);
+
+  const mismatchedInput = fixture();
+  mismatchedInput.intelligence.qbs = 2;
+  const mismatched = createSourceSnapshot({ capturedAt: CAPTURED_AT, ...mismatchedInput });
+  assert.equal(mismatched.validation.valid, false);
+  assert.match(mismatched.validation.errors.join(" "), /quarterback profile does not match/);
+
+  const missingProfile = structuredClone(snapshot);
+  delete missingProfile.parameters.qbs;
+  const missingValidation = validateSourceSnapshot(missingProfile);
+  assert.equal(missingValidation.valid, false);
+  assert.match(missingValidation.errors.join(" "), /quarterback profile must be/);
 });
 
 test("captured Monte Carlo decisions replay fixed source truth with seeded hidden outcomes", () => {

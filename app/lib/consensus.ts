@@ -23,6 +23,10 @@ export type IntelligenceSource = {
   url?: string;
   players: IntelligencePlayer[];
   sampleSize?: number;
+  coverage?: {
+    players: number;
+    corePositions: string[];
+  };
   error?: string;
 };
 
@@ -44,16 +48,26 @@ export type ConsensusPlayer = DraftPlayer & {
 
 const SOURCE_WEIGHTS: Record<string, number> = { espn: .30, gng: .20, tradyr: .20, ffc: .15, mfl: .15 };
 const MAX_SOURCE_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+const MAX_SOURCE_CLOCK_SKEW_MS = 5 * 60 * 1000;
+const MIN_SOURCE_PLAYER_COVERAGE = 25;
+const REQUIRED_SOURCE_POSITIONS = ["QB", "RB", "WR", "TE"];
 const REQUIRED_INTELLIGENCE_SOURCE_IDS: IntelligenceSource["id"][] = ["ffc", "mfl", "tradyr", "gng"];
 
 type AuctionContext = Pick<LeagueSettings, "size" | "rosterSize" | "auctionBudget">;
 
 export function isIntelligenceSourceFresh(source: IntelligenceSource, evaluatedAt: string | number | Date = Date.now()) {
   if (source.status !== "ok" || !source.players.length) return false;
+  // Production fetchers attach coverage once when they build the snapshot, so
+  // the hot decision path stays O(1). Legacy deterministic fixtures/snapshots
+  // remain replayable; fresh production captures always carry this proof.
+  if (source.coverage && (
+    source.coverage.players < MIN_SOURCE_PLAYER_COVERAGE
+    || !REQUIRED_SOURCE_POSITIONS.every((position) => source.coverage?.corePositions.includes(position))
+  )) return false;
   const timestamp = source.updatedAt || source.retrievedAt;
-  if (!timestamp) return true;
+  if (!timestamp) return !source.coverage;
   const age = new Date(evaluatedAt).getTime() - new Date(timestamp).getTime();
-  return Number.isFinite(age) && age <= MAX_SOURCE_AGE_MS;
+  return Number.isFinite(age) && age >= -MAX_SOURCE_CLOCK_SKEW_MS && age <= MAX_SOURCE_AGE_MS;
 }
 
 export function isCompleteFreshIntelligenceSnapshot(

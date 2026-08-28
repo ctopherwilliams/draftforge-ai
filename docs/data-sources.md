@@ -7,7 +7,7 @@ DraftForge uses five complementary signals. ESPN remains the source of league tr
 | ESPN Fantasy | League-specific projections, platform rank/ADP, auction value, injuries | Authenticated Chrome companion calls ESPN Fantasy's league/player JSON endpoints | Import and during draft | 30% |
 | Fantasy Football Calculator | Recent redraft ADP, dispersion, and draft sample size | `GET /api/v1/adp/{format}?teams={n}&year={yyyy}` | Daily; DraftForge caches six hours | 15% |
 | MyFantasyLeague | Cross-platform ADP and average auction value from completed leagues | Public MFL export API: `TYPE=players`, `TYPE=adp`, and `TYPE=aav` | Six-hour cache | 15% |
-| Tradyr | Independent redraft-PPR composite | Bounded pages from `GET https://api.tradyr.app/v1/players?format=redraft&numQbs={1\|2}&limit=50&offset={n}` | Daily | 20% |
+| Tradyr | Independent redraft-PPR composite | Server-only bearer-authenticated bounded pages from `GET https://api.tradyr.app/v1/players?format=redraft&numQbs={1\|2}&limit=50&offset={n}` | Daily | 20% |
 | The GNG Pigskin Rankings | Model ranking, tiers, movement, and projected PPG | `GET https://www.thegng.us/api/rankings.json?profile={standard|half_ppr|ppr}` | Source-generated timestamp; six-hour cache | 20% |
 
 ## Combination method
@@ -21,7 +21,7 @@ DraftForge uses five complementary signals. ESPN remains the source of league tr
 
 The model never treats the five ranks as five equal expert opinions. ESPN projections answer “how valuable is this player in this league?”, while FFC/MFL answer “when or for how much will the room draft him?” Tradyr and The GNG add independent player-quality priors.
 
-Tradyr pagination is sequential, capped at 1,000 rows, and remains one 20% source. DraftForge requests Tradyr's two-QB board only when the authenticated ESPN starter slots contain QB plus OP (or otherwise permit two starting quarterbacks); one-QB and two-QB snapshots use separate cache keys. The documented single-QB redraft page was verified field-for-field against the former `redraft-ppr` top 50 before adoption; offsets expand player reach without creating extra votes or changing consensus weights. A failed page fails the Tradyr source closed rather than silently retaining partial coverage.
+Tradyr pagination is sequential, capped at 1,000 rows, and remains one 20% source. Since the documented 2026-08-15 access change, trustworthy bulk use requires the server-only `TRADYR_API_KEY`; unkeyed results stop at 50 rows and may contain decoys. DraftForge sends the key only in the Authorization header and fails closed on missing credentials, limited access, ignored/mismatched offsets, duplicate pages, changing totals, or incomplete pagination. The key never enters URLs, browser storage, logs, or snapshots. DraftForge requests Tradyr's two-QB board only when the authenticated ESPN starter slots contain QB plus OP (or otherwise permit two starting quarterbacks); one-QB and two-QB snapshots use separate cache keys.
 
 ## Immutable simulation snapshots
 
@@ -51,6 +51,6 @@ A separate authenticated 10-team Standard snake capture (`38604a70ba64ff02c7b019
 
 - [Fantasy Football Calculator ADP API](https://help.fantasyfootballcalculator.com/article/42-adp-rest-api) permits free personal and commercial use with requested attribution.
 - [MyFantasyLeague](https://myfantasyleague.wordpress.com/2008/08/06/developer-api/) provides an open developer export API.
-- [Tradyr API](https://api.tradyr.app/docs) is free for commercial use with attribution.
+- [Tradyr API](https://api.tradyr.app/docs) documents free keyed access for commercial or automated bulk use and requires attribution.
 - [The GNG rankings](https://www.thegng.us/ranks) declares the JSON feed free to use with attribution and a link.
 - ESPN's fantasy endpoints are undocumented and may change; the extension uses the user's existing ESPN session and fails closed if expected draft-room controls are not present.

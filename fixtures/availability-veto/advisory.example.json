@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "draftforge.availability/v1",
+  "generatedAt": "2026-08-27T23:50:00.000Z",
+  "records": [
+    {
+      "identity": {
+        "espnPlayerId": 102,
+        "normalizedName": "advisoryplayer",
+        "team": "KC",
+        "position": "RB"
+      },
+      "classification": "questionable",
+      "reasonCode": "questionable",
+      "eventAt": "2026-08-27T23:35:00.000Z",
+      "retrievedAt": "2026-08-27T23:49:00.000Z",
+      "evidence": [
+        {
+          "kind": "reputable_report",
+          "url": "https://www.espn.com/nfl/story/_/id/1/example-player-update",
+          "domain": "www.espn.com",
+          "publishedAt": "2026-08-27T23:35:00.000Z",
+          "supportsClassification": "questionable"
+        }
+      ]
+    }
+  ]
+}

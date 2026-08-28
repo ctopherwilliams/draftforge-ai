@@ -8,6 +8,7 @@ import {
   MAX_DRAFT_ACTION_TELEMETRY_EVENTS,
   resolveDraftAuditChecklistReady,
 } from "../app/lib/draft-audit.ts";
+import { appendLiveControlEvent, createLiveControlState } from "../app/lib/live-control.ts";
 
 const roster = [
   [1, "Quarterback One", "QB", 8],
@@ -100,8 +101,46 @@ function snapshot(overrides = {}) {
         sourceCount: 5,
       }],
     },
+    availability: {
+      status: "READY",
+      digest: `sha256:${"a".repeat(64)}`,
+      evaluatedAt: testCapturedAt(),
+      freshUntil: testCapturedAt(1_800),
+      blockingReasons: [],
+      vetoedPlayerIds: [],
+    },
+    liveControl: attributedLiveControl(),
     ...overrides,
   };
+}
+
+function attributedLiveControl(entries = roster, attributionFor = () => "DRAFTFORGE_CONFIRMED") {
+  let control = createLiveControlState("audit-control-session", {
+    espnContextAt: testCapturedAt(),
+    pickFeedAt: testCapturedAt(),
+    sourceSnapshotAt: testCapturedAt(),
+    lastActionAt: testCapturedAt(),
+  });
+  entries.forEach((entry, index) => {
+    control = appendLiveControlEvent(control, {
+      occurredAt: testCapturedAt(index),
+      kind: "ROSTER_ATTRIBUTION",
+      player: { playerId: entry.playerId, playerName: entry.playerName, position: entry.position },
+      attribution: attributionFor(entry, index),
+      actionId: `action-${index + 1}`,
+      decisionId: `decision-${index + 1}`,
+    });
+  });
+  return control;
+}
+
+function cleanLiveControl(sessionId = "clean-control-session") {
+  return createLiveControlState(sessionId, {
+    espnContextAt: testCapturedAt(),
+    pickFeedAt: testCapturedAt(),
+    sourceSnapshotAt: testCapturedAt(),
+    lastActionAt: null,
+  });
 }
 
 test("completed exact ESPN/app audit is final-ready", () => {
@@ -117,6 +156,56 @@ test("completed exact ESPN/app audit is final-ready", () => {
     hardViolations: [],
     finalViolations: [],
   });
+});
+
+test("final audit requires typed control and availability that remains fresh at capture", () => {
+  const withoutControl = evaluateDraftAuditSnapshot(snapshot({ liveControl: undefined }));
+  assert.equal(withoutControl.finalReady, false);
+  assert.ok(withoutControl.finalViolations.includes("LIVE_CONTROL_MISSING"));
+
+  const withoutAvailability = evaluateDraftAuditSnapshot(snapshot({ availability: undefined }));
+  assert.equal(withoutAvailability.finalReady, false);
+  assert.ok(withoutAvailability.finalViolations.includes("AVAILABILITY_GATE_MISSING"));
+
+  const staleAvailability = evaluateDraftAuditSnapshot(snapshot({
+    availability: {
+      ...snapshot().availability,
+      freshUntil: testCapturedAt(-1),
+    },
+  }));
+  assert.equal(staleAvailability.finalReady, false);
+  assert.ok(staleAvailability.finalViolations.includes("AVAILABILITY_GATE_STALE"));
+});
+
+test("typed live control permits final-ready only after every roster addition is attributed and actions settle", () => {
+  const completeControl = attributedLiveControl();
+  assert.equal(evaluateDraftAuditSnapshot(snapshot({ liveControl: completeControl })).finalReady, true);
+
+  const pending = { ...completeControl, pendingActionCount: 1 };
+  const pendingResult = evaluateDraftAuditSnapshot(snapshot({ liveControl: pending }));
+  assert.equal(pendingResult.finalReady, false);
+  assert.ok(pendingResult.finalViolations.includes("LIVE_ACTIONS_PENDING"));
+
+  const partialControl = {
+    ...attributedLiveControl(roster.slice(0, -1)),
+    unattributedRosterCount: 1,
+  };
+  const partialResult = evaluateDraftAuditSnapshot(snapshot({ liveControl: partialControl }));
+  assert.equal(partialResult.finalReady, false);
+  assert.ok(partialResult.finalViolations.includes("ROSTER_ATTRIBUTION_INCOMPLETE"));
+});
+
+test("typed live control keeps historical Autopick and unknown additions fatal after current ESPN state clears", () => {
+  const autopickControl = attributedLiveControl(roster, (_entry, index) => index === 1 ? "ESPN_AUTOPICK" : "DRAFTFORGE_CONFIRMED");
+  const autopickResult = evaluateDraftAuditSnapshot(snapshot({ liveControl: autopickControl }));
+  assert.equal(autopickResult.finalReady, false);
+  assert.ok(autopickResult.finalViolations.includes("HISTORICAL_ESPN_AUTOPICK"));
+  assert.ok(autopickResult.finalViolations.includes("UNCONTROLLED_ROSTER_ADDITION"));
+
+  const unknownControl = attributedLiveControl(roster, (_entry, index) => index === 2 ? "UNKNOWN_EXTERNAL" : "DRAFTFORGE_CONFIRMED");
+  const unknownResult = evaluateDraftAuditSnapshot(snapshot({ liveControl: unknownControl }));
+  assert.equal(unknownResult.finalReady, false);
+  assert.ok(unknownResult.finalViolations.includes("UNCONTROLLED_ROSTER_ADDITION"));
 });
 
 test("action telemetry retains a bounded full-draft latency sample", () => {
@@ -255,6 +344,7 @@ test("newest command center owns audit publishing for an ESPN room", async () =>
       commandCenterStartedAt: "2026-08-17T20:00:00.000Z",
       authenticatedImportAt: testCapturedAt(),
     },
+    liveControl: cleanLiveControl("older-clean-control"),
   });
   const newer = snapshot({
     capturedAt: testCapturedAt(70),
@@ -265,6 +355,7 @@ test("newest command center owns audit publishing for an ESPN room", async () =>
       commandCenterStartedAt: "2026-08-17T20:01:00.000Z",
       authenticatedImportAt: testCapturedAt(),
     },
+    liveControl: cleanLiveControl("newer-clean-control"),
   });
   const post = (audit) => POST(new Request("http://localhost:3000/api/draft-day", {
     method: "POST",
@@ -297,6 +388,66 @@ test("newest command center owns audit publishing for an ESPN room", async () =>
   assert.equal(result.snapshot.safety.actionState, "Current command center still owns this room.");
 });
 
+test("newer publisher cannot erase irreversible live-control history", async () => {
+  const actionControl = appendLiveControlEvent(cleanLiveControl("action-control"), {
+    occurredAt: testCapturedAt(),
+    kind: "ACTION_LIFECYCLE",
+    actionId: "action-1",
+    decisionId: "decision-1",
+    operation: "BID",
+    phase: "PLANNED",
+    intendedPlayer: { playerId: 99, playerName: "Action Player", position: "WR" },
+    intendedOffer: 17,
+  });
+  const stickyControl = appendLiveControlEvent(cleanLiveControl("sticky-control"), {
+    occurredAt: testCapturedAt(),
+    kind: "SAFETY",
+    condition: "ESPN_AUTOPICK",
+    active: true,
+    code: "ESPN_AUTOPICK_DETECTED",
+  });
+  const cases = [
+    ["action", actionControl],
+    ["attribution", attributedLiveControl(roster.slice(0, 1))],
+    ["sticky", stickyControl],
+  ];
+  for (const [label, liveControl] of cases) {
+    const league = { ...snapshot().league, id: `audit-publisher-history-${label}` };
+    const oldAudit = snapshot({
+      capturedAt: testCapturedAt(10),
+      league,
+      binding: {
+        tabId: 4321,
+        commandCenterSessionId: `old-publisher-${label}`,
+        commandCenterStartedAt: "2026-08-17T20:00:00.000Z",
+        authenticatedImportAt: testCapturedAt(),
+      },
+      liveControl,
+    });
+    const replacement = snapshot({
+      capturedAt: testCapturedAt(20),
+      league,
+      binding: {
+        tabId: 4321,
+        commandCenterSessionId: `new-publisher-${label}`,
+        commandCenterStartedAt: "2026-08-17T20:01:00.000Z",
+        authenticatedImportAt: testCapturedAt(),
+      },
+      liveControl: cleanLiveControl(`replacement-control-${label}`),
+    });
+    const post = (audit) => POST(new Request("http://localhost:3000/api/draft-day", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://localhost:3000" },
+      body: JSON.stringify({ operation: "AUDIT", audit }),
+    }));
+
+    assert.equal((await post(oldAudit)).status, 200, label);
+    const rejected = await post(replacement);
+    assert.equal(rejected.status, 409, label);
+    assert.equal((await rejected.json()).code, "DRAFT_AUDIT_CONTROL_SESSION_REPLACEMENT", label);
+  }
+});
+
 test("non-loopback pages cannot write or read the local certification ledger", async () => {
   const deniedWrite = await POST(new Request("http://localhost:3000/api/draft-day", {
     method: "POST",
@@ -319,4 +470,54 @@ test("non-loopback pages cannot write or read the local certification ledger", a
     body: JSON.stringify({ operation: "AUDIT", audit: snapshot() }),
   }));
   assert.equal(deniedLanWrite.status, 403);
+});
+
+test("loopback compact control polling is sanitized, incremental, and rejects ledger regression", async () => {
+  const league = { ...snapshot().league, id: "audit-live-control-view" };
+  const binding = {
+    tabId: 4321,
+    commandCenterSessionId: "control-view-publisher",
+    commandCenterStartedAt: testCapturedAt(),
+    authenticatedImportAt: testCapturedAt(),
+  };
+  const audit = snapshot({
+    capturedAt: testCapturedAt(10),
+    league,
+    binding,
+    liveControl: attributedLiveControl(),
+  });
+  const post = (candidate) => POST(new Request("http://127.0.0.1:3000/api/draft-day", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: "http://127.0.0.1:3000" },
+    body: JSON.stringify({ operation: "AUDIT", audit: candidate }),
+  }));
+  assert.equal((await post(audit)).status, 200);
+
+  const read = await GET(new Request("http://127.0.0.1:3000/api/draft-day?leagueId=audit-live-control-view&teamId=7&view=control&since=13"));
+  assert.equal(read.status, 200);
+  const result = await read.json();
+  assert.equal(result.code, "DRAFT_LIVE_CONTROL_READY");
+  assert.equal(result.control.sequence, 14);
+  assert.deepEqual(result.control.events.map((event) => event.sequence), [14]);
+  assert.equal(Object.hasOwn(result, "snapshot"), false);
+  assert.deepEqual(Object.keys(result.league).sort(), ["draftType", "id", "teamId"]);
+
+  const regression = snapshot({
+    capturedAt: testCapturedAt(20),
+    league,
+    binding,
+    liveControl: attributedLiveControl(roster.slice(0, -1)),
+  });
+  const rejected = await post(regression);
+  assert.equal(rejected.status, 409);
+  const rejectedBody = await rejected.json();
+  assert.equal(rejectedBody.code, "DRAFT_AUDIT_CONTROL_REGRESSION");
+  assert.equal(rejectedBody.controlCode, "LIVE_CONTROL_SEQUENCE_REGRESSION");
+
+  const invalidSince = await GET(new Request("http://127.0.0.1:3000/api/draft-day?leagueId=audit-live-control-view&teamId=7&view=control&since=-1"));
+  assert.equal(invalidSince.status, 400);
+
+  const ambiguous = await GET(new Request("http://127.0.0.1:3000/api/draft-day?view=control"));
+  assert.equal(ambiguous.status, 400);
+  assert.equal((await ambiguous.json()).code, "LIVE_CONTROL_IDENTITY_REQUIRED");
 });

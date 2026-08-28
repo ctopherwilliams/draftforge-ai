@@ -21,12 +21,25 @@ The user has two ESPN leagues on different draft days. Their settings, picks, pl
 
 ## Current checkpoint
 
+### Superseding post-live hardening candidate — 2026-08-28
+
+- Branch: `main`; candidate companion: `0.2.26`; packaged SHA-256: `96acc8438a0f5ca2e66bd780afe7432581f95198ff0c5a8cd943b6318b478791`.
+- The real SOMFAB snake draft exposed control-plane timing, stale-context, result-attribution, publisher-replacement, and recovery risks. The fixes and failure-class ledger are in [docs/post-live-draft-hardening-20260828.md](docs/post-live-draft-hardening-20260828.md) and [docs/real-draft-issues-20260827.md](docs/real-draft-issues-20260827.md).
+- The companion/dashboard are the only writer. Chat and terminal monitoring use the compact loopback GET-only stream and cannot dispatch an ESPN action.
+- Full local evidence: production build, typecheck, lint, dependency audit, 279/279 tests, deterministic 20 snake plus 20 salary-cap drafts, 121/121 live-control release tests, 9/9 chaos cases, 1,000/1,000 read-only load requests, and a bounded 120-poll soak passed. A fresh five-seed synthetic matrix completed 10,000/10,000 snake-plus-salary-cap drafts with zero failures or hard violations after correcting harness-only player-pool capacity; this is engine regression evidence, not authenticated current-source certification. The earlier 10,000-per-format run is also explicitly noncertifying because it began before the newly documented Tradyr access restriction was enforced.
+- Tradyr changed access on 2026-08-15: unkeyed bulk data is capped at 50 and may contain decoy entries. DraftForge now requires server-only `TRADYR_API_KEY`, rejects limited/ignored-offset/incomplete data, and binds snapshots to the ESPN one-QB/two-QB profile. The key is currently absent; therefore current five-source warmup and new authenticated certification remain correctly blocked. Never count the older unkeyed snapshot as current source evidence.
+- Official availability review identified Calvin Austin III (season-ending ACL) and Cedric Tillman (released) as hard-veto candidates when they resolve on the authenticated ESPN board; Trey Benson is on reserve/injured but was absent from the saved salary player pool. Availability remains a separate short-lived veto layer and never changes the five-source weights.
+- An independent final P0/P1 review returned GO after leadership detection stopped trusting global body/toast text and required one unique visible dedicated current-leader element. Stale contradictory and global-only evidence now produces the scoped result or fails closed with zero clicks.
+- The 2026-08-28 authenticated no-click Chrome preflight used exactly one DraftForge tab and one signed-in ESPN league `44050`, team `7` tab. DraftForge reproduced the 12-team PPR, $200 salary-cap, 14-slot, QB-plus-OP profile and kept Auto-Draft and every salary-cap action disabled. Both saved pre-room commands returned `SOURCE_WARMUP_FAILED` because the required server-only Tradyr key is absent. This is a verified fail-closed result and must not be recorded as READY.
+
+Real SOMFAB draft-day control issues observed on 2026-08-27 are preserved in [docs/real-draft-issues-20260827.md](docs/real-draft-issues-20260827.md). Treat that file as the post-draft engineering memory: finish and audit the live roster first, make no further runtime changes during the room, preserve the Autopick/2.14 chronology as a sanitized fixture, then address the P0 control-plane items before any broad strategy tuning.
+
 - Active release branch: `main`
 - Release tag: `draft-day-rc-2026-08-19`
 - Release-candidate revision at authenticated certification: `af06f0d`
 - Production app: `https://draftforge-ai.workspace-231977.chatgpt.site`
 - Chrome extension package: `public/draftforge-espn-companion.zip`
-- Extension version: `0.2.24`
+- Extension version: `0.2.26`
 - Test command: `npm run check`
 - Last verified result: the v0.2.24 candidate passes 201/201 tests, lint, typecheck, production build, 20 deterministic complete snake drafts, 20 deterministic complete salary-cap drafts, Monte Carlo replay/invariant checks, UI and extension safety, exact recovery targeting, managed workspace cleanup, and latency gates. Its ten-scenario visual gate covers pre-room plus both formats at 390, 1440, 1728, and 2560 widths with zero baseline drift. The clean-room authenticated campaign remains complete at 20/20 snake and 20/20 salary-cap; the lifecycle hardening below does not change those already-complete counts. Companion v0.2.24 package SHA-256 is `ff42c6a085f5973d35e34e9766ca1b90c563be6a337998c8d4a17069f1dbe3b1`.
 

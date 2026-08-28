@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "draftforge.availability-policy/v1",
+  "maxAgeMinutes": 30,
+  "officialDomains": [
+    "buffalobills.com",
+    "nfl.com"
+  ],
+  "reputableDomains": [
+    "apnews.com",
+    "espn.com"
+  ]
+}

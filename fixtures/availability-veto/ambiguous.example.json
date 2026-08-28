@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "draftforge.availability/v1",
+  "generatedAt": "2026-08-27T23:50:00.000Z",
+  "records": [
+    {
+      "identity": {
+        "normalizedName": "sharedname",
+        "team": "LAC",
+        "position": "WR"
+      },
+      "classification": "league_ineligibility",
+      "reasonCode": "league_ineligibility",
+      "eventAt": "2026-08-27T23:30:00.000Z",
+      "retrievedAt": "2026-08-27T23:49:00.000Z",
+      "evidence": [
+        {
+          "kind": "official_league",
+          "url": "https://www.nfl.com/news/example-ineligibility",
+          "domain": "www.nfl.com",
+          "publishedAt": "2026-08-27T23:30:00.000Z",
+          "supportsClassification": "league_ineligibility"
+        }
+      ]
+    }
+  ]
+}

@@ -6,9 +6,9 @@ DraftForge is an ESPN-only fantasy football draft copilot. The primary cockpit i
 
 Post-draft league management is intentionally out of scope.
 
-## Grok implementation handoff: live player-availability guard
+## Implemented availability-veto contract
 
-This section is the authoritative implementation brief for a Grok coding agent. The current baseline already reads ESPN's authenticated `injuryStatus`, marks definitive inactive designations such as `OUT`, `IR`, `SUSPENDED`, and `INACTIVE` as unavailable, and removes those players from both snake and salary-cap decisions. Grok's task is to close the remaining draft-day risk: recent, credible news that has not yet propagated into ESPN's player status.
+This section is retained as the auditable contract for the implemented availability veto. The current baseline reads ESPN's authenticated `injuryStatus`, removes definitive inactive designations, and stages recent credible external evidence through a sanitized, loopback-only, short-lived artifact. External news is a safety overlay, never a sixth ranking source.
 
 ### Goal
 
@@ -135,6 +135,8 @@ The work is complete only when the full gate passes, deterministic replay is pro
 
 Requirements: Node.js 22.18 or newer and Google Chrome with the DraftForge companion loaded from this repository.
 
+The production server also requires `TRADYR_API_KEY` for a trustworthy complete Tradyr board. Tradyr's unkeyed bulk response is capped and may contain decoy rows, so DraftForge fails the five-source gate without the key. Keep it server-only; never put it in a URL, browser storage, snapshot, log, or committed file.
+
 ```bash
 npm install
 npm run dev
@@ -163,7 +165,7 @@ Draft day is a cold-start workflow, not a continuation of whatever tabs or serve
 
 1. Verify the repository and current production build, start exactly one DraftForge server on port 3000, and confirm `/api/draft-day` exists.
 2. Open the local dashboard plus exactly one authenticated ESPN lobby tab in Chrome and import the named league's scoring, roster, keeper, timer, order, and draft-type rules.
-3. Warm all five sources before ESPN creates the room, using the scoring and team count returned by the authenticated league-rules probe rather than a remembered default. For the saved 10-team PPR snake league, the executable gate is:
+3. Confirm the production server has `TRADYR_API_KEY`, then warm all five sources before ESPN creates the room, using the scoring and team count returned by the authenticated league-rules probe rather than a remembered default. For the saved 10-team PPR snake league, the executable gate is:
 
    ```bash
    npm run draft-day:warm -- --scoring PPR --teams 10 --season 2026 --qbs 2

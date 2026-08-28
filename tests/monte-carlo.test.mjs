@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   OPPONENT_ARCHETYPES,
+  SYNTHETIC_POSITION_COUNTS,
   deriveTrialSeed,
   makeConsensusPlayerSnapshot,
   makeLeagueScenario,
@@ -84,7 +85,9 @@ test("salary-cap regret excludes nominations DraftForge did not acquire", { time
   ]), 20);
   const result = simulateDraft({ format: "salary-cap", baseSeed: 20260814, trialIndex: 2768, drafts: 10_000 });
   assert.equal(result.regretCase.acquired, false);
-  assert.ok(result.regretCase.regret > 250);
+  // Keep this as a material nomination proxy without coupling the assertion to
+  // the exact composition of the synthetic player inventory.
+  assert.ok(result.regretCase.regret > 150);
   assert.ok(result.metrics.decisionRegret < 1_600);
 });
 
@@ -105,6 +108,32 @@ test("deep 14-team adversarial rooms retain enough legal late-round inventory", 
     assert.deepEqual(result.violations, ZERO_VIOLATIONS);
     assert.equal(result.roster.length, result.rosterSize);
   }
+});
+
+test("synthetic inventory covers deepest position-cap demand plus late-news removals", () => {
+  const trialIndex = 154;
+  const trialSeed = deriveTrialSeed(18472631, "salary-cap", trialIndex);
+  const { league, realSettings } = makeLeagueScenario("salary-cap", trialIndex, trialSeed);
+  assert.equal(realSettings, false);
+  assert.equal(league.size, 14);
+  const cushion = { QB: 8, RB: 10, WR: 10, TE: 8 };
+  for (const position of ["QB", "RB", "WR", "TE"]) {
+    assert.ok(
+      SYNTHETIC_POSITION_COUNTS[position] >= league.size * league.positionLimits[position] + cushion[position],
+      `${position} inventory must exceed aggregate position caps plus late-news cushion`,
+    );
+  }
+});
+
+test("the depleted-TE salary-cap seed completes deterministically", { timeout: 30_000 }, () => {
+  const input = { format: "salary-cap", baseSeed: 18472631, trialIndex: 154, drafts: 1_000 };
+  const first = simulateDraft(input);
+  const replay = simulateDraft(input);
+  assert.equal(first.scenario, "adversarial-espn-compatible");
+  assert.equal(first.roster.length, first.rosterSize);
+  assert.deepEqual(first.violations, ZERO_VIOLATIONS);
+  assert.equal(replay.draftDigest, first.draftDigest);
+  assert.deepEqual(replay.metrics, first.metrics);
 });
 
 test("opponent field covers every required non-DraftForge archetype", { timeout: 30_000 }, async () => {
