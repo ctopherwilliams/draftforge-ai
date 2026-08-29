@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { waitForChromeDebuggerTarget } from "./lib/chrome-debugger-readiness.mjs";
 import { terminateProfileProcesses } from "./lib/exact-profile-process-cleanup.mjs";
 
 const chromeBinary = process.env.CHROME_BIN
@@ -14,6 +15,7 @@ const outputDirectory = resolve("outputs/ui-regression/latest");
 const visualBaselineSchemaVersion = 2;
 const visualHashAlgorithm = "chrome-offscreen-tile-average-dhash-9x8-bt601-v1";
 const visualHashThreshold = 10;
+const chromeStartupTimeoutMs = 30_000;
 const printBaseline = process.argv.includes("--print-baseline");
 const scenarios = [
   { name: "pre-room-desktop", format: null, width: 1440, height: 1000 },
@@ -355,6 +357,7 @@ try {
     "--mute-audio",
     "--disable-background-networking",
     "--disable-component-update",
+    "--disable-dev-shm-usage",
     "--disable-sync",
     "--no-first-run",
     "--no-default-browser-check",
@@ -362,15 +365,21 @@ try {
     `--user-data-dir=${temporaryDirectory}`,
     "about:blank",
   ], {
-    stdio: "ignore",
+    stdio: ["ignore", "ignore", "pipe"],
     detached: process.platform === "linux",
   });
+  let chromeErrors = "";
+  chromeProcess.stderr.on("data", (chunk) => {
+    chromeErrors = `${chromeErrors}${String(chunk)}`.slice(-4000);
+  });
   const activePortFile = join(temporaryDirectory, "DevToolsActivePort");
-  const debuggerPort = await waitFor(async () => {
-    const content = await readFile(activePortFile, "utf8");
-    return Number(content.split(/\r?\n/)[0]) || null;
-  }, 10_000, "isolated Chrome debugger");
-  const target = await fetch(`http://127.0.0.1:${debuggerPort}/json/new?${encodeURIComponent(origin)}`, { method: "PUT" }).then((response) => response.json());
+  const { target } = await waitForChromeDebuggerTarget({
+    child: chromeProcess,
+    activePortFile,
+    origin,
+    timeoutMs: chromeStartupTimeoutMs,
+    stderr: () => chromeErrors,
+  });
   client = await new CdpClient(target.webSocketDebuggerUrl).connect();
   await client.call("Page.enable");
   await client.call("Runtime.enable");

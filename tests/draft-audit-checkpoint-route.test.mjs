@@ -10,7 +10,11 @@ import {
 import { appendLiveControlEvent, createLiveControlState } from "../app/lib/live-control.ts";
 
 const releaseRevision = "d".repeat(40);
-const capturedAt = "2026-08-28T12:00:00.000Z";
+// Keep the recovery fixture inside the production 24-hour retention window so
+// the test proves hydration semantics instead of expiring on a calendar date.
+const capturedAtEpoch = Date.now() - 5 * 60_000;
+const timestamp = (offsetMs = 0) => new Date(capturedAtEpoch + offsetMs).toISOString();
+const capturedAt = timestamp();
 
 function snapshot(overrides = {}) {
   return {
@@ -33,10 +37,10 @@ function snapshot(overrides = {}) {
     },
     binding: {
       tabId: 91,
-      dashboardLoadedAt: "2026-08-28T11:59:00.000Z",
-      authenticatedImportAt: "2026-08-28T11:59:30.000Z",
+      dashboardLoadedAt: timestamp(-60_000),
+      authenticatedImportAt: timestamp(-30_000),
       commandCenterSessionId: "checkpoint-publisher",
-      commandCenterStartedAt: "2026-08-28T11:59:00.000Z",
+      commandCenterStartedAt: timestamp(-60_000),
     },
     runtime: {
       capturedAt,
@@ -59,7 +63,7 @@ function snapshot(overrides = {}) {
       sourceCoverage: 5,
       sourceIds: ["espn", "ffc", "mfl", "tradyr", "gng"],
       sourceSnapshotId: `sha256:${"c".repeat(64)}`,
-      sourceSnapshotGeneratedAt: "2026-08-28T11:59:30.000Z",
+      sourceSnapshotGeneratedAt: timestamp(-30_000),
       actionState: "Draft room connected and fail-closed.",
     },
     draft: { totalPicks: 0, appRoster: [], espnRoster: [] },
@@ -69,7 +73,7 @@ function snapshot(overrides = {}) {
       status: "READY",
       digest: `sha256:${"b".repeat(64)}`,
       evaluatedAt: capturedAt,
-      freshUntil: "2026-08-28T12:30:00.000Z",
+      freshUntil: timestamp(30 * 60_000),
       blockingReasons: [],
       vetoedPlayerIds: [],
     },
@@ -151,16 +155,17 @@ test("route hydrates revision-bound evidence before reads and persists an accept
     const first = await import(`../app/api/draft-day/route.ts?checkpoint-first=${Date.now()}`);
     const hydrated = await localGet(first.GET, "view=hydrate");
     assert.equal(hydrated.status, 200);
-    assert.equal((await hydrated.json()).recoveryEvidenceCount, 1);
+    const hydratedBody = await hydrated.json();
+    assert.equal(hydratedBody.recoveryEvidenceCount, 1, JSON.stringify(hydratedBody));
     const recovered = await localGet(first.GET, "leagueId=44050&teamId=7");
     assert.equal((await recovered.json()).recoveryEvidence, true);
 
     const recoveredImport = snapshot({
-      capturedAt: "2026-08-28T12:00:01.000Z",
+      capturedAt: timestamp(1_000),
       binding: {
         ...snapshot().binding,
-        dashboardLoadedAt: "2026-08-28T12:00:00.500Z",
-        authenticatedImportAt: "2026-08-28T12:00:00.500Z",
+        dashboardLoadedAt: timestamp(500),
+        authenticatedImportAt: timestamp(500),
       },
     });
     const recorded = await localPost(first.POST, recoveredImport);
@@ -186,8 +191,8 @@ test("route hydrates revision-bound evidence before reads and persists an accept
 
     const critical = {
       ...latestHeartbeat,
-      capturedAt: "2026-08-28T12:00:02.000Z",
-      runtime: { ...latestHeartbeat.runtime, capturedAt: "2026-08-28T12:00:02.000Z" },
+      capturedAt: timestamp(2_000),
+      runtime: { ...latestHeartbeat.runtime, capturedAt: timestamp(2_000) },
       safety: { ...latestHeartbeat.safety, actionState: "Critical authorization state changed." },
       availability: { ...latestHeartbeat.availability, digest: `sha256:${"e".repeat(64)}` },
     };
@@ -216,7 +221,7 @@ test("route hydrates revision-bound evidence before reads and persists an accept
 
     process.env.DRAFTFORGE_PERSIST_DRAFT_AUDIT_CHECKPOINT = "0";
     for (let index = 0; index < 10_001; index += 1) {
-      const at = new Date(Date.parse("2026-08-28T12:00:03.000Z") + index).toISOString();
+      const at = timestamp(3_000 + index);
       const candidate = snapshot({
         capturedAt: at,
         league: { ...snapshot().league, id: String(60_000 + index) },
@@ -244,7 +249,7 @@ test("route hydrates revision-bound evidence before reads and persists an accept
     assert.equal((await staleObserver.json()).code, "DRAFT_DAY_RECOVERY_REQUIRED");
     const staleDispatchLease = await localGet(
       restarted.GET,
-      "leagueId=44050&teamId=7&view=dispatch-lease&tabId=91&commandCenterSessionId=checkpoint-publisher&dashboardLoadedAt=2026-08-28T12%3A00%3A00.500Z&decisionId=none&operation=BID&playerId=1",
+      `leagueId=44050&teamId=7&view=dispatch-lease&tabId=91&commandCenterSessionId=checkpoint-publisher&dashboardLoadedAt=${encodeURIComponent(timestamp(500))}&decisionId=none&operation=BID&playerId=1`,
     );
     assert.equal(staleDispatchLease.status, 409);
     assert.equal((await staleDispatchLease.json()).code, "DRAFT_DAY_RECOVERY_REQUIRED");

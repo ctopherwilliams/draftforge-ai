@@ -121,6 +121,11 @@ test("visual certification serves its own built artifact without weakening produ
   assert.doesNotMatch(visualCertification, /0000000000000000/);
   assert.doesNotMatch(visualCertification, /ffmpeg|execFileSync/);
   assert.match(visualCertification, /detached:\s*process\.platform === "linux"/);
+  assert.match(visualCertification, /const chromeStartupTimeoutMs = 30_000/);
+  assert.match(visualCertification, /"--disable-dev-shm-usage"/);
+  assert.match(visualCertification, /stdio:\s*\["ignore", "ignore", "pipe"\]/);
+  assert.match(visualCertification, /waitForChromeDebuggerTarget\(\{/);
+  assert.match(visualCertification, /stderr:\s*\(\) => chromeErrors/);
   assert.match(visualCertification, /process\.kill\(-child\.pid, name\)/);
   assert.match(visualCertification, /terminateProfileProcesses\(temporaryDirectory\)/);
   assert.match(visualCertification, /signal\("SIGKILL"\);\s*if \(!await waitForStop\(3000\)\)/);
