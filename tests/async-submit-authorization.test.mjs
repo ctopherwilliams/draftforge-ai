@@ -4,9 +4,14 @@ import vm from "node:vm";
 import test from "node:test";
 import ts from "typescript";
 import {
+  auctionBidUncertaintyResolved,
+  auctionNominationUncertaintyResolution,
   buildSnakePlanTiming,
+  hasUnresolvedAuctionClick,
+  latchMonotonicAuctionBidCeiling,
   snakePlanReadyToSubmit,
 } from "../app/lib/live-draft-orchestration.ts";
+import { classifyPlayerConsensusCorroboration } from "../app/lib/consensus.ts";
 
 const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
 const pageAst = ts.createSourceFile(
@@ -29,6 +34,18 @@ function callbackBody(variableName) {
   visit(pageAst);
   assert.ok(callback, `${variableName} callback must exist in app/page.tsx`);
   return callback.getText(pageAst);
+}
+
+function evaluatePageCallback(variableName, sandbox) {
+  vm.createContext(sandbox);
+  const compiled = ts.transpileModule(`globalThis.callback = ${callbackBody(variableName)};`, {
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.None,
+    },
+  }).outputText;
+  vm.runInContext(compiled, sandbox, { filename: `app/page.tsx#${variableName}` });
+  return sandbox.callback;
 }
 
 function deferred() {
@@ -71,6 +88,7 @@ function buildSubmitHarness({
     pos: "WR",
     maxBid: 21,
     fillsMandatoryStarter: true,
+    sourceRanks: { espn: 1, ffc: 2, mfl: 3, tradyr: 4 },
   };
   const availability = liveAvailability();
   const context = {
@@ -96,6 +114,7 @@ function buildSubmitHarness({
     workspaceRoleRef: { current: "writer" },
     settingsConfirmed: true,
     extension: "connected",
+    runtimeWorkspaceReady: true,
     sources: { complete: true },
     isCompleteFreshIntelligenceSnapshot: () => true,
     intelligenceSnapshot: {
@@ -109,6 +128,7 @@ function buildSubmitHarness({
     availabilityGateRef: { current: availability },
     myPickCount: 0,
     league: { id: "1603083723", teamId: 6, season: 2026, rosterSize: 16, draftType },
+    classifyPlayerConsensusCorroboration,
     actionAuthorizationEpochRef: { current: 0 },
     autoDraftRef: { current: true },
     pickFeedHealthRef: { current: { observedAt: new Date().toISOString(), lagging: false, fresh: true } },
@@ -178,6 +198,9 @@ function buildSubmitHarness({
     latestActionRequestRef: { current: 0 },
     pendingActionTelemetryRef: { current: new Map() },
     pendingAuctionBidRef: { current: null },
+    auctionBidCeilingLatchRef: { current: null },
+    latchMonotonicAuctionBidCeiling,
+    hasUnresolvedAuctionClick,
     resolveOwnRoster: () => [],
     sendToExtension(type, payload) {
       sent.push({ type, payload });
@@ -432,6 +455,95 @@ test("a legal bid dispatches the minimum of source and live ESPN ceilings", asyn
   assert.equal(harness.liveControlActionsRef.current.get(1)?.phase, "PLANNED");
 });
 
+test("an unresolved clicked auction action fences manual and automatic submissions before any async work", async () => {
+  const harness = buildSubmitHarness();
+  setBidContext(harness);
+  harness.pendingAuctionBidRef.current = {
+    actionRequestId: 98,
+    playerId: harness.player.id,
+    playerName: harness.player.name,
+    amount: 11,
+    uncertain: true,
+    beforeRosterPlayerIds: [],
+  };
+
+  await harness.submit(harness.player, true, "BID", 12);
+  await harness.submit(harness.player, false, "BID", 12);
+
+  assert.equal(harness.availabilityWaits.length, 0);
+  assert.equal(harness.auditWaits.length, 0);
+  assert.equal(harness.submissions().length, 0);
+  assert.match(harness.actionStates.at(-1), /earlier ESPN auction click is still awaiting exact/);
+});
+
+test("the page roster effect cannot clear an uncertain bid from a different display name without an exact id", () => {
+  const pending = {
+    actionRequestId: 98,
+    playerId: 101,
+    playerName: "Exact Target",
+    amount: 11,
+    uncertain: true,
+    beforeRosterPlayerIds: [],
+  };
+  const sandbox = {
+    pendingAuctionBidRef: { current: pending },
+    pendingAuctionNominationRef: { current: null },
+    setPendingAuctionNomination: () => { throw new Error("nomination state must not clear"); },
+    syncAuctionClickUncertainty: () => { throw new Error("uncertainty must remain fenced"); },
+    setActionState: () => {},
+    lastAutoAction: { current: "pending" },
+    normalizeName: (value) => String(value || "").toLowerCase().replace(/[^a-z0-9]/g, ""),
+    auctionBidUncertaintyResolved,
+  };
+  const reconcile = evaluatePageCallback("reconcilePendingAuctionBidFromContext", sandbox);
+  reconcile({
+    nominatedPlayer: "Different Display Name",
+    nominatedPlayerId: undefined,
+    currentBid: 11,
+    leadingBid: false,
+  }, []);
+
+  assert.equal(sandbox.pendingAuctionBidRef.current, pending);
+  assert.equal(sandbox.pendingAuctionBidRef.current.uncertain, true);
+  assert.equal(sandbox.lastAutoAction.current, "pending");
+});
+
+test("the page nomination effect preserves same-name uncertainty when ESPN omits the live nominee id", () => {
+  const pending = {
+    playerId: 101,
+    playerName: "Exact Target",
+    intent: "TARGET",
+    amount: 1,
+    uncertain: true,
+  };
+  const stateWrites = [];
+  const sandbox = {
+    context: {
+      nominatedPlayer: "Exact Target",
+      nominatedPlayerId: undefined,
+      ownNominationIntent: "TARGET",
+      ownNominationPlayerId: 101,
+      auctionTransactionMode: "NOMINATION",
+      auctionTransactionReady: true,
+      currentBid: 0,
+    },
+    nominated: { id: 101, name: "Exact Target" },
+    espnPlayers: [],
+    authoritativePicks: [],
+    pendingAuctionNominationRef: { current: pending },
+    resolveOwnRoster: () => [],
+    auctionNominationUncertaintyResolution,
+    setPendingAuctionNomination: (value) => stateWrites.push(value),
+    syncAuctionClickUncertainty: () => stateWrites.push("synced"),
+  };
+  const reconcile = evaluatePageCallback("reconcilePendingAuctionNominationFromContext", sandbox);
+  reconcile();
+
+  assert.equal(sandbox.pendingAuctionNominationRef.current, pending);
+  assert.equal(sandbox.pendingAuctionNominationRef.current.uncertain, true);
+  assert.deepEqual(stateWrites, []);
+});
+
 test("a reserve ceiling that falls below the next bid during availability becomes a normal walk-away", async () => {
   const harness = buildSubmitHarness();
   setBidContext(harness);
@@ -512,28 +624,56 @@ test("a present but invalid ESPN nominee id never falls back to the same display
   const harness = buildSubmitHarness();
   setBidContext(harness, { nominatedPlayerId: 0 });
 
-  const pending = harness.submit(harness.player, true, "BID", 11);
-  await harness.resolveAvailability(0);
-  await pending;
+  await harness.submit(harness.player, true, "BID", 11);
 
+  assert.equal(harness.availabilityWaits.length, 0);
   assert.equal(harness.auditWaits.length, 0);
   assert.equal(harness.submissions().length, 0);
-  assert.equal(harness.retryRequests.length, 1);
+  assert.equal(harness.retryRequests.length, 0);
   assert.deepEqual(harness.autoDraftStates, []);
+  assert.match(harness.actionStates.at(-1), /exact nominated player identity/);
 });
 
-test("nominee name fallback remains available only when ESPN omits the nominee id", async () => {
+test("a missing ESPN nominee id cannot authorize a bid from display-name fallback", async () => {
   const harness = buildSubmitHarness();
   setBidContext(harness, { nominatedPlayerId: null });
 
-  const pending = harness.submit(harness.player, true, "BID", 11);
+  await harness.submit(harness.player, true, "BID", 11);
+
+  assert.equal(harness.availabilityWaits.length, 0);
+  assert.equal(harness.auditWaits.length, 0);
+  assert.equal(harness.submissions().length, 0);
+  assert.match(harness.actionStates.at(-1), /exact nominated player identity/);
+});
+
+test("a source ceiling cannot rise for the same nominee after budget churn", async () => {
+  const harness = buildSubmitHarness();
+  setBidContext(harness, { maxLegalBid: 17 });
+
+  const first = harness.submit(harness.player, true, "BID", 11);
   await harness.resolveAvailability(0);
   await harness.resolveAudit(0);
-  await pending;
+  await first;
+  assert.equal(harness.submissions()[0].payload.maxApprovedBid, 17);
 
-  assert.equal(harness.submissions().length, 1);
-  assert.equal(harness.submissions()[0].payload.playerId, harness.player.id);
-  assert.equal(harness.submissions()[0].payload.maxApprovedBid, 21);
+  harness.inFlightActionRef.current = null;
+  harness.pendingAuctionBidRef.current = null;
+  harness.context.maxLegalBid = 21;
+  const second = harness.submit(harness.player, true, "BID", 12);
+  await harness.resolveAvailability(1);
+  await harness.resolveAudit(1);
+  await second;
+  assert.equal(harness.submissions()[1].payload.maxApprovedBid, 17);
+});
+
+test("an uncorroborated player is rejected before availability, audit, or extension dispatch", async () => {
+  const harness = buildSubmitHarness({ draftType: "SNAKE" });
+  harness.player.sourceRanks = { espn: 1, ffc: 2, mfl: 3 };
+  await harness.submit(harness.player, false, "SELECT");
+  assert.equal(harness.availabilityWaits.length, 0);
+  assert.equal(harness.auditWaits.length, 0);
+  assert.equal(harness.submissions().length, 0);
+  assert.match(harness.actionStates.at(-1), /lacks the required ESPN-backed source corroboration/);
 });
 
 test("binding revocation ACK timeout preserves the old exact identity and blocks every workspace transition", async () => {

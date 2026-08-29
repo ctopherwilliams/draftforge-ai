@@ -1,5 +1,5 @@
-export type EspnRosterEntry = { playerId?: number | null; name?: string | null; amount?: number };
-export type EspnAuctionSale = { playerId?: number | null; playerName?: string | null; teamName?: string | null; amount?: number; sequence?: number };
+export type EspnRosterEntry = { playerId?: number | null; name?: string | null; playerTeam?: string | null; position?: string | null; amount?: number };
+export type EspnAuctionSale = { playerId?: number | null; playerName?: string | null; playerTeam?: string | null; position?: string | null; teamName?: string | null; amount?: number; sequence?: number };
 export type EspnAuctionBudget = { teamName: string; remaining: number; maxOffer: number };
 export type EspnSnakePick = { playerName: string; teamName: string; round: number; roundPick: number };
 export type EspnNominationIdentity = { playerId: number; playerName: string; intent: "TARGET" | "DRAIN" };
@@ -63,9 +63,9 @@ export function resolveEspnNominatedPlayer<T extends { id: number; name: string 
     return players.find((player) => player.id === nominatedPlayerId);
   }
   const nominatedPlayerName = normalizedPlayerName(context.nominatedPlayer);
-  return nominatedPlayerName
-    ? players.find((player) => normalizedPlayerName(player.name) === nominatedPlayerName)
-    : undefined;
+  if (!nominatedPlayerName) return undefined;
+  const matches = players.filter((player) => normalizedPlayerName(player.name) === nominatedPlayerName);
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 export function resolveOwnNominationIntent(
@@ -113,6 +113,8 @@ export function stabilizeEspnContext(current: EspnContext, next: EspnContext): E
   if ("ownRoster" in next) stabilized.ownRoster = reuseArray(current.ownRoster, next.ownRoster, (left, right) => (
       Number(left.playerId || 0) === Number(right.playerId || 0)
       && String(left.name || "") === String(right.name || "")
+      && String(left.playerTeam || "") === String(right.playerTeam || "")
+      && String(left.position || "") === String(right.position || "")
       && Number(left.amount || 0) === Number(right.amount || 0)
     ));
   if ("snakePicks" in next) stabilized.snakePicks = reuseArray(current.snakePicks, next.snakePicks, (left, right) => (
@@ -129,6 +131,8 @@ export function stabilizeEspnContext(current: EspnContext, next: EspnContext): E
   if ("auctionSales" in next) stabilized.auctionSales = reuseArray(current.auctionSales, next.auctionSales, (left, right) => (
       Number(left.playerId || 0) === Number(right.playerId || 0)
       && String(left.playerName || "") === String(right.playerName || "")
+      && String(left.playerTeam || "") === String(right.playerTeam || "")
+      && String(left.position || "") === String(right.position || "")
       && String(left.teamName || "") === String(right.teamName || "")
       && Number(left.amount || 0) === Number(right.amount || 0)
       && Number(left.sequence || 0) === Number(right.sequence || 0)

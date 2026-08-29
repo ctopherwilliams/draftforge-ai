@@ -325,6 +325,7 @@ test("release gate enforces the documented low-latency budgets", async () => {
   const source = await readFile(new URL("../scripts/live-control-release-gate.mjs", import.meta.url), "utf8");
   assert.match(source, /"--p95-ms", "25"/);
   assert.match(source, /"--p99-ms", "50"/);
+  assert.match(source, /\["run", "test:visual"\]/);
   for (const criticalTest of [
     "async-submit-authorization.test.mjs",
     "availability-stage-store.test.mjs",

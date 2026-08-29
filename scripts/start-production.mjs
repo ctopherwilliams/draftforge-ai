@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -30,49 +30,31 @@ import {
   removeProductionSupervisionState,
   writeProductionSupervisionState,
 } from "./production-supervision-lib.mjs";
+import {
+  SERVER_TRADYR_KEYCHAIN_ACCOUNT,
+  SERVER_TRADYR_KEYCHAIN_READ_TIMEOUT_MS,
+  SERVER_TRADYR_KEYCHAIN_SERVICE,
+  resolveServerOnlyTradyrEnvironment,
+} from "./server-only-tradyr-credential.mjs";
 
 const PRODUCTION_ORIGIN = "http://127.0.0.1:3000";
 const PRODUCTION_START_TIMEOUT_MS = 15_000;
 const PRODUCTION_TERMINATION_GRACE_MS = 2_000;
-export const PRODUCTION_TRADYR_KEYCHAIN_SERVICE = "DraftForge Tradyr";
-export const PRODUCTION_TRADYR_KEYCHAIN_ACCOUNT = "draftforge";
-export const PRODUCTION_KEYCHAIN_READ_TIMEOUT_MS = 5_000;
+export const PRODUCTION_TRADYR_KEYCHAIN_SERVICE = SERVER_TRADYR_KEYCHAIN_SERVICE;
+export const PRODUCTION_TRADYR_KEYCHAIN_ACCOUNT = SERVER_TRADYR_KEYCHAIN_ACCOUNT;
+export const PRODUCTION_KEYCHAIN_READ_TIMEOUT_MS = SERVER_TRADYR_KEYCHAIN_READ_TIMEOUT_MS;
 export const PRODUCTION_RESTART_BACKOFF_MS = Object.freeze([250, 1_000]);
 
 export function resolveProductionEnvironment({
   environment = process.env,
   platform = process.platform,
-  keychainReadImpl = spawnSync,
+  keychainReadImpl,
 } = {}) {
-  const resolved = { ...environment };
-  const existing = String(resolved.TRADYR_API_KEY || "").trim();
-  if (existing) {
-    resolved.TRADYR_API_KEY = existing;
-    return Object.freeze(resolved);
-  }
-  delete resolved.TRADYR_API_KEY;
-  if (platform !== "darwin") return Object.freeze(resolved);
-  try {
-    const result = keychainReadImpl("/usr/bin/security", [
-      "find-generic-password",
-      "-s", PRODUCTION_TRADYR_KEYCHAIN_SERVICE,
-      "-a", PRODUCTION_TRADYR_KEYCHAIN_ACCOUNT,
-      "-w",
-    ], {
-      encoding: "utf8",
-      timeout: PRODUCTION_KEYCHAIN_READ_TIMEOUT_MS,
-      killSignal: "SIGKILL",
-      maxBuffer: 8_192,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const credential = result?.status === 0 ? String(result.stdout || "").trim() : "";
-    if (/^[\x21-\x7e]{8,4096}$/.test(credential)) resolved.TRADYR_API_KEY = credential;
-  } catch {
-    // Missing, denied, locked, or timed-out Keychain access leaves the server
-    // safely source-blocked. No credential bytes or Keychain diagnostics are
-    // emitted, persisted, or forwarded to the browser.
-  }
-  return Object.freeze(resolved);
+  return resolveServerOnlyTradyrEnvironment({
+    environment,
+    platform,
+    ...(keychainReadImpl ? { keychainReadImpl } : {}),
+  });
 }
 
 export function nextProductionServerInstanceStartedAt(nowImpl = Date.now, previousEpochMs = -1) {

@@ -50,11 +50,15 @@ test("live auction nominees resolve by exact ESPN player id before duplicate nam
   );
 });
 
-test("live auction nominee name fallback is used only when the ESPN id is absent", () => {
+test("live auction nominee name fallback is used only when the ESPN id is absent and the name is unique", () => {
   const players = [{ id: 202, name: "A.J. Brown" }];
   assert.equal(resolveEspnNominatedPlayer(players, { nominatedPlayer: "AJ Brown" }), players[0]);
   assert.equal(resolveEspnNominatedPlayer(players, { nominatedPlayer: "AJ Brown", nominatedPlayerId: null }), players[0]);
   assert.equal(resolveEspnNominatedPlayer(players, { nominatedPlayer: "AJ Brown", nominatedPlayerId: 999 }), undefined);
+  assert.equal(resolveEspnNominatedPlayer([
+    { id: 201, name: "A.J. Brown" },
+    { id: 202, name: "AJ Brown" },
+  ], { nominatedPlayer: "AJ Brown" }), undefined);
 });
 
 test("live auction nominees accept exact signed ESPN defense ids before name variants", () => {

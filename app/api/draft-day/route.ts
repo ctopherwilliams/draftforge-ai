@@ -25,6 +25,7 @@ import {
 } from "../../lib/draft-audit.ts";
 import {
   draftAuditPublicationDigest,
+  materializeDraftAuditPublication,
   type DraftAuditRecordedPublication,
 } from "../../lib/draft-audit-publisher.ts";
 import { buildLiveControlCompactView, validateLiveControlTransition } from "../../lib/live-control.ts";
@@ -43,7 +44,6 @@ import {
   currentDraftAuditCheckpointReleaseRevision,
   defaultDraftAuditCheckpointPath,
   draftAuditCheckpointCriticalDigest,
-  draftAuditCheckpointDigest,
   draftAuditCheckpointPersistenceRequired,
   loadPersistedDraftAuditCheckpoint,
   MAX_DRAFT_AUDIT_CHECKPOINTS,
@@ -340,15 +340,22 @@ async function installDurableDraftAuditSnapshot(key: string, snapshot: DraftAudi
       const persistedCandidate = persisted.snapshots.find(({ snapshot: candidate }) => (
         auditKey(candidate.league.id, candidate.league.teamId) === key
       ));
-      if (!persistedCandidate || persistedCandidate.digest !== draftAuditCheckpointDigest(snapshot)) {
+      if (!persistedCandidate || persistedCandidate.snapshot !== snapshot) {
         throw new DraftAuditCheckpointCapacityError();
       }
       const persistedKeys = new Set<string>();
       for (const entry of persisted.snapshots) {
         const persistedKey = auditKey(entry.snapshot.league.id, entry.snapshot.league.teamId);
         persistedKeys.add(persistedKey);
+        const priorSnapshot = draftAuditSnapshots.get(persistedKey);
+        const priorState = draftAuditDurability.get(persistedKey);
+        const criticalDigest = persistedKey === key
+          ? persistence.criticalDigest
+          : priorSnapshot === entry.snapshot && priorState
+            ? priorState.criticalDigest
+            : draftAuditCheckpointCriticalDigest(entry.snapshot);
         draftAuditDurability.set(persistedKey, {
-          criticalDigest: draftAuditCheckpointCriticalDigest(entry.snapshot),
+          criticalDigest,
           persistedAt: now,
         });
       }
@@ -503,12 +510,15 @@ export function dispatchLeaseMatchesAudit(
   return false;
 }
 
-function recordedAuditPublication(snapshot: DraftAuditSnapshot): DraftAuditRecordedPublication | null {
+function recordedAuditPublication(
+  snapshot: DraftAuditSnapshot,
+  digest = draftAuditPublicationDigest(snapshot),
+): DraftAuditRecordedPublication | null {
   const commandCenterSessionId = snapshot.binding.commandCenterSessionId;
   const liveControlSessionId = snapshot.liveControl?.sessionId;
   if (!commandCenterSessionId || !liveControlSessionId) return null;
   return {
-    digest: draftAuditPublicationDigest(snapshot),
+    digest,
     capturedAt: snapshot.capturedAt,
     binding: {
       commandCenterSessionId,
@@ -1034,24 +1044,14 @@ export async function POST(request: Request) {
         } : {}),
       }, 409);
     }
-    // A genuinely newer command-center publisher starts a new bounded control
-    // session only while the prior publisher is still pre-action and clean.
-    // Once any action, attribution, or sticky incident exists, publisher
-    // replacement is rejected above so a restart cannot erase history.
-    const controlTransition = validateLiveControlTransition(
-      newerPublisher ? undefined : previous?.liveControl,
-      audit.liveControl,
-    );
-    if (!controlTransition.ok) {
-      return response(origin, {
-        ok: false,
-        code: "DRAFT_AUDIT_CONTROL_REGRESSION",
-        controlCode: controlTransition.code,
-        ...(previous ? { evaluation: evaluateDraftAuditSnapshot(previous) } : {}),
-      }, 409);
-    }
-    const candidateDigest = draftAuditPublicationDigest(audit);
-    const isExactReplay = Boolean(previous && draftAuditPublicationDigest(previous) === candidateDigest);
+    // Exact byte-equivalent replays are already validated, installed state.
+    // Detect them with collision-safe string equality before re-walking the
+    // bounded 256-event control history. Reordered or otherwise non-exact JSON
+    // still takes the full transition validator below.
+    const candidatePublication = materializeDraftAuditPublication(audit);
+    const previousPublication = previous ? materializeDraftAuditPublication(previous) : null;
+    const isExactReplay = previousPublication?.serialized === candidatePublication.serialized;
+    const candidateDigest = candidatePublication.digest;
     if (isExactReplay && draftAuditRecoveryEvidenceKeys.has(key)) {
       return response(origin, {
         ok: false,
@@ -1060,6 +1060,23 @@ export async function POST(request: Request) {
       }, 409);
     }
     if (!isExactReplay) {
+      // A genuinely newer command-center publisher starts a new bounded
+      // control session only while the prior publisher is still pre-action and
+      // clean. Once any action, attribution, or sticky incident exists,
+      // publisher replacement is rejected above so a restart cannot erase
+      // history.
+      const controlTransition = validateLiveControlTransition(
+        newerPublisher ? undefined : previous?.liveControl,
+        audit.liveControl,
+      );
+      if (!controlTransition.ok) {
+        return response(origin, {
+          ok: false,
+          code: "DRAFT_AUDIT_CONTROL_REGRESSION",
+          controlCode: controlTransition.code,
+          ...(previous ? { evaluation: evaluateDraftAuditSnapshot(previous) } : {}),
+        }, 409);
+      }
       try {
         await installDurableDraftAuditSnapshot(key, audit);
       } catch (error) {
@@ -1073,13 +1090,13 @@ export async function POST(request: Request) {
     }
     pruneAudits(Date.now(), key);
     const snapshot = draftAuditSnapshots.get(key) as DraftAuditSnapshot;
-    const auditDigest = draftAuditPublicationDigest(snapshot);
+    const auditDigest = snapshot === audit ? candidateDigest : draftAuditPublicationDigest(snapshot);
     const captureIssueToken = globalThis.crypto.randomUUID().replaceAll("-", "");
     draftAuditCaptureIssueTokens.set(key, { token: captureIssueToken, auditDigest, issuedAt: Date.now() });
     return response(origin, {
       ok: true,
       code: "DRAFT_AUDIT_RECORDED",
-      recordedPublication: recordedAuditPublication(snapshot),
+      recordedPublication: recordedAuditPublication(snapshot, auditDigest),
       captureIssueToken,
       evaluation: evaluateDraftAuditSnapshot(snapshot),
     });

@@ -17,6 +17,7 @@ test("ESPN roster reconciliation prefers a known exact player id and bounds name
   const context = {
     ownRoster: [
       { playerId: 12, name: "Shared Name", amount: 7 },
+      { playerId: 998, name: "Shared Name", amount: 6 },
       { playerId: 999, name: "Our Player", amount: 3 },
       { playerId: 33, name: "Baltimore Ravens D/ST", amount: 1 },
       { playerId: 404, name: "Unknown Player", amount: 1 },
@@ -25,8 +26,33 @@ test("ESPN roster reconciliation prefers a known exact player id and bounds name
 
   assert.deepEqual(resolveOwnRoster(context, [...rosterPlayers, players[0]]), [
     { playerId: 12, amount: 7, index: 0 },
-    { playerId: 1, amount: 3, index: 1 },
-    { playerId: 13, amount: 1, index: 2 },
+    { playerId: 1, amount: 3, index: 2 },
+    { playerId: 13, amount: 1, index: 3 },
+  ]);
+});
+
+test("ambiguous player-name fallback never attributes a roster row or salary-cap sale", () => {
+  const duplicatePlayers = [
+    { id: 21, name: "Same Player", team: "AAA", pos: "RB" },
+    { id: 22, name: "Same Player", team: "BBB", pos: "WR" },
+  ];
+  const context = {
+    inDraftRoom: true,
+    ownRoster: [{ playerId: 999, name: "Same Player", amount: 9 }],
+    auctionSales: [{ playerId: 999, playerName: "Same Player", teamName: "Us", amount: 9, sequence: 1 }],
+  };
+  const league = { teams: [{ id: 7, name: "Us", abbrev: "US" }] };
+  assert.deepEqual(resolveOwnRoster(context, duplicatePlayers), []);
+  assert.deepEqual(resolveAuctionSales(context, league, duplicatePlayers), []);
+
+  const disambiguated = {
+    ...context,
+    ownRoster: [{ playerId: 999, name: "Same Player", playerTeam: "BBB", position: "WR", amount: 9 }],
+    auctionSales: [{ playerId: 999, playerName: "Same Player", playerTeam: "BBB", position: "WR", teamName: "Us", amount: 9, sequence: 1 }],
+  };
+  assert.deepEqual(resolveOwnRoster(disambiguated, duplicatePlayers), [{ playerId: 22, amount: 9, index: 0 }]);
+  assert.deepEqual(resolveAuctionSales(disambiguated, league, duplicatePlayers), [
+    { playerId: 22, teamId: 7, overall: 1, round: 0, amount: 9 },
   ]);
 });
 

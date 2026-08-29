@@ -196,6 +196,15 @@ test("route hydrates revision-bound evidence before reads and persists an accept
     const durableCritical = await loadPersistedDraftAuditCheckpoint(checkpointPath, releaseRevision);
     assert.equal(durableCritical.ok, true);
     assert.equal(durableCritical.value.snapshots[0].snapshot.capturedAt, critical.capturedAt);
+    const beforeReplayBytes = await readFile(checkpointPath);
+    const beforeReplayMtime = (await stat(checkpointPath)).mtimeMs;
+    const exactReplay = await localPost(first.POST, structuredClone(critical));
+    assert.equal(exactReplay.status, 200);
+    const exactReplayBody = await exactReplay.json();
+    assert.equal(exactReplayBody.code, "DRAFT_AUDIT_RECORDED");
+    assert.equal(exactReplayBody.recordedPublication, null, "a pre-control replay cannot mint a live-control lease");
+    assert.deepEqual(await readFile(checkpointPath), beforeReplayBytes, "an exact replay must not rewrite durable bytes");
+    assert.equal((await stat(checkpointPath)).mtimeMs, beforeReplayMtime, "an exact replay must not touch durable mtime");
     const beforeObserverBytes = await readFile(checkpointPath);
     const beforeObserverMtime = (await stat(checkpointPath)).mtimeMs;
     for (let index = 0; index < 1_000; index += 1) {

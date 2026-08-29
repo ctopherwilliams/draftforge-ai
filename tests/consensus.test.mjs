@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   classifyPlayerConsensusCorroboration,
+  filterActionableConsensusPlayers,
   intelligenceQuarterbackMode,
   isCompleteFreshIntelligenceSnapshot,
   mergeConsensus,
@@ -89,7 +90,7 @@ test("a globally healthy five-source snapshot cannot inflate an ESPN-only player
   assert.equal(classifyPlayerConsensusCorroboration(merged).corroborated, false);
 });
 
-test("player corroboration metadata preserves the specialist exception without becoming an action gate", () => {
+test("player corroboration is an ESPN-backed live-action gate with the specialist exception", () => {
   assert.deepEqual(classifyPlayerConsensusCorroboration({
     pos: "WR",
     sourceRanks: { espn: 10, ffc: 12, mfl: 11, tradyr: 9 },
@@ -121,6 +122,18 @@ test("player corroboration metadata preserves the specialist exception without b
     pos: "K",
     sourceRanks: { mfl: 1, ffc: 2 },
   }).corroborated, false, "ESPN identity must remain part of every classification");
+  assert.equal(classifyPlayerConsensusCorroboration({
+    pos: "WR",
+    sourceCount: 5,
+  }).corroborated, false, "a reported count without exact ESPN source identity must fail closed");
+
+  const ordered = [
+    { id: 1, pos: "WR", sourceRanks: { espn: 1, ffc: 2, mfl: 3 } },
+    { id: 2, pos: "RB", sourceRanks: { espn: 2, ffc: 3, mfl: 4, gng: 5 } },
+    { id: 3, pos: "K", sourceRanks: { espn: 1 } },
+    { id: 4, pos: "DST", sourceRanks: { espn: 1, mfl: 2 } },
+  ];
+  assert.deepEqual(filterActionableConsensusPlayers(ordered).map((player) => player.id), [2, 4]);
 });
 
 test("duplicate ESPN rows cannot inflate a real player's consensus rank", () => {

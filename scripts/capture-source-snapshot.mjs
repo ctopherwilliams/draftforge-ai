@@ -24,13 +24,55 @@ import {
   sourceSnapshotDigest,
   validateSourceSnapshot,
 } from "../simulation/source-snapshot.mjs";
+import { withServerOnlyTradyrEnvironment } from "./server-only-tradyr-credential.mjs";
 
 export {
   AUTHENTICATED_ESPN_CAPTURE_SCHEMA_VERSION,
   AUTHENTICATED_ESPN_CAPTURE_TRANSPORT,
 };
 export const AUTHENTICATED_ESPN_CAPTURE_MAX_AGE_MS = CURRENT_SOURCE_SNAPSHOT_MAX_AGE_MS;
+export const AUTHENTICATED_ESPN_PLAYER_POOL_REQUIRED_COUNT = 500;
 const AUTHENTICATED_ESPN_CAPTURE_FUTURE_SKEW_MS = 5_000;
+
+export function verifyAuthenticatedEspnPlayerPoolEnvelope(envelope, { capturedAt, league, espnPlayers }) {
+  const ids = Array.isArray(espnPlayers) ? espnPlayers.map((player) => Number(player?.id)) : [];
+  const exactKeys = ["fetchedAt", "leagueId", "playerCount", "requestedCount", "schemaVersion", "season", "teamId", "uniquePlayerCount"];
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)
+    || JSON.stringify(Object.keys(envelope).sort()) !== JSON.stringify(exactKeys)
+    || envelope.schemaVersion !== 1
+    || envelope.requestedCount !== AUTHENTICATED_ESPN_PLAYER_POOL_REQUIRED_COUNT
+    || envelope.playerCount !== AUTHENTICATED_ESPN_PLAYER_POOL_REQUIRED_COUNT
+    || envelope.uniquePlayerCount !== AUTHENTICATED_ESPN_PLAYER_POOL_REQUIRED_COUNT
+    || envelope.fetchedAt !== capturedAt
+    || String(envelope.leagueId || "") !== String(league?.id || "")
+    || Number(envelope.teamId) !== Number(league?.teamId)
+    || Number(envelope.season) !== Number(league?.season)
+    || ids.length !== AUTHENTICATED_ESPN_PLAYER_POOL_REQUIRED_COUNT
+    || ids.some((id) => !Number.isSafeInteger(id) || id === 0)
+    || new Set(ids).size !== AUTHENTICATED_ESPN_PLAYER_POOL_REQUIRED_COUNT) {
+    throw new Error("ESPN_ARTIFACT_PLAYER_POOL_NOT_EXACT_500_UNIQUE");
+  }
+  return { ...envelope };
+}
+
+export async function fetchCapturedIntelligenceSnapshot(
+  request,
+  {
+    environment = process.env,
+    platform = process.platform,
+    keychainReadImpl,
+    fetchImpl = fetchIntelligenceSnapshot,
+  } = {},
+) {
+  return withServerOnlyTradyrEnvironment(
+    () => fetchImpl(request),
+    {
+      environment,
+      platform,
+      ...(keychainReadImpl ? { keychainReadImpl } : {}),
+    },
+  );
+}
 
 export async function verifyAuthenticatedEspnCapture(profile, request, { now = Date.now() } = {}) {
   const league = profile?.league;
@@ -59,7 +101,6 @@ export async function verifyAuthenticatedEspnCapture(profile, request, { now = D
   if (nowMs - capturedAtMs > AUTHENTICATED_ESPN_CAPTURE_MAX_AGE_MS) {
     throw new Error("ESPN_ARTIFACT_STALE");
   }
-
   const proof = profile?.authenticatedEspnCapture;
   if (!isAuthenticatedEspnCaptureProof(proof) || proof.capturedAt !== capturedAt) {
     throw new Error("ESPN_ARTIFACT_AUTH_PROOF_REQUIRED");
@@ -98,7 +139,18 @@ export async function verifyAuthenticatedEspnCapture(profile, request, { now = D
     espnPlayers: exactEspnPlayers,
   });
   if (proof.digest !== expectedDigest) throw new Error("ESPN_ARTIFACT_DIGEST_MISMATCH");
-  return { capturedAt, league: exactLeague, espnPlayers: exactEspnPlayers, authenticatedProfile: expectedProfile, proof };
+  const authenticatedPlayerPoolEnvelope = verifyAuthenticatedEspnPlayerPoolEnvelope(
+    profile?.authenticatedPlayerPoolEnvelope,
+    { capturedAt, league: exactLeague, espnPlayers: exactEspnPlayers },
+  );
+  return {
+    capturedAt,
+    league: exactLeague,
+    espnPlayers: exactEspnPlayers,
+    authenticatedPlayerPoolEnvelope,
+    authenticatedProfile: expectedProfile,
+    proof,
+  };
 }
 
 export function normalizeAuthenticatedEspnCaptureOrigin(value = "http://127.0.0.1:3000") {
@@ -222,7 +274,7 @@ async function main() {
   });
   const authenticatedCapture = await verifyAuthenticatedEspnCapture(profile, request);
   await consumeAuthenticatedEspnCaptureReceipt(authenticatedCapture.proof, { origin: options.origin });
-  const intelligence = await fetchIntelligenceSnapshot(request);
+  const intelligence = await fetchCapturedIntelligenceSnapshot(request);
   const snapshot = createSourceSnapshot({
     capturedAt: authenticatedCapture.capturedAt,
     league,

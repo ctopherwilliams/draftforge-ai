@@ -6,7 +6,7 @@ import test from "node:test";
 
 const contentUrl = new URL("../extension/espn-content.js", import.meta.url);
 
-async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "", clockTeam, clockDisplay = null, extraGlobalAuctionClock = null, extraGlobalSnakeClock = null, snakeClockDisplays = null, auctionClockDisplays = null, clockOwnMarker = false, ownTeam, ownAuctionTeam, ownAuctionSelecting = false, nominationTurnEndsAfterSelect = false, snakeTurnEndsBeforeSubmit = false, separateDraftConfirmation = false, draftConfirmationDelayMs = 0, nominationConfirmationDelayMs = null, nominationAcknowledged = true, nominationAcknowledgementDelayMs = 0, nominationAcknowledgedAmount = 1, mandatoryPositionFilterDelayMs = null, maximumOffer, nominatedPlayer, nominatedPlayerId = null, nominatedPlayerIds = null, waitingTeamId, availableIds = [], snakeHistory = [], selectPlayer, selectRosterConfirmed = true, rosterPlayerId = null, rosterRootTeamId = 5, opponentRosterContainsSelected = false, duplicateOwnRosterRoots = 0, bidAmount, bidControlVisible = true, bidControlDelayMs = 0, extraBidControls = 0, customBidForm = false, customBidAcceptsAmount = true, customBidActsAsNomination = false, customBidDriftsAfterReads = null, bidAcknowledged = true, bidAcknowledgementDelayMs = 0, leadingBid = false, leadingBidAfterMs = null, opponentLeadingProof = true, decoratedLeader = null, extraAuctionTransactions = 0, modalConfirmations = [], autopickActive = false, autopickControlVisible = true, autopickEnableControlVisible = false, soundMuted = true, authorizationVerifier = null, href = "https://fantasy.espn.com/football/draft?leagueId=701&teamId=5&seasonId=2026" }) {
+async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "", clockTeam, clockDisplay = null, extraGlobalAuctionClock = null, extraGlobalSnakeClock = null, snakeClockDisplays = null, auctionClockDisplays = null, clockOwnMarker = false, ownTeam, ownAuctionTeam, ownAuctionSelecting = false, nominationTurnEndsAfterSelect = false, snakeTurnEndsBeforeSubmit = false, separateDraftConfirmation = false, draftConfirmationDelayMs = 0, nominationConfirmationDelayMs = null, nominationAcknowledged = true, nominationAcknowledgementDelayMs = 0, nominationAcknowledgedAmount = 1, mandatoryPositionFilterDelayMs = null, maximumOffer, nominatedPlayer, nominatedPlayerId = null, nominatedPlayerIds = null, waitingTeamId, availableIds = [], snakeHistory = [], selectPlayer, selectRosterConfirmed = true, rosterPlayerId = null, rosterRootTeamId = 5, opponentRosterContainsSelected = false, duplicateOwnRosterRoots = 0, bidAmount, bidControlVisible = true, bidControlDelayMs = 0, extraBidControls = 0, customBidForm = false, customBidAcceptsAmount = true, customBidActsAsNomination = false, customBidDriftsAfterReads = null, bidAcknowledged = true, bidAcknowledgementDelayMs = 0, leadingBid = false, leadingBidAfterMs = null, opponentLeadingProof = true, decoratedLeader = null, extraAuctionTransactions = 0, modalConfirmations = [], autopickActive = false, autopickControlVisible = true, autopickEnableControlVisible = false, soundMuted = true, authorizationVerifier = null, auctionArmHook = null, auctionUncertaintyStore = new Map(), auctionEventLog = [], auctionUncertaintyStorageFails = false, throwAfterPreliminaryClick = false, throwAfterFinalClickOperation = null, throwAfterModalClickOperation = null, href = "https://fantasy.espn.com/football/draft?leagueId=701&teamId=5&seasonId=2026" }) {
   const source = await readFile(contentUrl, "utf8");
   const runtimeStart = source.indexOf("chrome.runtime.onMessage.addListener");
   assert.ok(runtimeStart > 0, "content script should expose a Chrome message listener");
@@ -14,6 +14,13 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
   let visibleClock = clockDisplay === null ? text.match(/\b\d{1,2}:\d{2}\b/)?.[0] || "" : String(clockDisplay);
   let simulatedNominatedPlayer = nominatedPlayer;
   let simulatedSnakeTurnEnded = false;
+  let simulatedCurrentBid = null;
+  let simulatedLeadingBid = null;
+  let simulatedSelectedNominationPlayerId = null;
+  let actionControlsVisible = true;
+  let modalControlsVisible = true;
+  let throwNextDocumentQueryAll = false;
+  let authorizationVerificationCount = 0;
   let snakeActionStarted = false;
   let simulatedNominatedPlayerIds = Array.isArray(nominatedPlayerIds)
     ? [...nominatedPlayerIds]
@@ -90,7 +97,13 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
   const playerControl = selectPlayer ? {
     textContent: separateDraftConfirmation || nominationTurnEndsAfterSelect || nominationConfirmationDelayMs !== null ? "Select" : "Draft",
     disabled: false,
-    click() { actionState.selected = true; actionState.selectedAt = Date.now(); actionState.selectClicks += 1; },
+    click() {
+      if (ownAuctionSelecting) auctionEventLog.push("CLICK:PLAYER_ROW");
+      actionState.selected = true;
+      actionState.selectedAt = Date.now();
+      actionState.selectClicks += 1;
+      if (throwAfterFinalClickOperation === "SELECT" && /draft/i.test(this.textContent)) throw new Error("simulated accepted SELECT click failure");
+    },
     scrollIntoView() { if (snakeTurnEndsBeforeSubmit) simulatedSnakeTurnEnded = true; },
     getClientRects: () => [{ width: 1, height: 1 }],
     getAttribute: (name) => name === "data-player-id" ? String(selectPlayer.id) : null,
@@ -99,7 +112,10 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
   const finalDraftControl = selectPlayer && separateDraftConfirmation ? {
     textContent: "Draft",
     disabled: false,
-    click() { actionState.draftSubmitClicks += 1; },
+    click() {
+      actionState.draftSubmitClicks += 1;
+      if (throwAfterFinalClickOperation === "SELECT") throw new Error("simulated accepted SELECT click failure");
+    },
     scrollIntoView() {},
     getClientRects: () => [{ width: 1, height: 1 }],
     getAttribute: (name) => name === "data-player-id" ? String(selectPlayer.id) : null,
@@ -115,7 +131,7 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
     querySelectorAll(selector) {
       if (selector.includes("button")) {
         if (snakeTurnEndsBeforeSubmit && snakeActionStarted) simulatedSnakeTurnEnded = true;
-        return [playerControl];
+        return actionControlsVisible ? [playerControl] : [];
       }
       return [];
     },
@@ -171,9 +187,9 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
       return [];
     },
   });
-  const ownRosterRoot = makeRosterRoot(rosterRootTeamId, () => selectRosterConfirmed && actionState.selected);
+  const ownRosterRoot = makeRosterRoot(rosterRootTeamId, () => !ownAuctionTeam && selectRosterConfirmed && actionState.selected);
   const duplicateRosterRoots = Array.from({ length: duplicateOwnRosterRoots }, () => (
-    makeRosterRoot(rosterRootTeamId, () => selectRosterConfirmed && actionState.selected)
+    makeRosterRoot(rosterRootTeamId, () => !ownAuctionTeam && selectRosterConfirmed && actionState.selected)
   ));
   const opponentRosterRoot = opponentRosterContainsSelected
     ? makeRosterRoot(6, () => actionState.selected)
@@ -181,7 +197,12 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
   const bidControl = bidAmount && bidControlVisible ? {
     textContent: `Offer $${bidAmount}`,
     disabled: false,
-    click() { actionState.bidClicks += 1; actionState.bidClickedAt = Date.now(); },
+    click() {
+      auctionEventLog.push("CLICK:SUBMIT");
+      actionState.bidClicks += 1;
+      actionState.bidClickedAt = Date.now();
+      if (throwAfterFinalClickOperation === "BID") throw new Error("simulated accepted BID click failure");
+    },
     getClientRects: () => [{ width: 1, height: 1 }],
     getAttribute: () => null,
   } : null;
@@ -190,6 +211,7 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
     textContent: "Place Bid",
     disabled: false,
     click() {
+      auctionEventLog.push("CLICK:SUBMIT");
       if (customBidActsAsNomination) {
         actionState.nominationClicks += 1;
         actionState.nominationClickedAt = Date.now();
@@ -197,6 +219,8 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
         actionState.bidClicks += 1;
         actionState.bidClickedAt = Date.now();
       }
+      const operation = customBidActsAsNomination ? "NOMINATE" : "BID";
+      if (throwAfterFinalClickOperation === operation) throw new Error(`simulated accepted ${operation} click failure`);
     },
     getClientRects: () => [{ width: 1, height: 1 }],
     getAttribute: () => null,
@@ -226,7 +250,11 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
     const buttons = Array.from({ length: Number(modal.buttons ?? 1) }, () => ({
       textContent: modal.buttonText || "Confirm",
       disabled: false,
-      click() { actionState.modalClicks += 1; },
+      click() {
+        auctionEventLog.push("CLICK:CONFIRMATION");
+        actionState.modalClicks += 1;
+        if (throwAfterModalClickOperation === modal.operation) throw new Error(`simulated accepted ${modal.operation} modal click failure`);
+      },
       getClientRects: () => modal.visible === false ? [] : [{ width: 1, height: 1 }],
     }));
     return {
@@ -242,7 +270,12 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
   const nominationControl = nominationConfirmationDelayMs !== null ? {
     textContent: "Nominate Player",
     disabled: false,
-    click() { actionState.nominationClicks += 1; actionState.nominationClickedAt = Date.now(); },
+    click() {
+      auctionEventLog.push("CLICK:SUBMIT");
+      actionState.nominationClicks += 1;
+      actionState.nominationClickedAt = Date.now();
+      if (throwAfterFinalClickOperation === "NOMINATE") throw new Error("simulated accepted NOMINATE click failure");
+    },
     getClientRects: () => [{ width: 1, height: 1 }],
     getAttribute: () => null,
   } : null;
@@ -278,9 +311,14 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
   const nominationConfirmed = () => nominationAcknowledged
     && actionState.nominationClickedAt > 0
     && Date.now() - actionState.nominationClickedAt >= nominationAcknowledgementDelayMs;
-  const liveNominee = () => simulatedNominatedPlayer || (nominationConfirmed() ? selectPlayer?.name : null);
+  const liveNominee = () => simulatedNominatedPlayer
+    || (actionState.selected && nominationConfirmationDelayMs !== null ? selectPlayer?.name : null)
+    || (nominationConfirmed() ? selectPlayer?.name : null);
   const currentDraftText = (includeStale) => {
     let currentText = nominationTurnEndsAfterSelect && actionState.selected ? "PK 12 OF 128\n00:20\nOther team is nominating" : text;
+    if (simulatedCurrentBid !== null) {
+      currentText = currentText.replace(/current (?:bid|offer)\s*:\s*\$?\s*\d+/i, `Current Bid: $${simulatedCurrentBid}`);
+    }
     if (bidConfirmed()) {
       currentText = currentText.replace(/current (?:bid|offer)\s*:\s*\$?\s*\d+/i, `Current Bid: $${bidAmount}`);
     }
@@ -314,11 +352,12 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
   const leaderNode = {
     get textContent() {
       const becameLeading = leadingBidAfterMs !== null && Date.now() - roomLoadedAt >= leadingBidAfterMs;
-      const leader = leadingBid || becameLeading || bidConfirmed()
+      const weLead = simulatedLeadingBid === null ? leadingBid || becameLeading || bidConfirmed() : simulatedLeadingBid;
+      const leader = weLead
         ? ownAuctionTeam
         : (opponentLeadingProof ? "Rival Team" : null);
       if (!leader) return "";
-      return leadingBid || becameLeading || bidConfirmed()
+      return weLead
         ? (decoratedLeader || `High bidder: ${leader}`)
         : `High bidder: ${leader}`;
     },
@@ -332,6 +371,9 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
   let auctionTransactionContainer = null;
   const liveNomineeIds = () => {
     if (simulatedNominatedPlayerIds) return simulatedNominatedPlayerIds;
+    if (actionState.selected && nominationConfirmationDelayMs !== null && selectPlayer) {
+      return [simulatedSelectedNominationPlayerId ?? selectPlayer.id];
+    }
     if (nominationConfirmed() && selectPlayer) return [selectPlayer.id];
     return liveNominee() ? [12345] : [];
   };
@@ -371,6 +413,7 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
       }
       if (selector === ".bidding-form__custom") return customBidContainer ? [customBidContainer] : [];
       if (selector === "button, [role='button']") {
+        if (!actionControlsVisible) return [];
         const controls = [];
         if (nominationControl && actionState.selected && Date.now() - actionState.selectedAt >= nominationConfirmationDelayMs) controls.push(nominationControl);
         if (bidControl && Date.now() >= bidControlAvailableAt) controls.push(bidControl, ...duplicateBidControls);
@@ -413,6 +456,11 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
       return null;
     },
     querySelectorAll(selector) {
+      if (throwNextDocumentQueryAll) {
+        throwNextDocumentQueryAll = false;
+        throw new Error("simulated post-arm DOM failure");
+      }
+      if (throwAfterPreliminaryClick && actionState.selected) throw new Error("simulated post-click DOM failure");
       if (selector === ".draft-header .icon-wrapper use") return [{
         getAttribute: (name) => name === "href" ? `#icon__controls__volume_${soundMuted ? "mute" : "up"}` : null,
       }];
@@ -429,12 +477,13 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
       }] : [];
       if (selector === ".bidding-form__custom") return customBidContainer ? [customBidContainer] : [];
       if (selector === leaderSelector) return leaderNode.textContent ? [leaderNode] : [];
-      if (selector === "[role='dialog'], [aria-modal='true'], [class*='modal' i]") return confirmationDialogs;
+      if (selector === "[role='dialog'], [aria-modal='true'], [class*='modal' i]") return modalControlsVisible ? confirmationDialogs : [];
       if (selector === "[role='grid'] [role='row']") return [
         ...(surfaceRow ? [surfaceRow] : []),
         ...(playerRow && mandatoryPositionPlayerVisible() ? [playerRow] : []),
       ];
       if (selector.startsWith("button.Button--draft")) {
+        if (!actionControlsVisible) return [];
         if (finalDraftControl) {
           return actionState.selected && Date.now() - actionState.selectedAt >= draftConfirmationDelayMs
             ? [finalDraftControl]
@@ -444,6 +493,7 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
       }
       if (selector === "select") return mandatoryPositionFilter ? [mandatoryPositionFilter] : [];
       if (selector === "button, [role='button']") {
+        if (!actionControlsVisible) return [];
         const controls = [];
         if (enableAutopickControl) controls.push(enableAutopickControl);
         if (nominationControl && actionState.selected && Date.now() - actionState.selectedAt >= nominationConfirmationDelayMs) controls.push(nominationControl);
@@ -500,8 +550,66 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
       runtime: {
         id: "test-extension",
         async sendMessage(message) {
+          if (message?.type === "AUCTION_CLICK_UNCERTAINTY") {
+            if (auctionUncertaintyStorageFails) return { ok: false, code: "AUCTION_UNCERTAINTY_STORAGE_UNVERIFIED" };
+            const action = message.payload?.action || {};
+            const roomKey = `${action.expectedLeagueId}:${action.expectedTeamId}:${action.expectedSeason}`;
+            const pending = auctionUncertaintyStore.values().next().value || null;
+            if (message.payload?.mode === "CHECK") return { ok: true, pending };
+            if (message.payload?.mode === "ARM") {
+              auctionEventLog.push(`ARM:${String(message.payload?.stage || "")}`);
+              const proposed = {
+                operation: action.operation,
+                playerId: Number(action.playerId),
+                amount: Number(action.amount),
+                leagueId: String(action.expectedLeagueId || ""),
+                teamId: Number(action.expectedTeamId || 0),
+                season: Number(action.expectedSeason || 0),
+                token: "test-auction-token-0000000000000001",
+              };
+              if (pending && (pending.operation !== proposed.operation || pending.playerId !== proposed.playerId || pending.amount !== proposed.amount
+                || message.payload?.token !== pending.token)) {
+                return { ok: false, code: "AUCTION_CLICK_UNCERTAIN", pending };
+              }
+              auctionUncertaintyStore.set(roomKey, pending || proposed);
+              auctionArmHook?.({
+                action,
+                stage: String(message.payload?.stage || ""),
+                setActionControlsVisible(value) { actionControlsVisible = Boolean(value); },
+                setModalControlsVisible(value) { modalControlsVisible = Boolean(value); },
+                throwNextContextRead() { throwNextDocumentQueryAll = true; },
+              });
+              return { ok: true, pending: auctionUncertaintyStore.get(roomKey), token: proposed.token };
+            }
+            if (message.payload?.mode === "CANCEL_PRE_CLICK") {
+              auctionEventLog.push(`CANCEL_PRE_CLICK:${String(message.payload?.stage || "")}`);
+              if (!pending || message.payload?.token !== pending.token) {
+                return { ok: false, code: "AUCTION_CLICK_UNCERTAIN", pending };
+              }
+              auctionUncertaintyStore.delete(roomKey);
+              return { ok: true, code: "AUCTION_UNCERTAINTY_PRE_CLICK_RETIRED" };
+            }
+            if (message.payload?.mode === "RECONCILE") {
+              auctionUncertaintyStore.delete(roomKey);
+              return { ok: true, code: "AUCTION_UNCERTAINTY_RECONCILED" };
+            }
+          }
           if (message?.type === "VERIFY_ACTION_AUTHORIZATION") {
-            return authorizationVerifier ? authorizationVerifier(message.payload) : { ok: true, code: "ACTION_AUTHORIZATION_VERIFIED" };
+            auctionEventLog.push("VERIFY");
+            authorizationVerificationCount += 1;
+            return authorizationVerifier ? authorizationVerifier(message.payload, {
+              verificationCount: authorizationVerificationCount,
+              endSnakeTurn() { simulatedSnakeTurnEnded = true; },
+              setAuctionOffer({ playerName, playerId, currentBid, leading }) {
+                if (playerName !== undefined) simulatedNominatedPlayer = playerName;
+                if (playerId !== undefined) simulatedNominatedPlayerIds = playerId === null ? [] : [playerId];
+                if (currentBid !== undefined) simulatedCurrentBid = currentBid;
+                if (leading !== undefined) simulatedLeadingBid = leading;
+              },
+              setSelectedNominationPlayerId(playerId) { simulatedSelectedNominationPlayerId = playerId; },
+              setActionControlsVisible(value) { actionControlsVisible = Boolean(value); },
+              setModalControlsVisible(value) { modalControlsVisible = Boolean(value); },
+            }) : { ok: true, code: "ACTION_AUTHORIZATION_VERIFIED" };
           }
           return { ok: true };
         },
@@ -545,10 +653,14 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
     contextScanPolicy: sandbox.contextScanPolicyForTest,
     nextContextScanDelay: sandbox.nextContextScanDelayForTest,
     actionState,
-    setAuctionOffer({ playerName, playerId, clock }) {
+    auctionUncertaintyStore,
+    auctionEventLog,
+    setAuctionOffer({ playerName, playerId, clock, currentBid, leading }) {
       simulatedNominatedPlayer = playerName;
       if (playerId !== undefined) simulatedNominatedPlayerIds = [playerId];
-      visibleClock = clock;
+      if (clock !== undefined) visibleClock = clock;
+      if (currentBid !== undefined) simulatedCurrentBid = currentBid;
+      if (leading !== undefined) simulatedLeadingBid = leading;
     },
     setRoomUrl(url) { currentHref = url; },
   };
@@ -1085,7 +1197,44 @@ test("salary-cap nomination proves the exact custom opening price and acknowledg
   assert.equal(wrongAcknowledgement.actionState.nominationClicks, 1);
 });
 
-test("salary-cap nomination still fails closed when confirmation never appears", async () => {
+test("nomination final submit requires the exact selected-player id after second authorization", async () => {
+  for (const customOpeningBid of [false, true]) {
+    const room = await loadDraftContext({
+      text: "PK 11 OF 128\n00:20\nYour turn to nominate a player!\nSelect a player below to nominate",
+      ownAuctionTeam: "Us",
+      ownAuctionSelecting: true,
+      nominationConfirmationDelayMs: 0,
+      maximumOffer: 150,
+      selectPlayer: { id: 12345, name: "Exact Player" },
+      customBidForm: customOpeningBid,
+      customBidActsAsNomination: customOpeningBid,
+      authorizationVerifier: async (_action, controls) => {
+        if (controls.verificationCount === 2) controls.setSelectedNominationPlayerId(99999);
+        return { ok: true, code: "ACTION_AUTHORIZATION_VERIFIED" };
+      },
+    });
+    const result = await room.executeAction({
+      operation: "NOMINATE",
+      actionRequestId: customOpeningBid ? 8892 : 8891,
+      playerId: 12345,
+      playerName: "Exact Player",
+      candidates: [{ playerId: 12345, playerName: "Exact Player" }],
+      amount: customOpeningBid ? 2 : 1,
+      nominationIntent: "TARGET",
+      expectedLeagueId: "701",
+      expectedTeamId: 5,
+      expectedSeason: 2026,
+    });
+
+    assert.equal(result.code, "NOMINATION_SELECTED_PLAYER_DRIFT", customOpeningBid ? "custom opening bid" : "$1 opening bid");
+    assert.equal(result.clicked, true);
+    assert.equal(result.retryable, false);
+    assert.equal(room.actionState.selectClicks, 1);
+    assert.equal(room.actionState.nominationClicks, 0);
+  }
+});
+
+test("a preliminary DRAIN row click remains terminally uncertain and survives a late ESPN transition", async () => {
   const room = await loadDraftContext({
     text: "PK 11 OF 128\n00:20\nYour turn to nominate a player!\nSelect a player below to nominate",
     ownAuctionTeam: "Us",
@@ -1100,11 +1249,57 @@ test("salary-cap nomination still fails closed when confirmation never appears",
     playerName: "Exact Player",
     candidates: [{ playerId: 12345, playerName: "Exact Player" }],
     amount: 1,
-    nominationIntent: "TARGET",
+    nominationIntent: "DRAIN",
     expectedLeagueId: "701",
   });
 
   assert.equal(result.code, "ACTION_NOT_FOUND");
+  assert.equal(result.clicked, true);
+  assert.equal(result.retryable, false);
+  assert.equal(result.action.nominationIntent, "DRAIN");
+  assert.equal(room.actionState.selectClicks, 1);
+  assert.equal(room.actionState.nominationClicks, 0);
+  room.setAuctionOffer({ playerName: "Exact Player", playerId: 12345, clock: "00:18" });
+  const recovered = room.readContext();
+  assert.equal(recovered.ownNominationIntent, "DRAIN");
+  assert.equal(recovered.ownNominationPlayerId, 12345);
+  room.setAuctionOffer({ playerName: "Exact Player", playerId: 99999, clock: "00:17" });
+  const differentExactPlayer = room.readContext();
+  assert.equal(differentExactPlayer.ownNominationIntent, null, "a conflicting exact ESPN id defeats same-name DRAIN attribution");
+  assert.equal(differentExactPlayer.ownNominationPlayerId, null);
+});
+
+test("a post-row-click exception is cached as terminal uncertainty and cannot click again", async () => {
+  const room = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nYour turn to nominate a player!\nSelect a player below to nominate",
+    ownAuctionTeam: "Us",
+    ownAuctionSelecting: true,
+    nominationConfirmationDelayMs: 0,
+    maximumOffer: 150,
+    selectPlayer: { id: 12345, name: "Exact Player" },
+    throwAfterPreliminaryClick: true,
+  });
+  const action = {
+    operation: "NOMINATE",
+    actionRequestId: 8801,
+    playerId: 12345,
+    playerName: "Exact Player",
+    candidates: [{ playerId: 12345, playerName: "Exact Player" }],
+    amount: 1,
+    nominationIntent: "DRAIN",
+    expectedLeagueId: "701",
+  };
+
+  const first = await room.executeAction(action);
+  const duplicate = await room.executeAction(action);
+  const newDispatch = await room.executeAction({ ...action, actionRequestId: 8802 });
+
+  for (const result of [first, duplicate, newDispatch]) {
+    assert.equal(result.code, "PRELIMINARY_CLICK_UNCERTAIN");
+    assert.equal(result.clicked, true);
+    assert.equal(result.retryable, false);
+    assert.equal(result.action.nominationIntent, "DRAIN");
+  }
   assert.equal(room.actionState.selectClicks, 1);
   assert.equal(room.actionState.nominationClicks, 0);
 });
@@ -1883,6 +2078,37 @@ test("an unconfirmed clicked snake selection is uncertain and never retries anot
   assert.equal(room.actionState.selectClicks, 1);
 });
 
+test("a direct snake Draft click stays terminally uncertain when execution throws afterward", async () => {
+  const room = await loadDraftContext({
+    text: "RND 5 OF 16\n00:20\nON THE CLOCK: PICK 47",
+    clockTeam: "Us",
+    ownTeam: "Us",
+    selectPlayer: { id: 12345, name: "Exact Player" },
+    throwAfterFinalClickOperation: "SELECT",
+  });
+  const action = {
+    operation: "SELECT",
+    actionRequestId: 7751,
+    actionId: "snake-click-action",
+    decisionId: "snake-click-decision",
+    playerId: 12345,
+    playerName: "Exact Player",
+    candidates: [{ playerId: 12345, playerName: "Exact Player" }],
+    expectedLeagueId: "701",
+    expectedPick: 47,
+  };
+
+  const first = await room.executeAction(action);
+  const duplicate = await room.executeAction({ ...action, actionRequestId: 7752 });
+
+  for (const result of [first, duplicate]) {
+    assert.equal(result.code, "ACTION_CLICK_UNCERTAIN");
+    assert.equal(result.clicked, true);
+    assert.equal(result.retryable, false);
+  }
+  assert.equal(room.actionState.selectClicks, 1);
+});
+
 test("salary-cap bidding clicks only the exact next incremental offer", async () => {
   const room = await loadDraftContext({
     text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
@@ -1905,6 +2131,115 @@ test("salary-cap bidding clicks only the exact next incremental offer", async ()
 
   assert.equal(result.code, "BID_CONFIRMED");
   assert.equal(room.actionState.bidClicks, 1);
+});
+
+test("incremental and custom bid click exceptions remain terminally uncertain", async () => {
+  for (const customBidForm of [false, true]) {
+    const room = await loadDraftContext({
+      text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
+      ownAuctionTeam: "Us",
+      maximumOffer: 150,
+      nominatedPlayer: "Exact Player",
+      bidAmount: 28,
+      bidControlVisible: !customBidForm,
+      customBidForm,
+      throwAfterFinalClickOperation: "BID",
+    });
+    const action = {
+      operation: "BID",
+      actionRequestId: customBidForm ? 7762 : 7761,
+      actionId: customBidForm ? "custom-bid-click" : "incremental-bid-click",
+      decisionId: customBidForm ? "custom-bid-decision" : "incremental-bid-decision",
+      playerId: 12345,
+      playerName: "Exact Player",
+      expectedLeagueId: "701",
+      expectedCurrentBid: 27,
+      amount: 28,
+      maxApprovedBid: 35,
+    };
+
+    const first = await room.executeAction(action);
+    const duplicate = await room.executeAction({ ...action, actionRequestId: action.actionRequestId + 10 });
+    for (const result of [first, duplicate]) {
+      assert.equal(result.code, "ACTION_CLICK_UNCERTAIN");
+      assert.equal(result.clicked, true);
+      assert.equal(result.retryable, false);
+    }
+    assert.equal(room.actionState.bidClicks, 1, customBidForm ? "custom bid" : "incremental bid");
+  }
+});
+
+test("accepted confirmation-modal click exceptions are terminal and never click again", async () => {
+  for (const operation of ["SELECT", "BID", "NOMINATE"]) {
+    const common = {
+      modalConfirmations: [{ operation, playerId: 12345, playerName: "Exact Player", amount: operation === "SELECT" ? null : operation === "BID" ? 28 : 1 }],
+      throwAfterModalClickOperation: operation,
+    };
+    const room = operation === "SELECT"
+      ? await loadDraftContext({
+          ...common,
+          text: "RND 5 OF 16\n00:20\nON THE CLOCK: PICK 47",
+          clockTeam: "Us",
+          ownTeam: "Us",
+          selectPlayer: { id: 12345, name: "Exact Player" },
+        })
+      : operation === "BID"
+        ? await loadDraftContext({
+            ...common,
+            text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
+            ownAuctionTeam: "Us",
+            maximumOffer: 150,
+            nominatedPlayer: "Exact Player",
+            nominatedPlayerId: 12345,
+            bidAmount: 28,
+            bidAcknowledged: false,
+          })
+        : await loadDraftContext({
+            ...common,
+            text: "PK 11 OF 128\n00:20\nYour turn to nominate a player!\nSelect a player below to nominate",
+            ownAuctionTeam: "Us",
+            ownAuctionSelecting: true,
+            nominationConfirmationDelayMs: 0,
+            nominationAcknowledged: false,
+            maximumOffer: 150,
+            selectPlayer: { id: 12345, name: "Exact Player" },
+          });
+    const base = {
+      operation,
+      actionRequestId: 7780 + ["SELECT", "BID", "NOMINATE"].indexOf(operation),
+      actionId: `${operation.toLowerCase()}-modal-click`,
+      decisionId: `${operation.toLowerCase()}-modal-decision`,
+      playerId: 12345,
+      playerName: "Exact Player",
+      expectedLeagueId: "701",
+      expectedTeamId: 5,
+      expectedSeason: 2026,
+    };
+    const action = operation === "SELECT"
+      ? { ...base, candidates: [{ playerId: 12345, playerName: "Exact Player" }], expectedPick: 47 }
+      : operation === "BID"
+        ? { ...base, expectedCurrentBid: 27, amount: 28, maxApprovedBid: 35 }
+        : { ...base, candidates: [{ playerId: 12345, playerName: "Exact Player" }], amount: 1, nominationIntent: "TARGET" };
+
+    const first = await room.executeAction(action);
+    const duplicate = await room.executeAction({ ...action, actionRequestId: action.actionRequestId + 10 });
+    const newlyKeyedAuction = operation === "SELECT" ? null : await room.executeAction({
+      ...action,
+      commandCenterSessionId: `${operation.toLowerCase()}-replacement-session`,
+      actionRequestId: 1,
+      actionId: `${operation.toLowerCase()}-modal-click-replacement`,
+      decisionId: `${operation.toLowerCase()}-modal-decision-replacement`,
+    });
+    assert.equal(first.code, "ACTION_CLICK_UNCERTAIN", operation);
+    assert.equal(first.clicked, true, operation);
+    assert.equal(first.retryable, false, operation);
+    assert.equal(duplicate.code, "ACTION_CLICK_UNCERTAIN", operation);
+    if (newlyKeyedAuction) assert.equal(newlyKeyedAuction.code, "AUCTION_CLICK_UNCERTAIN", operation);
+    assert.equal(room.actionState.modalClicks, 1, operation);
+    assert.equal(room.actionState.selectClicks, operation === "SELECT" || operation === "NOMINATE" ? 1 : 0, operation);
+    assert.equal(room.actionState.bidClicks, operation === "BID" ? 1 : 0, operation);
+    assert.equal(room.actionState.nominationClicks, operation === "NOMINATE" ? 1 : 0, operation);
+  }
 });
 
 test("salary-cap bidding remains executable when the operator leaves ESPN sound on", async () => {
@@ -2372,6 +2707,166 @@ test("command-center revocation during a handed-off custom bid prevents every ES
   const result = await pending;
   assert.equal(result.code, "ACTION_AUTHORIZATION_REVOKED");
   assert.equal(room.actionState.bidClicks, 0);
+  assert.equal(room.actionState.modalClicks, 0);
+});
+
+test("a verifier delayed beyond notAfter cannot click select, bid, or nomination controls", async () => {
+  for (const operation of ["SELECT", "BID", "NOMINATE"]) {
+    const common = {
+      authorizationVerifier: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 45));
+        return { ok: true, code: "ACTION_AUTHORIZATION_VERIFIED" };
+      },
+    };
+    const room = operation === "SELECT"
+      ? await loadDraftContext({
+          ...common,
+          text: "RND 5 OF 16\n00:20\nON THE CLOCK: PICK 47",
+          clockTeam: "Us",
+          ownTeam: "Us",
+          selectPlayer: { id: 12345, name: "Exact Player" },
+        })
+      : operation === "BID"
+        ? await loadDraftContext({
+            ...common,
+            text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
+            ownAuctionTeam: "Us",
+            maximumOffer: 150,
+            nominatedPlayer: "Exact Player",
+            bidAmount: 28,
+          })
+        : await loadDraftContext({
+            ...common,
+            text: "PK 11 OF 128\n00:20\nYour turn to nominate a player!\nSelect a player below to nominate",
+            ownAuctionTeam: "Us",
+            ownAuctionSelecting: true,
+            maximumOffer: 150,
+            selectPlayer: { id: 12345, name: "Exact Player" },
+            nominationConfirmationDelayMs: 0,
+          });
+    const base = {
+      operation,
+      actionRequestId: 9400 + ["SELECT", "BID", "NOMINATE"].indexOf(operation),
+      playerId: 12345,
+      playerName: "Exact Player",
+      expectedLeagueId: "701",
+      expectedTeamId: 5,
+      expectedSeason: 2026,
+      notAfter: Date.now() + 20,
+    };
+    const action = operation === "SELECT"
+      ? { ...base, candidates: [{ playerId: 12345, playerName: "Exact Player" }], expectedPick: 47 }
+      : operation === "BID"
+        ? { ...base, expectedCurrentBid: 27, amount: 28, maxApprovedBid: 35 }
+        : { ...base, candidates: [{ playerId: 12345, playerName: "Exact Player" }], amount: 1, nominationIntent: "TARGET" };
+
+    const result = await room.executeAction(action);
+    assert.equal(result.code, "ACTION_EXPIRED", operation);
+    assert.equal(room.actionState.selectClicks, 0, operation);
+    assert.equal(room.actionState.bidClicks, 0, operation);
+    assert.equal(room.actionState.nominationClicks, 0, operation);
+  }
+});
+
+test("ESPN state and action-control changes during authorization are revalidated synchronously", async () => {
+  const snake = await loadDraftContext({
+    text: "RND 5 OF 16\n00:20\nON THE CLOCK: PICK 47",
+    clockTeam: "Us",
+    ownTeam: "Us",
+    selectPlayer: { id: 12345, name: "Exact Player" },
+    authorizationVerifier: async (_action, controls) => {
+      controls.endSnakeTurn();
+      return { ok: true, code: "ACTION_AUTHORIZATION_VERIFIED" };
+    },
+  });
+  const snakeResult = await snake.executeAction({
+    operation: "SELECT",
+    actionRequestId: 9411,
+    playerId: 12345,
+    playerName: "Exact Player",
+    candidates: [{ playerId: 12345, playerName: "Exact Player" }],
+    expectedLeagueId: "701",
+    expectedPick: 47,
+  });
+  assert.equal(snakeResult.code, "NOT_ON_CLOCK");
+  assert.equal(snake.actionState.selectClicks, 0);
+
+  const auction = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
+    ownAuctionTeam: "Us",
+    maximumOffer: 150,
+    nominatedPlayer: "Exact Player",
+    bidAmount: 28,
+    authorizationVerifier: async (_action, controls) => {
+      controls.setAuctionOffer({ playerName: "Exact Player", playerId: 12345, currentBid: 28, leading: true });
+      return { ok: true, code: "ACTION_AUTHORIZATION_VERIFIED" };
+    },
+  });
+  const auctionResult = await auction.executeAction({
+    operation: "BID",
+    actionRequestId: 9412,
+    playerId: 12345,
+    playerName: "Exact Player",
+    expectedLeagueId: "701",
+    expectedCurrentBid: 27,
+    amount: 28,
+    maxApprovedBid: 35,
+  });
+  assert.equal(auctionResult.code, "HOLD_LEADING_BID");
+  assert.equal(auction.actionState.bidClicks, 0);
+
+  const replacement = await loadDraftContext({
+    text: "RND 5 OF 16\n00:20\nON THE CLOCK: PICK 47",
+    clockTeam: "Us",
+    ownTeam: "Us",
+    selectPlayer: { id: 12345, name: "Exact Player" },
+    separateDraftConfirmation: true,
+    authorizationVerifier: async (_action, controls) => {
+      if (controls.verificationCount === 2) controls.setActionControlsVisible(false);
+      return { ok: true, code: "ACTION_AUTHORIZATION_VERIFIED" };
+    },
+  });
+  const replacementResult = await replacement.executeAction({
+    operation: "SELECT",
+    actionRequestId: 9413,
+    playerId: 12345,
+    playerName: "Exact Player",
+    candidates: [{ playerId: 12345, playerName: "Exact Player" }],
+    expectedLeagueId: "701",
+    expectedPick: 47,
+  });
+  assert.equal(replacementResult.clicked, true);
+  assert.equal(replacementResult.retryable, false);
+  assert.equal(replacement.actionState.selectClicks, 1);
+  assert.equal(replacement.actionState.draftSubmitClicks, 0);
+});
+
+test("an exact confirmation modal removed during authorization is never clicked", async () => {
+  const room = await loadDraftContext({
+    text: "RND 5 OF 16\n00:20\nON THE CLOCK: PICK 47",
+    clockTeam: "Us",
+    ownTeam: "Us",
+    selectPlayer: { id: 12345, name: "Exact Player" },
+    modalConfirmations: [{ operation: "SELECT", playerId: 12345, playerName: "Exact Player", buttonText: "Confirm" }],
+    authorizationVerifier: async (_action, controls) => {
+      if (controls.verificationCount === 2) controls.setModalControlsVisible(false);
+      return { ok: true, code: "ACTION_AUTHORIZATION_VERIFIED" };
+    },
+  });
+  const result = await room.executeAction({
+    operation: "SELECT",
+    actionRequestId: 9421,
+    playerId: 12345,
+    playerName: "Exact Player",
+    candidates: [{ playerId: 12345, playerName: "Exact Player" }],
+    expectedLeagueId: "701",
+    expectedPick: 47,
+  });
+
+  assert.equal(result.code, "CONFIRMATION_CONTROL_DRIFT");
+  assert.equal(result.clicked, true);
+  assert.equal(result.retryable, false);
+  assert.equal(room.actionState.selectClicks, 1);
   assert.equal(room.actionState.modalClicks, 0);
 });
 
@@ -2901,6 +3396,423 @@ test("a clicked bid has bounded acknowledgement and is never blindly retried", a
   assert.equal(first.clicked, true);
   assert.equal(first.retryable, false);
   assert.equal(duplicate.code, "BID_ACK_UNCERTAIN");
+  assert.equal(room.actionState.bidClicks, 1);
+});
+
+test("clicked auction uncertainty fences newly keyed bid, nomination, and command-center sessions", async () => {
+  const room = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
+    ownAuctionTeam: "Us",
+    maximumOffer: 150,
+    nominatedPlayer: "Exact Player",
+    nominatedPlayerId: 12345,
+    bidAmount: 28,
+    bidAcknowledged: false,
+  });
+  const bid = {
+    operation: "BID",
+    actionRequestId: 8311,
+    actionId: "uncertain-bid-1",
+    decisionId: "uncertain-decision-1",
+    playerId: 12345,
+    playerName: "Exact Player",
+    expectedLeagueId: "701",
+    expectedTeamId: 5,
+    expectedSeason: 2026,
+    expectedCurrentBid: 27,
+    amount: 28,
+    maxApprovedBid: 35,
+  };
+  const uncertain = await room.executeAction(bid);
+  const newBid = await room.executeAction({
+    ...bid,
+    actionRequestId: 8312,
+    actionId: "uncertain-bid-2",
+    decisionId: "uncertain-decision-2",
+  });
+  const newNomination = await room.executeAction({
+    operation: "NOMINATE",
+    actionRequestId: 8313,
+    actionId: "uncertain-nomination-2",
+    decisionId: "uncertain-nomination-decision-2",
+    playerId: 99999,
+    playerName: "Other Player",
+    candidates: [{ playerId: 99999, playerName: "Other Player" }],
+    expectedLeagueId: "701",
+    expectedTeamId: 5,
+    expectedSeason: 2026,
+    amount: 1,
+    nominationIntent: "DRAIN",
+  });
+  const newSession = await room.executeAction({
+    ...bid,
+    commandCenterSessionId: "new-command-center-2026",
+    actionRequestId: 1,
+    actionId: "new-session-bid",
+    decisionId: "new-session-decision",
+  });
+
+  assert.equal(uncertain.code, "BID_ACK_UNCERTAIN");
+  assert.equal(newBid.code, "AUCTION_CLICK_UNCERTAIN");
+  assert.equal(newNomination.code, "AUCTION_CLICK_UNCERTAIN");
+  assert.equal(newSession.code, "AUCTION_CLICK_UNCERTAIN");
+  assert.equal(room.actionState.bidClicks, 1);
+  assert.equal(room.actionState.selectClicks, 0);
+  assert.equal(room.actionState.nominationClicks, 0);
+});
+
+test("durable auction uncertainty survives content-script destruction and fences a reloaded execution", async () => {
+  const durableStore = new Map();
+  const roomOptions = {
+    text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
+    ownAuctionTeam: "Us",
+    maximumOffer: 150,
+    nominatedPlayer: "Exact Player",
+    nominatedPlayerId: 12345,
+    bidAmount: 28,
+    bidAcknowledged: false,
+    auctionUncertaintyStore: durableStore,
+  };
+  const firstRoom = await loadDraftContext(roomOptions);
+  const action = {
+    operation: "BID",
+    actionRequestId: 8351,
+    actionId: "durable-bid-before-reload",
+    decisionId: "durable-decision-before-reload",
+    playerId: 12345,
+    playerName: "Exact Player",
+    expectedLeagueId: "701",
+    expectedTeamId: 5,
+    expectedSeason: 2026,
+    expectedCurrentBid: 27,
+    amount: 28,
+    maxApprovedBid: 35,
+  };
+  assert.equal((await firstRoom.executeAction(action)).code, "BID_ACK_UNCERTAIN");
+  assert.equal(firstRoom.actionState.bidClicks, 1);
+
+  const reloadedRoom = await loadDraftContext(roomOptions);
+  const fenced = await reloadedRoom.executeAction({
+    ...action,
+    actionRequestId: 8352,
+    actionId: "durable-bid-after-reload",
+    decisionId: "durable-decision-after-reload",
+  });
+  assert.equal(fenced.code, "AUCTION_CLICK_UNCERTAIN");
+  assert.equal(reloadedRoom.actionState.bidClicks, 0);
+});
+
+test("unverified durable auction storage prevents every bid and nomination click", async () => {
+  for (const operation of ["BID", "NOMINATE"]) {
+    const room = await loadDraftContext({
+      text: operation === "BID"
+        ? "PK 11 OF 128\n00:20\nCurrent Bid: $27"
+        : "PK 11 OF 128\n00:20\nYour turn to nominate a player!\nSelect a player below to nominate",
+      ownAuctionTeam: "Us",
+      ownAuctionSelecting: operation === "NOMINATE",
+      maximumOffer: 150,
+      nominatedPlayer: operation === "BID" ? "Exact Player" : undefined,
+      nominatedPlayerId: operation === "BID" ? 12345 : undefined,
+      selectPlayer: operation === "NOMINATE" ? { id: 12345, name: "Exact Player" } : undefined,
+      bidAmount: operation === "BID" ? 28 : undefined,
+      auctionUncertaintyStorageFails: true,
+    });
+    const result = await room.executeAction({
+      operation,
+      actionRequestId: operation === "BID" ? 8361 : 8362,
+      actionId: `storage-failure-${operation}`,
+      decisionId: `storage-failure-decision-${operation}`,
+      playerId: 12345,
+      playerName: "Exact Player",
+      candidates: [{ playerId: 12345, playerName: "Exact Player" }],
+      expectedLeagueId: "701",
+      expectedTeamId: 5,
+      expectedSeason: 2026,
+      expectedCurrentBid: operation === "BID" ? 27 : undefined,
+      amount: operation === "BID" ? 28 : 1,
+      maxApprovedBid: 35,
+      nominationIntent: operation === "NOMINATE" ? "TARGET" : undefined,
+    });
+    assert.equal(result.code, "AUCTION_UNCERTAINTY_STORAGE_UNVERIFIED");
+    assert.equal(room.actionState.bidClicks, 0);
+    assert.equal(room.actionState.selectClicks, 0);
+    assert.equal(room.actionState.nominationClicks, 0);
+  }
+});
+
+test("failed final authorization cannot arm a durable auction fence before any click", async () => {
+  for (const operation of ["BID", "NOMINATE"]) {
+    const durableStore = new Map();
+    const eventLog = [];
+    const room = await loadDraftContext({
+      text: operation === "BID"
+        ? "PK 11 OF 128\n00:20\nCurrent Bid: $27"
+        : "PK 11 OF 128\n00:20\nYour turn to nominate a player!\nSelect a player below to nominate",
+      ownAuctionTeam: "Us",
+      ownAuctionSelecting: operation === "NOMINATE",
+      maximumOffer: 150,
+      nominatedPlayer: operation === "BID" ? "Exact Player" : undefined,
+      nominatedPlayerId: operation === "BID" ? 12345 : undefined,
+      selectPlayer: operation === "NOMINATE" ? { id: 12345, name: "Exact Player" } : undefined,
+      nominationConfirmationDelayMs: operation === "NOMINATE" ? 0 : null,
+      bidAmount: operation === "BID" ? 28 : undefined,
+      auctionUncertaintyStore: durableStore,
+      auctionEventLog: eventLog,
+      authorizationVerifier: () => ({ ok: false, code: "SERVER_INSTANCE_CHANGED" }),
+    });
+    const result = await room.executeAction({
+      operation,
+      actionRequestId: operation === "BID" ? 8363 : 8364,
+      actionId: `no-early-arm-${operation}`,
+      decisionId: `no-early-arm-decision-${operation}`,
+      playerId: 12345,
+      playerName: "Exact Player",
+      candidates: [{ playerId: 12345, playerName: "Exact Player" }],
+      expectedLeagueId: "701",
+      expectedTeamId: 5,
+      expectedSeason: 2026,
+      expectedCurrentBid: operation === "BID" ? 27 : undefined,
+      amount: operation === "BID" ? 28 : 1,
+      maxApprovedBid: 35,
+      nominationIntent: operation === "NOMINATE" ? "TARGET" : undefined,
+    });
+    assert.equal(result.code, "SERVER_INSTANCE_CHANGED", operation);
+    assert.equal(room.actionState.bidClicks, 0, operation);
+    assert.equal(room.actionState.selectClicks, 0, operation);
+    assert.equal(room.actionState.nominationClicks, 0, operation);
+    assert.equal(durableStore.size, 0, `${operation} leaves no zero-click fence`);
+    assert.deepEqual(eventLog, ["VERIFY"], `${operation} authorizes before ARM`);
+  }
+});
+
+test("post-arm pre-submit drift retires the exact durable permit and permits safe recovery", async () => {
+  for (const operation of ["BID", "NOMINATE"]) {
+    const durableStore = new Map();
+    const eventLog = [];
+    let injected = false;
+    const roomOptions = {
+      text: operation === "BID"
+        ? "PK 11 OF 128\n00:20\nCurrent Bid: $27"
+        : "PK 11 OF 128\n00:20\nYour turn to nominate a player!\nSelect a player below to nominate",
+      ownAuctionTeam: "Us",
+      ownAuctionSelecting: operation === "NOMINATE",
+      maximumOffer: 150,
+      nominatedPlayer: operation === "BID" ? "Exact Player" : undefined,
+      nominatedPlayerId: operation === "BID" ? 12345 : undefined,
+      selectPlayer: operation === "NOMINATE" ? { id: 12345, name: "Exact Player" } : undefined,
+      nominationConfirmationDelayMs: operation === "NOMINATE" ? 0 : null,
+      bidAmount: operation === "BID" ? 28 : undefined,
+      auctionUncertaintyStore: durableStore,
+      auctionEventLog: eventLog,
+      auctionArmHook: ({ stage, setActionControlsVisible }) => {
+        if (!injected && stage === "SUBMIT") {
+          injected = true;
+          setActionControlsVisible(false);
+        }
+      },
+    };
+    const action = {
+      operation,
+      actionRequestId: operation === "BID" ? 8367 : 8368,
+      actionId: `post-arm-drift-${operation}`,
+      decisionId: `post-arm-drift-decision-${operation}`,
+      playerId: 12345,
+      playerName: "Exact Player",
+      candidates: [{ playerId: 12345, playerName: "Exact Player" }],
+      expectedLeagueId: "701",
+      expectedTeamId: 5,
+      expectedSeason: 2026,
+      expectedCurrentBid: operation === "BID" ? 27 : undefined,
+      amount: operation === "BID" ? 28 : 1,
+      maxApprovedBid: 35,
+      nominationIntent: operation === "NOMINATE" ? "TARGET" : undefined,
+    };
+    const room = await loadDraftContext(roomOptions);
+    const failed = await room.executeAction(action);
+    assert.equal(failed.ok, false, operation);
+    assert.notEqual(failed.code, "AUCTION_CLICK_UNCERTAIN", operation);
+    assert.notEqual(failed.code, "AUCTION_UNCERTAINTY_STORAGE_UNVERIFIED", operation);
+    assert.equal(room.actionState.bidClicks, 0, operation);
+    assert.equal(room.actionState.nominationClicks, 0, operation);
+    assert.equal(room.actionState.selectClicks, operation === "NOMINATE" ? 1 : 0, operation);
+    assert.equal(failed.preliminaryClicked, operation === "NOMINATE" ? true : undefined, operation);
+    assert.equal(durableStore.size, 0, `${operation} retires its exact no-submit permit`);
+    assert.ok(eventLog.includes("CANCEL_PRE_CLICK:SUBMIT"), operation);
+
+    const recovered = await loadDraftContext({
+      ...roomOptions,
+      auctionArmHook: null,
+      auctionEventLog: [],
+    });
+    const recoveredResult = await recovered.executeAction({
+      ...action,
+      actionRequestId: action.actionRequestId + 100,
+      actionId: `post-arm-recovered-${operation}`,
+      decisionId: `post-arm-recovered-decision-${operation}`,
+    });
+    assert.notEqual(recoveredResult.code, "AUCTION_CLICK_UNCERTAIN", operation);
+    assert.equal(recoveredResult.ok, true, operation);
+  }
+});
+
+test("post-arm DOM exceptions retire only zero-submit auction permits", async () => {
+  for (const scenario of [
+    { operation: "BID", stage: "SUBMIT", preliminaryClicks: 0 },
+    { operation: "NOMINATE", stage: "PLAYER_ROW", preliminaryClicks: 0 },
+    { operation: "NOMINATE", stage: "SUBMIT", preliminaryClicks: 1 },
+  ]) {
+    const durableStore = new Map();
+    const eventLog = [];
+    let injected = false;
+    const room = await loadDraftContext({
+      text: scenario.operation === "BID"
+        ? "PK 11 OF 128\n00:20\nCurrent Bid: $27"
+        : "PK 11 OF 128\n00:20\nYour turn to nominate a player!\nSelect a player below to nominate",
+      ownAuctionTeam: "Us",
+      ownAuctionSelecting: scenario.operation === "NOMINATE",
+      maximumOffer: 150,
+      nominatedPlayer: scenario.operation === "BID" ? "Exact Player" : undefined,
+      nominatedPlayerId: scenario.operation === "BID" ? 12345 : undefined,
+      selectPlayer: scenario.operation === "NOMINATE" ? { id: 12345, name: "Exact Player" } : undefined,
+      nominationConfirmationDelayMs: scenario.operation === "NOMINATE" ? 0 : null,
+      bidAmount: scenario.operation === "BID" ? 28 : undefined,
+      auctionUncertaintyStore: durableStore,
+      auctionEventLog: eventLog,
+      auctionArmHook: ({ stage, throwNextContextRead }) => {
+        if (!injected && stage === scenario.stage) {
+          injected = true;
+          throwNextContextRead();
+        }
+      },
+    });
+    const result = await room.executeAction({
+      operation: scenario.operation,
+      actionRequestId: scenario.stage === "PLAYER_ROW" ? 8370 : scenario.operation === "BID" ? 8371 : 8372,
+      actionId: `post-arm-throw-${scenario.operation}-${scenario.stage}`,
+      decisionId: `post-arm-throw-decision-${scenario.operation}-${scenario.stage}`,
+      playerId: 12345,
+      playerName: "Exact Player",
+      candidates: [{ playerId: 12345, playerName: "Exact Player" }],
+      expectedLeagueId: "701",
+      expectedTeamId: 5,
+      expectedSeason: 2026,
+      expectedCurrentBid: scenario.operation === "BID" ? 27 : undefined,
+      amount: scenario.operation === "BID" ? 28 : 1,
+      maxApprovedBid: 35,
+      nominationIntent: scenario.operation === "NOMINATE" ? "TARGET" : undefined,
+    });
+    assert.equal(result.code, "ACTION_EXECUTION_FAILED", `${scenario.operation}:${scenario.stage}`);
+    assert.equal(room.actionState.bidClicks, 0, `${scenario.operation}:${scenario.stage}`);
+    assert.equal(room.actionState.nominationClicks, 0, `${scenario.operation}:${scenario.stage}`);
+    assert.equal(room.actionState.selectClicks, scenario.preliminaryClicks, `${scenario.operation}:${scenario.stage}`);
+    assert.equal(durableStore.size, 0, `${scenario.operation}:${scenario.stage}`);
+    assert.ok(eventLog.includes(`CANCEL_PRE_CLICK:${scenario.stage}`), `${scenario.operation}:${scenario.stage}`);
+  }
+});
+
+test("auction click ordering authorizes, durably arms, then clicks without another await", async () => {
+  const eventLog = [];
+  const room = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
+    ownAuctionTeam: "Us",
+    maximumOffer: 150,
+    nominatedPlayer: "Exact Player",
+    nominatedPlayerId: 12345,
+    bidAmount: 28,
+    auctionEventLog: eventLog,
+  });
+  const result = await room.executeAction({
+    operation: "BID",
+    actionRequestId: 8365,
+    actionId: "ordered-auction-bid",
+    decisionId: "ordered-auction-decision",
+    playerId: 12345,
+    playerName: "Exact Player",
+    expectedLeagueId: "701",
+    expectedTeamId: 5,
+    expectedSeason: 2026,
+    expectedCurrentBid: 27,
+    amount: 28,
+    maxApprovedBid: 35,
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(eventLog.slice(0, 3), ["VERIFY", "ARM:SUBMIT", "CLICK:SUBMIT"]);
+});
+
+test("a same-name nominee without one exact ESPN id cannot release auction uncertainty", async () => {
+  const room = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
+    ownAuctionTeam: "Us",
+    maximumOffer: 150,
+    nominatedPlayer: "Exact Player",
+    nominatedPlayerId: 12345,
+    bidAmount: 28,
+    bidAcknowledged: false,
+  });
+  const action = {
+    operation: "BID",
+    actionRequestId: 8321,
+    actionId: "missing-id-bid-1",
+    decisionId: "missing-id-decision-1",
+    playerId: 12345,
+    playerName: "Exact Player",
+    expectedLeagueId: "701",
+    expectedTeamId: 5,
+    expectedSeason: 2026,
+    expectedCurrentBid: 27,
+    amount: 28,
+    maxApprovedBid: 35,
+  };
+
+  assert.equal((await room.executeAction(action)).code, "BID_ACK_UNCERTAIN");
+  room.setAuctionOffer({ playerName: "Exact Player", playerId: null, currentBid: 28, leading: false, clock: "00:18" });
+  const fenced = await room.executeAction({
+    ...action,
+    actionRequestId: 8322,
+    actionId: "missing-id-bid-2",
+    decisionId: "missing-id-decision-2",
+  });
+
+  assert.equal(fenced.code, "AUCTION_CLICK_UNCERTAIN");
+  assert.equal(room.actionState.bidClicks, 1);
+});
+
+test("exact nominee id, intended price, and explicit leader state release bid uncertainty", async () => {
+  const room = await loadDraftContext({
+    text: "PK 11 OF 128\n00:20\nCurrent Bid: $27",
+    ownAuctionTeam: "Us",
+    maximumOffer: 150,
+    nominatedPlayer: "Exact Player",
+    nominatedPlayerId: 12345,
+    bidAmount: 28,
+    bidAcknowledged: false,
+  });
+  const action = {
+    operation: "BID",
+    actionRequestId: 8331,
+    actionId: "reconciled-bid-1",
+    decisionId: "reconciled-decision-1",
+    playerId: 12345,
+    playerName: "Exact Player",
+    expectedLeagueId: "701",
+    expectedTeamId: 5,
+    expectedSeason: 2026,
+    expectedCurrentBid: 27,
+    amount: 28,
+    maxApprovedBid: 35,
+  };
+
+  assert.equal((await room.executeAction(action)).code, "BID_ACK_UNCERTAIN");
+  room.setAuctionOffer({ playerName: "Exact Player", playerId: 12345, currentBid: 28, leading: false, clock: "00:18" });
+  const reconciled = await room.executeAction({
+    ...action,
+    actionRequestId: 8332,
+    actionId: "reconciled-bid-2",
+    decisionId: "reconciled-decision-2",
+  });
+
+  assert.notEqual(reconciled.code, "AUCTION_CLICK_UNCERTAIN");
+  assert.equal(reconciled.code, "BID_CHANGED");
   assert.equal(room.actionState.bidClicks, 1);
 });
 

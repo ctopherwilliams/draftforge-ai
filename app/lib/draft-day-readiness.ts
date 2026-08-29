@@ -1,4 +1,10 @@
-import { evaluateDraftAuditSnapshot, MAX_DRAFT_ACTION_TELEMETRY_EVENTS, type DraftAuditSnapshot } from "./draft-audit.ts";
+import {
+  AUTHENTICATED_ESPN_PLAYER_POOL_REQUIRED_COUNT,
+  draftRuntimeWorkspaceReady,
+  evaluateDraftAuditSnapshot,
+  MAX_DRAFT_ACTION_TELEMETRY_EVENTS,
+  type DraftAuditSnapshot,
+} from "./draft-audit.ts";
 
 export type DraftDayReadinessPhase = "pre-room" | "live" | "complete";
 
@@ -38,6 +44,7 @@ export function evaluateDraftDayReadiness(input: {
   const availability = snapshot.availability;
   const availabilityEvaluatedAt = Date.parse(String(availability?.evaluatedAt || ""));
   const availabilityFreshUntil = Date.parse(String(availability?.freshUntil || ""));
+  const authenticatedPlayerPool = snapshot.binding.authenticatedPlayerPool;
   const checks: Record<string, boolean> = {
     snapshotFresh: Number.isFinite(ageMs) && ageMs >= -5_000 && ageMs <= maxAgeMs,
     exactLeague: String(exactLeague.id) === String(expected.id),
@@ -54,9 +61,18 @@ export function evaluateDraftDayReadiness(input: {
     exactPositionLimits: canonicalRecord(exactLeague.positionLimits) === canonicalRecord(expected.positionLimits),
     exactTabBound: Number.isInteger(snapshot.binding.tabId) && snapshot.binding.tabId > 0,
     currentPublisher: Boolean(snapshot.binding.commandCenterSessionId && Number.isFinite(Date.parse(String(snapshot.binding.commandCenterStartedAt || "")))),
+    exactAuthenticatedEspnPlayerPool: Boolean(authenticatedPlayerPool
+      && authenticatedPlayerPool.schemaVersion === 1
+      && authenticatedPlayerPool.requestedCount === AUTHENTICATED_ESPN_PLAYER_POOL_REQUIRED_COUNT
+      && authenticatedPlayerPool.playerCount === AUTHENTICATED_ESPN_PLAYER_POOL_REQUIRED_COUNT
+      && authenticatedPlayerPool.uniquePlayerCount === AUTHENTICATED_ESPN_PLAYER_POOL_REQUIRED_COUNT
+      && authenticatedPlayerPool.fetchedAt === snapshot.binding.authenticatedImportAt
+      && String(authenticatedPlayerPool.leagueId) === String(exactLeague.id)
+      && Number(authenticatedPlayerPool.teamId) === Number(exactLeague.teamId)
+      && Number(authenticatedPlayerPool.season) === Number(exactLeague.season)),
     settingsConfirmed: snapshot.safety.settingsConfirmed === true,
     extensionConnected: snapshot.safety.extensionConnected === true,
-    managedWorkspaceCleanup: snapshot.runtime.managedCleanupReady === true,
+    managedWorkspaceCleanup: draftRuntimeWorkspaceReady(snapshot.runtime),
     fiveSources: snapshot.safety.sourceCoverage === 5,
     exactSourceSet: JSON.stringify([...new Set(snapshot.safety.sourceIds)].sort()) === JSON.stringify(["espn", "ffc", "gng", "mfl", "tradyr"]),
     autoDraftOff: snapshot.safety.autoDraft === false,

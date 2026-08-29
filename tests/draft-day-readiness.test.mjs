@@ -16,6 +16,16 @@ function audit(overrides = {}) {
       commandCenterSessionId: "command-center-ready",
       commandCenterStartedAt: "2026-08-18T11:59:00.000Z",
       authenticatedImportAt: "2026-08-18T11:59:30.000Z",
+      authenticatedPlayerPool: {
+        schemaVersion: 1,
+        requestedCount: 500,
+        playerCount: 500,
+        uniquePlayerCount: 500,
+        fetchedAt: "2026-08-18T11:59:30.000Z",
+        leagueId: expected.id,
+        teamId: expected.teamId,
+        season: expected.season,
+      },
     },
     runtime: {
       capturedAt: "2026-08-18T12:00:00.000Z",
@@ -66,6 +76,25 @@ test("authenticated pre-room gate requires exact fresh settings and stays fail-c
   assert.ok(stale.blockers.includes("snapshotFresh"));
 });
 
+test("readiness requires the exact carried 500-player authenticated ESPN pool proof", () => {
+  for (const playerCount of [1, expected.size * expected.rosterSize, 499]) {
+    const baseline = audit();
+    const candidate = audit({
+      binding: {
+        ...baseline.binding,
+        authenticatedPlayerPool: {
+          ...baseline.binding.authenticatedPlayerPool,
+          playerCount,
+          uniquePlayerCount: playerCount,
+        },
+      },
+    });
+    const result = evaluateDraftDayReadiness({ snapshot: candidate, expected, now: Date.parse("2026-08-18T12:00:05.000Z") });
+    assert.equal(result.ready, false, `${playerCount} players cannot pass readiness`);
+    assert.ok(result.blockers.includes("exactAuthenticatedEspnPlayerPool"));
+  }
+});
+
 test("live gate detects extension, source, tab, autopick, and markup recovery failures", () => {
   const unsafe = audit({
     binding: { tabId: 0 },
@@ -88,11 +117,20 @@ test("live gate detects extension, source, tab, autopick, and markup recovery fa
   assert.equal(result.blockers.includes("soundMuted"), false);
 });
 
-test("readiness rejects a companion without managed workspace cleanup", () => {
+test("readiness requires exactly one DraftForge tab and one ESPN tab under managed cleanup", () => {
   const unmanaged = audit({ runtime: { ...audit().runtime, managedCleanupReady: false } });
   const result = evaluateDraftDayReadiness({ snapshot: unmanaged, expected, now: Date.parse("2026-08-18T12:00:05.000Z") });
   assert.equal(result.ready, false);
   assert.ok(result.blockers.includes("managedWorkspaceCleanup"));
+  for (const runtime of [
+    { ...audit().runtime, browserTabCount: 3 },
+    { ...audit().runtime, draftForgeTabCount: 2 },
+    { ...audit().runtime, espnTabCount: 2 },
+  ]) {
+    const duplicate = evaluateDraftDayReadiness({ snapshot: audit({ runtime }), expected, now: Date.parse("2026-08-18T12:00:05.000Z") });
+    assert.equal(duplicate.ready, false);
+    assert.ok(duplicate.blockers.includes("managedWorkspaceCleanup"));
+  }
 });
 
 test("pre-room and live readiness reject missing, blocked, malformed, or stale availability truth", () => {

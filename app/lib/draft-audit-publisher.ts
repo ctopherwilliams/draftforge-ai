@@ -1,5 +1,6 @@
 export const DEFAULT_DRAFT_AUDIT_POST_TIMEOUT_MS = 1_250;
 export const DEFAULT_DRAFT_AUDIT_ACK_TTL_MS = 12_000;
+export const DEFAULT_DRAFT_AUDIT_ABORT_SETTLEMENT_GRACE_MS = 100;
 
 export type DraftAuditPublisherBinding = {
   commandCenterSessionId: string;
@@ -68,6 +69,7 @@ export type DraftAuditPublisher<T> = {
 type DraftAuditPublisherOptions<T> = {
   post(publication: DraftAuditPublication<T>, signal: AbortSignal): Promise<DraftAuditPublishResult>;
   timeoutMs?: number;
+  abortSettlementGraceMs?: number;
   ackTtlMs?: number;
   retryDelaysMs?: number[];
   now?: () => number;
@@ -84,8 +86,7 @@ function safeIdentifier(value: unknown) {
  * Compact deterministic identity for the exact JSON snapshot stored by the
  * audit route. This is an acknowledgement identity, not a ranking input.
  */
-export function draftAuditPublicationDigest(snapshot: unknown) {
-  const serialized = JSON.stringify(snapshot);
+function draftAuditPublicationDigestFromSerialized(serialized: string) {
   let left = 0x811c9dc5;
   let right = 0x9e3779b9;
   for (let index = 0; index < serialized.length; index += 1) {
@@ -94,6 +95,18 @@ export function draftAuditPublicationDigest(snapshot: unknown) {
     right = Math.imul(right ^ (code + index), 0x5bd1e995);
   }
   return `draft-audit-v1:${serialized.length.toString(16)}:${(left >>> 0).toString(16).padStart(8, "0")}:${(right >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+export function materializeDraftAuditPublication(snapshot: unknown) {
+  const serialized = JSON.stringify(snapshot);
+  return Object.freeze({
+    serialized,
+    digest: draftAuditPublicationDigestFromSerialized(serialized),
+  });
+}
+
+export function draftAuditPublicationDigest(snapshot: unknown) {
+  return materializeDraftAuditPublication(snapshot).digest;
 }
 
 export function draftAuditPublisherBindingKey(binding: DraftAuditPublisherBinding) {
@@ -150,14 +163,37 @@ async function postWithDeadline<T>(
   post: DraftAuditPublisherOptions<T>["post"],
   publication: DraftAuditPublication<T>,
   timeoutMs: number,
+  abortSettlementGraceMs: number,
   controller: AbortController,
 ) {
   let timeout: ReturnType<typeof setTimeout> | undefined;
+  let settlementTimeout: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
+  let transportSettled = false;
+  let transportRequest: Promise<DraftAuditPublishResult>;
+  try {
+    transportRequest = Promise.resolve(post(publication, controller.signal));
+  } catch {
+    transportRequest = Promise.resolve({ ok: false, status: 0, code: "DRAFT_AUDIT_POST_FAILED" });
+  }
+  const transport = transportRequest
+    .catch((error) => ({
+      ok: false,
+      status: 0,
+      code: error instanceof Error && error.name === "AbortError"
+        ? "DRAFT_AUDIT_POST_TIMEOUT"
+        : "DRAFT_AUDIT_POST_FAILED",
+    } satisfies DraftAuditPublishResult))
+    .finally(() => {
+      transportSettled = true;
+    });
+  let resolveDeadline: ((result: DraftAuditPublishResult) => void) | null = null;
+  const handleAbort = () => {
+    if (!timedOut) resolveDeadline?.({ ok: false, status: 0, code: "DRAFT_AUDIT_POST_ABORTED" });
+  };
   const deadline = new Promise<DraftAuditPublishResult>((resolve) => {
-    controller.signal.addEventListener("abort", () => {
-      if (!timedOut) resolve({ ok: false, status: 0, code: "DRAFT_AUDIT_POST_ABORTED" });
-    }, { once: true });
+    resolveDeadline = resolve;
+    controller.signal.addEventListener("abort", handleAbort, { once: true });
     timeout = setTimeout(() => {
       timedOut = true;
       resolve({ ok: false, status: 0, code: "DRAFT_AUDIT_POST_TIMEOUT" });
@@ -165,18 +201,20 @@ async function postWithDeadline<T>(
     }, timeoutMs);
   });
   try {
-    return await Promise.race([
-      Promise.resolve(post(publication, controller.signal)).catch((error) => ({
-        ok: false,
-        status: 0,
-        code: error instanceof Error && error.name === "AbortError"
-          ? "DRAFT_AUDIT_POST_TIMEOUT"
-          : "DRAFT_AUDIT_POST_FAILED",
-      } satisfies DraftAuditPublishResult)),
-      deadline,
-    ]);
+    const result = await Promise.race([transport, deadline]);
+    if (!transportSettled && controller.signal.aborted) {
+      await Promise.race([
+        transport.then(() => undefined),
+        new Promise<void>((resolve) => {
+          settlementTimeout = setTimeout(resolve, abortSettlementGraceMs);
+        }),
+      ]);
+    }
+    return { result, transportSettled };
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);
+    if (settlementTimeout !== undefined) clearTimeout(settlementTimeout);
+    controller.signal.removeEventListener("abort", handleAbort);
   }
 }
 
@@ -188,6 +226,10 @@ async function postWithDeadline<T>(
  */
 export function createDraftAuditPublisher<T>(options: DraftAuditPublisherOptions<T>): DraftAuditPublisher<T> {
   const timeoutMs = Math.max(100, Math.trunc(options.timeoutMs ?? DEFAULT_DRAFT_AUDIT_POST_TIMEOUT_MS));
+  const abortSettlementGraceMs = Math.max(
+    10,
+    Math.min(1_000, Math.trunc(options.abortSettlementGraceMs ?? DEFAULT_DRAFT_AUDIT_ABORT_SETTLEMENT_GRACE_MS)),
+  );
   const ackTtlMs = Math.max(timeoutMs, Math.trunc(options.ackTtlMs ?? DEFAULT_DRAFT_AUDIT_ACK_TTL_MS));
   const retryDelaysMs = (options.retryDelaysMs ?? [125, 250])
     .map((delay) => Math.max(0, Math.trunc(delay)))
@@ -208,6 +250,10 @@ export function createDraftAuditPublisher<T>(options: DraftAuditPublisherOptions
   let draining: Promise<void> | null = null;
   let activeController: AbortController | null = null;
   let permanentlyBlocked = false;
+  // An abort-ignoring transport leaves delivery indeterminate. This poison is
+  // deliberately not reset by bind/clear: only a new publisher instance (page
+  // reload) may recover after the old transport failed to prove quiescence.
+  let transportUnsettled = false;
   let authorizationEpoch = 0;
 
   const loseAuthorization = (result: DraftAuditPublishResult, permanent: boolean) => {
@@ -223,18 +269,35 @@ export function createDraftAuditPublisher<T>(options: DraftAuditPublisherOptions
   };
 
   const drain = async () => {
-    while (latest && binding && bindingKey && !permanentlyBlocked) {
+    while (latest && binding && bindingKey && !permanentlyBlocked && !transportUnsettled) {
       let candidate = latest;
       let attempt = 0;
-      while (candidate && binding && bindingKey && !permanentlyBlocked) {
+      while (candidate && binding && bindingKey && !permanentlyBlocked && !transportUnsettled) {
         if (candidate.generation !== generation
           || draftAuditPublisherBindingKey(candidate.binding) !== bindingKey) break;
         const requestController = new AbortController();
         activePublication = candidate;
         activeController = requestController;
-        const result = await postWithDeadline(options.post, candidate, timeoutMs, requestController);
+        const outcome = await postWithDeadline(
+          options.post,
+          candidate,
+          timeoutMs,
+          abortSettlementGraceMs,
+          requestController,
+        );
         if (activeController === requestController) activeController = null;
         if (activePublication?.digest === candidate.digest) activePublication = null;
+        if (!outcome.transportSettled) {
+          transportUnsettled = true;
+          loseAuthorization({
+            ok: false,
+            status: 0,
+            code: "DRAFT_AUDIT_POST_ABORT_UNSETTLED",
+          }, true);
+          latest = null;
+          break;
+        }
+        const result = outcome.result;
         if (candidate.generation !== generation || !binding || !bindingKey) break;
 
         if (result.ok
@@ -306,10 +369,10 @@ export function createDraftAuditPublisher<T>(options: DraftAuditPublisherOptions
   };
 
   const startDrain = () => {
-    if (draining) return;
+    if (draining || transportUnsettled) return;
     draining = drain().finally(() => {
       draining = null;
-      if (latest && binding && !permanentlyBlocked) startDrain();
+      if (latest && binding && !permanentlyBlocked && !transportUnsettled) startDrain();
     });
   };
 
@@ -327,7 +390,7 @@ export function createDraftAuditPublisher<T>(options: DraftAuditPublisherOptions
       bindingKey = nextKey;
       ack = null;
       latest = null;
-      permanentlyBlocked = false;
+      permanentlyBlocked = transportUnsettled;
       return true;
     },
     clear() {
@@ -340,7 +403,7 @@ export function createDraftAuditPublisher<T>(options: DraftAuditPublisherOptions
       bindingKey = null;
       ack = null;
       latest = null;
-      permanentlyBlocked = false;
+      permanentlyBlocked = transportUnsettled;
     },
     enqueue(publication) {
       const publicationKey = draftAuditPublisherBindingKey(publication.binding);
@@ -348,7 +411,8 @@ export function createDraftAuditPublisher<T>(options: DraftAuditPublisherOptions
         || !binding
         || !bindingKey
         || publicationKey !== bindingKey
-        || permanentlyBlocked) return false;
+        || permanentlyBlocked
+        || transportUnsettled) return false;
       if (ack?.digest === publication.digest || latest?.digest === publication.digest) return true;
       const authorizationKey = normalizedAuthorizationKey(publication);
       const existingProtectedKeys = [
@@ -373,6 +437,7 @@ export function createDraftAuditPublisher<T>(options: DraftAuditPublisherOptions
       if (!expectedKey
         || expectedKey !== bindingKey
         || permanentlyBlocked
+        || transportUnsettled
         || !ack
         || ack.bindingKey !== expectedKey
         || ack.generation !== generation

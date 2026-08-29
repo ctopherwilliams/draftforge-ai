@@ -23,6 +23,7 @@ export const MAX_DRAFT_AUDIT_AVAILABILITY_VETOES = 500;
 export const MAX_DRAFT_AUDIT_MAP_ENTRIES = 32;
 export const MAX_DRAFT_AUDIT_SOURCE_IDS = 5;
 export const MAX_DRAFT_AUDIT_SOURCE_SNAPSHOT_AGE_MS = 10 * 60 * 1000;
+export const AUTHENTICATED_ESPN_PLAYER_POOL_REQUIRED_COUNT = 500;
 
 export type DraftOperatorPosition = "QB" | "RB" | "WR" | "TE" | "FLEX" | "OP" | "DST" | "K" | "DEPTH";
 
@@ -188,6 +189,14 @@ export type DraftRuntimeDiagnostics = {
   managedCleanupReady: boolean;
 };
 
+export function draftRuntimeWorkspaceReady(runtime: DraftRuntimeDiagnostics | null | undefined) {
+  return Boolean(runtime
+    && runtime.browserTabCount === 2
+    && runtime.draftForgeTabCount === 1
+    && runtime.espnTabCount === 1
+    && runtime.managedCleanupReady === true);
+}
+
 export type DraftAuditSnapshot = {
   schemaVersion: 1;
   capturedAt: string;
@@ -212,6 +221,16 @@ export type DraftAuditSnapshot = {
     commandCenterSessionId?: string;
     commandCenterStartedAt?: string;
     authenticatedImportAt: string;
+    authenticatedPlayerPool?: {
+      schemaVersion: 1;
+      requestedCount: 500;
+      playerCount: 500;
+      uniquePlayerCount: 500;
+      fetchedAt: string;
+      leagueId: string;
+      teamId: number;
+      season: number;
+    };
   };
   runtime: DraftRuntimeDiagnostics;
   safety: {
@@ -828,6 +847,19 @@ export function isDraftAuditSnapshot(value: unknown): value is DraftAuditSnapsho
     || !binding
     || !isBoundedInteger(binding.tabId, 1, MAX_DRAFT_AUDIT_TAB_ID)) return false;
   if (!isBoundedDate(binding.authenticatedImportAt)) return false;
+  if (binding.authenticatedPlayerPool !== undefined) {
+    const playerPool = binding.authenticatedPlayerPool;
+    if (!isRecord(playerPool)
+      || !hasOnlyKeys(playerPool, ["schemaVersion", "requestedCount", "playerCount", "uniquePlayerCount", "fetchedAt", "leagueId", "teamId", "season"])
+      || playerPool.schemaVersion !== 1
+      || playerPool.requestedCount !== AUTHENTICATED_ESPN_PLAYER_POOL_REQUIRED_COUNT
+      || playerPool.playerCount !== AUTHENTICATED_ESPN_PLAYER_POOL_REQUIRED_COUNT
+      || playerPool.uniquePlayerCount !== AUTHENTICATED_ESPN_PLAYER_POOL_REQUIRED_COUNT
+      || playerPool.fetchedAt !== binding.authenticatedImportAt
+      || String(playerPool.leagueId || "") !== String(league.id)
+      || Number(playerPool.teamId) !== Number(league.teamId)
+      || Number(playerPool.season) !== Number(league.season)) return false;
+  }
   if (binding.dashboardLoadedAt !== undefined
     && !isCanonicalDraftAuditUtcTimestamp(binding.dashboardLoadedAt)) return false;
   const hasPublisherId = isSafeBoundedString(binding.commandCenterSessionId, 128, 8);
@@ -898,9 +930,14 @@ export function isDraftAuditSnapshot(value: unknown): value is DraftAuditSnapsho
       && isBoundedFiniteNumber(sale.fairValue, 0, MAX_DRAFT_AUDIT_AUCTION_BUDGET)
       && [sale.targetBid, sale.maxApprovedBid, sale.highestObservedBid, sale.submittedBidCount, sale.highestSubmittedBid]
         .every((item) => isBoundedInteger(item, 0, MAX_DRAFT_AUDIT_AUCTION_BUDGET))
+      && sale.highestObservedBid >= sale.closingPrice
+      && (sale.submittedBidCount === 0 ? sale.highestSubmittedBid === 0 : sale.highestSubmittedBid > 0)
+      && (sale.highestSubmittedBid === 0 || sale.highestSubmittedBid <= sale.maxApprovedBid)
+      && (sale.outcome !== "WON" || (sale.maxApprovedBid >= sale.closingPrice && sale.maxApprovedBid > 0))
       && (sale.nominationIntent === null || ["TARGET", "DRAIN"].includes(sale.nominationIntent))
       && ["WON", "BID_LOST", "PASSED", "DRAINED"].includes(sale.outcome)
     ))) return false;
+    if (new Set(snapshot.salaryCapEvidence.sales.map((sale) => sale.playerId)).size !== snapshot.salaryCapEvidence.sales.length) return false;
   }
   if (!snapshot.sleeperEvidence || !Number.isInteger(snapshot.sleeperEvidence.candidateCount) || snapshot.sleeperEvidence.candidateCount < 0) return false;
   if (!Array.isArray(snapshot.sleeperEvidence.candidates) || snapshot.sleeperEvidence.candidates.length > 64) return false;
@@ -1000,6 +1037,9 @@ export function evaluateDraftAuditSnapshot(snapshot: DraftAuditSnapshot): DraftA
     if (spent > snapshot.league.auctionBudget) hardViolations.push("SALARY_CAP_EXCEEDED");
     if (remainingBudget < openSlots) hardViolations.push("ONE_DOLLAR_RESERVE_VIOLATION");
   }
+  if (snapshot.availability?.vetoedPlayerIds.some((playerId) => roster.some((entry) => entry.playerId === playerId))) {
+    hardViolations.push("AVAILABILITY_VETOED_ROSTER_PLAYER");
+  }
   if (snapshot.safety.autopickActive === true) hardViolations.push("ESPN_AUTOPICK_ACTIVE");
   if (snapshot.safety.extensionConnected !== true) hardViolations.push("EXTENSION_NOT_CONNECTED");
   if (snapshot.safety.inDraftRoom !== true) hardViolations.push("NOT_IN_DRAFT_ROOM");
@@ -1020,6 +1060,29 @@ export function evaluateDraftAuditSnapshot(snapshot: DraftAuditSnapshot): DraftA
   if (snapshot.safety.settingsConfirmed !== true) finalViolations.push("LEAGUE_RULES_NOT_CONFIRMED");
   if (snapshot.safety.liveChecklistReady !== true) finalViolations.push("LIVE_CHECKLIST_NOT_READY");
   if (snapshot.safety.sourceCoverage !== 5) finalViolations.push("FIVE_SOURCE_COVERAGE_INCOMPLETE");
+  if (snapshot.league.draftType === "AUCTION") {
+    const sales = snapshot.salaryCapEvidence?.sales;
+    if (!sales) {
+      finalViolations.push("SALARY_CAP_EVIDENCE_MISSING");
+    } else {
+      const wonByPlayer = new Map(sales.filter((sale) => sale.outcome === "WON").map((sale) => [sale.playerId, sale]));
+      if (wonByPlayer.size !== roster.length) finalViolations.push("OWN_SALARY_CAP_EVIDENCE_INCOMPLETE");
+      if (roster.some((entry) => {
+        const sale = wonByPlayer.get(entry.playerId);
+        return !sale || sale.position !== entry.position || sale.closingPrice !== entry.amount;
+      })) finalViolations.push("OWN_SALARY_CAP_PRICE_MISMATCH");
+      if (sales.some((sale) => sale.highestSubmittedBid > sale.maxApprovedBid
+        || (sale.outcome === "WON" && sale.closingPrice > sale.maxApprovedBid))) {
+        finalViolations.push("BID_CEILING_VIOLATION");
+      }
+    }
+    if (snapshot.telemetry.actions.some((event) => event.operation === "BID" && event.ok && (
+      !Number.isSafeInteger(event.playerId)
+      || !Number.isSafeInteger(event.amount) || Number(event.amount) < 1
+      || !Number.isSafeInteger(event.maxApprovedBid)
+      || Number(event.amount) > Number(event.maxApprovedBid)
+    ))) finalViolations.push("BID_CEILING_TELEMETRY_INCOMPLETE");
+  }
   if (!snapshot.liveControl) finalViolations.push("LIVE_CONTROL_MISSING");
   if (!snapshot.availability) finalViolations.push("AVAILABILITY_GATE_MISSING");
   if (snapshot.availability?.status !== undefined && snapshot.availability.status !== "READY") {

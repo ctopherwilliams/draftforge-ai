@@ -65,6 +65,26 @@ const testAuditEpoch = Date.now() - 60_000;
 const testCapturedAt = (offsetSeconds = 0) => new Date(testAuditEpoch + offsetSeconds * 1000).toISOString();
 const sourceSnapshotId = `sha256:${"c".repeat(64)}`;
 
+function completeSalaryCapEvidence() {
+  return {
+    sales: roster.map((entry, index) => ({
+      sequence: index + 1,
+      playerId: entry.playerId,
+      position: entry.position,
+      closingPrice: entry.amount,
+      sourceAuction: entry.amount,
+      fairValue: entry.amount,
+      targetBid: entry.amount,
+      maxApprovedBid: entry.amount,
+      highestObservedBid: entry.amount,
+      nominationIntent: "TARGET",
+      outcome: "WON",
+      submittedBidCount: 1,
+      highestSubmittedBid: entry.amount,
+    })),
+  };
+}
+
 function snapshot(overrides = {}) {
   return {
     schemaVersion: 1,
@@ -124,8 +144,12 @@ function snapshot(overrides = {}) {
         roundTripMs: 84,
         clockSeconds: 31,
         automatic: false,
+        playerId: 1,
+        amount: 8,
+        maxApprovedBid: 8,
       }],
     },
+    salaryCapEvidence: completeSalaryCapEvidence(),
     sleeperEvidence: {
       candidateCount: 1,
       candidates: [{
@@ -347,6 +371,16 @@ test("authenticated capture receipts require the private current-audit issue tok
       commandCenterSessionId: "capture-receipt-publisher",
       commandCenterStartedAt: dashboardLoadedAt,
       authenticatedImportAt: importAt,
+      authenticatedPlayerPool: {
+        schemaVersion: 1,
+        requestedCount: 500,
+        playerCount: 500,
+        uniquePlayerCount: 500,
+        fetchedAt: importAt,
+        leagueId: numericLeagueId,
+        teamId: 7,
+        season: 2026,
+      },
     },
     runtime: { ...snapshot().runtime, capturedAt: auditAt },
     safety: {
@@ -376,10 +410,16 @@ test("authenticated capture receipts require the private current-audit issue tok
       },
     },
   });
-  const espnPlayers = sanitizeAuthenticatedEspnPlayers([
-    { id: 1, name: "Player One", team: "A", pos: "QB", rank: 1, adp: 1, auction: 1, projected: 100 },
-    { id: 2, name: "Player Two", team: "B", pos: "RB", rank: 2, adp: 2, auction: 1, projected: 90 },
-  ]);
+  const espnPlayers = sanitizeAuthenticatedEspnPlayers(Array.from({ length: 500 }, (_, index) => ({
+    id: index + 1,
+    name: `Player ${index + 1}`,
+    team: index % 2 === 0 ? "A" : "B",
+    pos: index % 2 === 0 ? "QB" : "RB",
+    rank: index + 1,
+    adp: index + 1,
+    auction: 1,
+    projected: Math.max(1, 500 - index),
+  })));
   const sourceProfile = { scoring: "PPR", teams: 12, season: 2026, qbs: 2 };
   const digest = await authenticatedEspnCaptureDigest({ capturedAt: importAt, league: sanitizedLeague, espnPlayers });
   const capture = {
@@ -1057,6 +1097,36 @@ test("salary-cap evidence accepts sanitized sale outcomes and rejects private or
     league: { ...snapshot().league, draftType: "SNAKE" },
     salaryCapEvidence: { sales: [sale] },
   })), false);
+});
+
+test("final salary-cap audit requires exact won-price evidence and never permits a vetoed roster player", () => {
+  const missing = evaluateDraftAuditSnapshot(snapshot({ salaryCapEvidence: undefined }));
+  assert.ok(missing.finalViolations.includes("SALARY_CAP_EVIDENCE_MISSING"));
+  assert.equal(missing.finalReady, false);
+
+  const mismatched = completeSalaryCapEvidence();
+  mismatched.sales[0] = { ...mismatched.sales[0], closingPrice: 7, highestObservedBid: 8 };
+  const mismatchedEvaluation = evaluateDraftAuditSnapshot(snapshot({ salaryCapEvidence: mismatched }));
+  assert.ok(mismatchedEvaluation.finalViolations.includes("OWN_SALARY_CAP_PRICE_MISMATCH"));
+  assert.equal(mismatchedEvaluation.finalReady, false);
+
+  const vetoed = evaluateDraftAuditSnapshot(snapshot({
+    availability: { ...snapshot().availability, vetoedPlayerIds: [roster[0].playerId] },
+  }));
+  assert.ok(vetoed.hardViolations.includes("AVAILABILITY_VETOED_ROSTER_PLAYER"));
+  assert.equal(vetoed.finalReady, false);
+
+  const telemetryViolation = evaluateDraftAuditSnapshot(snapshot({
+    telemetry: {
+      actions: [{
+        ...snapshot().telemetry.actions[0],
+        amount: 9,
+        maxApprovedBid: 8,
+      }],
+    },
+  }));
+  assert.ok(telemetryViolation.finalViolations.includes("BID_CEILING_TELEMETRY_INCOMPLETE"));
+  assert.equal(telemetryViolation.finalReady, false);
 });
 
 test("completed audit preserves prior checklist evidence only for the same exact room", () => {

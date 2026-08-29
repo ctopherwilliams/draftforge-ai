@@ -63,12 +63,7 @@ export type PlayerConsensusCorroboration = Readonly<{
   specialist: boolean;
 }>;
 
-/**
- * Pure metadata for later action-policy evaluation. This is intentionally not
- * a universal action gate: ESPN specialist pools are covered by fewer public
- * boards, and roster-completion safety needs paired evidence before wiring a
- * new blocker into the live path.
- */
+/** Classifies whether a player has enough independent evidence for a live action. */
 export function classifyPlayerConsensusCorroboration(player: {
   pos?: string;
   sourceCount?: number;
@@ -81,13 +76,26 @@ export function classifyPlayerConsensusCorroboration(player: {
     : Number.isInteger(reportedSourceCount) ? Math.max(0, Math.min(5, reportedSourceCount)) : 0;
   const specialist = ["K", "DST"].includes(String(player.pos || "").toUpperCase());
   const minimumSourceCount = specialist ? 2 : 4;
-  const espnPresent = rankSourceIds.length === 0 || rankSourceIds.includes("espn");
+  const espnPresent = rankSourceIds.includes("espn");
   return Object.freeze({
     corroborated: espnPresent && sourceCount >= minimumSourceCount,
     sourceCount,
     minimumSourceCount,
     specialist,
   });
+}
+
+/**
+ * Preserve the model's deterministic order while removing players that cannot
+ * cross the live actuator boundary. Skill players require ESPN plus three
+ * independent sources; K/DST require ESPN plus one independent source.
+ */
+export function filterActionableConsensusPlayers<T extends {
+  pos?: string;
+  sourceCount?: number;
+  sourceRanks?: Record<string, number>;
+}>(players: T[]) {
+  return players.filter((player) => classifyPlayerConsensusCorroboration(player).corroborated);
 }
 
 type AuctionContext = Pick<LeagueSettings, "size" | "rosterSize" | "auctionBudget">;

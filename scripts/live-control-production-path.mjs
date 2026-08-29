@@ -180,6 +180,7 @@ async function createFakeAuctionContent() {
     clickedAmounts: [],
     contentMessages: [],
   };
+  let runtimeDispatch = async () => ({ ok: true });
   const target = { id: 10_001, name: "Production Path Receiver" };
   const clock = visibleNode({ textContent: "00:18" });
   const identity = visibleNode({
@@ -320,7 +321,7 @@ async function createFakeAuctionContent() {
         id: "qa-extension",
         sendMessage(message) {
           state.contentMessages.push(message);
-          return Promise.resolve({ ok: true });
+          return runtimeDispatch(message);
         },
       },
     },
@@ -360,6 +361,9 @@ globalThis.executionMetricsForQa = () => ({
   return {
     state,
     target,
+    connectRuntime(dispatcher) {
+      runtimeDispatch = dispatcher;
+    },
     setBid(amount) {
       state.currentBid = amount;
       state.leading = false;
@@ -413,6 +417,7 @@ async function createFakeActionContent({ mode, players, leagueId = LEAGUE_ID, se
     acknowledgementTransitions: 0,
     contentMessages: [],
   };
+  let runtimeDispatch = async () => ({ ok: true });
 
   class TestInputElement {
     constructor() {
@@ -584,8 +589,8 @@ async function createFakeActionContent({ mode, players, leagueId = LEAGUE_ID, se
     },
     querySelectorAll(selector) {
       if (selector === auctionClockSelector) return [clockNode];
-      if (selector === "[data-testid='player-selected']") return state.nominated ? [selectedPlayer] : [];
-      if (selector === "[data-testid='player-selected'] .playerinfo__playername") return state.nominated ? [selectedPlayerName] : [];
+      if (selector === "[data-testid='player-selected']") return state.selected || state.nominated ? [selectedPlayer] : [];
+      if (selector === "[data-testid='player-selected'] .playerinfo__playername") return state.selected || state.nominated ? [selectedPlayerName] : [];
       if (selector === leaderSelector) return state.nominated ? [leaderNode] : [];
       if (selector === ".auction-pick-component--selecting") return !state.nominated && mode === "NOMINATE" ? [selectingAuctionNode] : [];
       if (selector === ".bidding-form__custom") return state.nominated && mode === "BID_CUSTOM" ? [customBidForm] : [];
@@ -678,13 +683,13 @@ async function createFakeActionContent({ mode, players, leagueId = LEAGUE_ID, se
       if (selector === ".pick-component.own-pick .team-name") return mode === "SELECT" ? teamNameNode : null;
       if (selector === ".auction-pick-component--own") return mode === "SELECT" ? null : ownAuctionNode;
       if (selector === ".auction-pick-component--selecting") return mode === "NOMINATE" && !state.nominated ? selectingAuctionNode : null;
-      if (selector === "[data-testid='player-selected'] .playerinfo__playername") return state.nominated ? selectedPlayerName : null;
+      if (selector === "[data-testid='player-selected'] .playerinfo__playername") return state.selected || state.nominated ? selectedPlayerName : null;
       return null;
     },
     querySelectorAll(selector) {
       if (selector === "[role='grid'] [role='row']") return playerRows.map((entry) => entry.row);
       if (selector === "[role='grid'] [role='row'] img[src*='/players/full/']") return playerRows.map((entry) => entry.identity);
-      if (selector === "[data-testid='player-selected']") return state.nominated ? [selectedPlayer] : [];
+      if (selector === "[data-testid='player-selected']") return state.selected || state.nominated ? [selectedPlayer] : [];
       if (selector === ".auction-pick-component--selecting") return mode === "NOMINATE" && !state.nominated ? [selectingAuctionNode] : [];
       if (selector === ".auction-pick-component--own") return mode === "SELECT" ? [] : [ownAuctionNode];
       if (selector === ".auction-pick-component--own .team-name") return mode === "SELECT" ? [] : [visibleNode({ textContent: "7. QA Team" })];
@@ -727,7 +732,7 @@ async function createFakeActionContent({ mode, players, leagueId = LEAGUE_ID, se
         id: "qa-extension",
         sendMessage(message) {
           state.contentMessages.push(message);
-          return Promise.resolve({ ok: true });
+          return runtimeDispatch(message);
         },
       },
     },
@@ -767,6 +772,9 @@ globalThis.executionMetricsForQa = () => ({
   return {
     mode,
     state,
+    connectRuntime(dispatcher) {
+      runtimeDispatch = dispatcher;
+    },
     beginSample({ action = null, target = null, currentBid = 8, currentPick = 1, bidOutcome = "BID_CONFIRMED" } = {}) {
       cancelPendingTimers();
       state.target = target || (action ? players.find((player) => Number(player.id) === Number(action.playerId)) : null) || players[0];
@@ -789,6 +797,16 @@ globalThis.executionMetricsForQa = () => ({
       state.currentBid = 1;
       state.leading = false;
       state.nominated = true;
+    },
+    settleWonSaleToNomination({ player, amount }) {
+      cancelPendingTimers();
+      state.roster = [{ playerId: player.id, playerName: player.name, amount }];
+      state.ownRemaining -= amount;
+      state.ownMaxOffer = state.ownRemaining - 14;
+      state.currentBid = 0;
+      state.leading = false;
+      state.selected = false;
+      state.nominated = false;
     },
     produce: () => sandbox.produceContextForQa(),
     observe: () => sandbox.observeContextForQa(),
@@ -833,6 +851,7 @@ async function createBackgroundHarness(content, leagueId = LEAGUE_ID, dispatchLe
     }],
     ["draftForgeWorkspaceWriterV1", APP_TAB_ID],
   ]);
+  const localStorage = new Map();
   const listeners = [];
   const appMessages = [];
   const nativeFetch = globalThis.fetch;
@@ -864,6 +883,14 @@ async function createBackgroundHarness(content, leagueId = LEAGUE_ID, dispatchLe
       reload: () => {},
     },
     storage: {
+      local: {
+        async get(key) { return { [key]: structuredClone(localStorage.get(key)) }; },
+        async set(entries) {
+          for (const [key, value] of Object.entries(entries)) localStorage.set(key, structuredClone(value));
+        },
+        async remove(key) { localStorage.delete(key); },
+        setAccessLevel: async () => {},
+      },
       session: {
         async get(key) { return { [key]: sessionStorage.get(key) }; },
         async set(entries) { for (const [key, value] of Object.entries(entries)) sessionStorage.set(key, value); },
@@ -905,6 +932,10 @@ async function createBackgroundHarness(content, leagueId = LEAGUE_ID, dispatchLe
   await import(`${pathToFileURL(path.join(projectRoot, "extension", "background.js")).href}?production-path=${backgroundImportSequence}`);
   if (listeners.length !== 1) throw new Error("BACKGROUND_LISTENER_NOT_INSTALLED");
   const listener = listeners[0];
+  content.connectRuntime?.((message) => dispatchRuntimeMessage(listener, message, {
+    url: tabs[1].url,
+    tab: tabs[1],
+  }));
   return {
     appMessages,
     dispatchApp: (message) => dispatchRuntimeMessage(listener, message, {
@@ -1389,10 +1420,12 @@ function authorizedAction(action, actionRequestId) {
   const notAfter = Date.now() + 4_000;
   return {
     ...action,
+    actionId: `qa-production-action-${actionRequestId}`,
     expectedTabId: ESPN_TAB_ID,
     commandCenterSessionId: COMMAND_CENTER_SESSION_ID,
     dashboardLoadedAt: "2026-08-28T00:00:00.000Z",
     decisionId: `qa-production-action-${actionRequestId}`,
+    sourceSnapshotId: SOURCE_SNAPSHOT_ID,
     authorizationEpoch: 0,
     actionRequestId,
     availabilityDigest: AVAILABILITY_DIGEST,
@@ -1427,7 +1460,9 @@ async function runProductionActionMatrix({ players, sources, evaluatedAt, action
         await sleep(185);
       }
       for (let index = 0; index < actionSamplesPerOperation; index += 1) {
-        const target = mode.startsWith("BID_") ? players[0] : null;
+        const target = mode === "NOMINATE"
+          ? players[index % players.length]
+          : mode.startsWith("BID_") ? players[0] : null;
         const bidOutcome = mode.startsWith("BID_") && index % 4 === 0 && index + 1 < actionSamplesPerOperation
           ? "BID_SUPERSEDED"
           : "BID_CONFIRMED";
@@ -1449,7 +1484,13 @@ async function runProductionActionMatrix({ players, sources, evaluatedAt, action
           ? "SELECT_READY"
           : mode === "NOMINATE" ? "NOMINATION_READY" : "BID_READY";
         if (decision.code !== expectedDecisionCode || !decision.action) {
-          throw new Error(`PRODUCTION_${mode}_PLANNER_NOT_READY_${decision.code}`);
+          throw new Error(`PRODUCTION_${mode}_PLANNER_NOT_READY_${decision.code}_SAMPLE_${index + 1}_${JSON.stringify({
+            actionSurfaceReady: room.actionSurfaceReady,
+            auctionTransactionMode: room.auctionTransactionMode,
+            auctionTransactionReady: room.auctionTransactionReady,
+            auctionSettlementPending: room.auctionSettlementPending,
+            nominatedPlayerId: room.nominatedPlayerId,
+          })}`);
         }
         content.beginSample({
           action: decision.action,
@@ -1486,6 +1527,28 @@ async function runProductionActionMatrix({ players, sources, evaluatedAt, action
             : bidOutcome;
         if (actionResults.some((result) => result?.ok !== true || result?.code !== expectedResult)) {
           throw new Error(`PRODUCTION_${mode}_ACTION_FAILED_${actionResults.map((result) => result?.code).join("_")}`);
+        }
+        if (mode !== "SELECT") {
+          await sleep(2);
+          const reconciliation = await background.dispatchEspn({
+            type: "ESPN_CONTEXT",
+            payload: {
+              ...content.produce(),
+              producerSessionId: `qa-production-${mode.toLowerCase()}`,
+              producerRevision: index + 1,
+              contextCapturedAt: new Date().toISOString(),
+            },
+          });
+          if (reconciliation?.auctionUncertainty?.code !== "AUCTION_UNCERTAINTY_RECONCILED") {
+            throw new Error(`PRODUCTION_${mode}_DURABLE_RECONCILIATION_FAILED_${reconciliation?.auctionUncertainty?.code || reconciliation?.code || "UNKNOWN"}`);
+          }
+          if (mode === "NOMINATE" && index + 1 < actionSamplesPerOperation) {
+            content.settleWonSaleToNomination({
+              player: target,
+              amount: decision.action.amount,
+            });
+            content.produce();
+          }
         }
         const resultCounts = resultsByOperation[mode];
         resultCounts[expectedResult] = Number(resultCounts[expectedResult] || 0) + 1;
@@ -1918,6 +1981,7 @@ async function runSnakeObserverOverlap({ players, sources, evaluatedAt, routeSer
     content.beginSample({ action: decision.action, currentPick: 1 });
 
     const capturedAt = new Date().toISOString();
+    const actionNotAfter = Date.now() + 4_000;
     const intendedPlayer = {
       playerId: decision.action.playerId,
       playerName: decision.action.playerName,
@@ -1934,6 +1998,7 @@ async function runSnakeObserverOverlap({ players, sources, evaluatedAt, routeSer
       sourceSnapshotId: SOURCE_SNAPSHOT_ID,
       availabilityDigest: AVAILABILITY_DIGEST,
       availabilityDecisionDigest: AVAILABILITY_DECISION_DIGEST,
+      notAfter: actionNotAfter,
       expectedPick: 1,
       submitNotBeforeAt: capturedAt,
       submitTargetSeconds: 18,
@@ -1993,7 +2058,9 @@ async function runSnakeObserverOverlap({ players, sources, evaluatedAt, routeSer
     const clicksBefore = content.state.finalClicks;
     const messagesBefore = content.state.contentMessages.filter((message) => message.type === "ESPN_ACTION_SUBMITTED").length;
     const actionPayload = authorizedAction(decision.action, 88_001);
+    actionPayload.actionId = "qa-snake-observer-action-1";
     actionPayload.decisionId = envelope.decisionId;
+    actionPayload.notAfter = envelope.notAfter;
     const actionStartedAt = performance.now();
     const first = background.dispatchApp({ type: "SUBMIT_ACTION", payload: actionPayload });
     const duplicate = background.dispatchApp({ type: "SUBMIT_ACTION", payload: actionPayload });
@@ -2197,7 +2264,11 @@ export async function runLiveControlProductionPath({
 
     const final = contexts.at(-1);
     const decisionTime = new Date(Date.now() + 100).toISOString();
-    const envelope = liveDecision(final.decision.action, final.room, decisionTime);
+    const actionNotAfter = Date.now() + 4_000;
+    const envelope = {
+      ...liveDecision(final.decision.action, final.room, decisionTime),
+      notAfter: actionNotAfter,
+    };
     const binding = {
       commandCenterSessionId: COMMAND_CENTER_SESSION_ID,
       liveControlSessionId: LIVE_CONTROL_SESSION_ID,
@@ -2311,15 +2382,17 @@ export async function runLiveControlProductionPath({
     await sleep(80);
     const actionPayload = {
       ...final.decision.action,
+      actionId: "qa-auction-action-1",
       expectedTabId: ESPN_TAB_ID,
       commandCenterSessionId: COMMAND_CENTER_SESSION_ID,
       dashboardLoadedAt: "2026-08-28T00:00:00.000Z",
       decisionId: envelope.decisionId,
+      sourceSnapshotId: SOURCE_SNAPSHOT_ID,
       authorizationEpoch: 0,
       actionRequestId: 77,
       availabilityDigest: AVAILABILITY_DIGEST,
       availabilityDecisionDigest: AVAILABILITY_DECISION_DIGEST,
-      notAfter: Date.now() + 4_000,
+      notAfter: actionNotAfter,
       availabilityNotAfter: Date.now() + 4_000,
     };
     const actionStartedAt = performance.now();
@@ -2332,11 +2405,29 @@ export async function runLiveControlProductionPath({
     clearInterval(queueSampler);
     queueSamples.push(content.executionMetrics());
     const actionRoundTripMs = performance.now() - actionStartedAt;
+    let durableReconciliation = null;
+    if (actionResults.every((result) => result?.ok === true && result?.code === "BID_CONFIRMED")) {
+      await sleep(2);
+      durableReconciliation = await background.dispatchEspn({
+        type: "ESPN_CONTEXT",
+        payload: {
+          ...content.produce(),
+          producerSessionId: "qa-producer-session",
+          producerRevision: 7,
+          contextCapturedAt: new Date().toISOString(),
+        },
+      });
+    }
     const [normal, burst] = await Promise.all([normalObserver, burstObserver]);
     const observerErrors = [...normal.errors, ...burst.errors];
 
-    if (actionResults.some((result) => result?.ok !== true || result?.code !== "BID_CONFIRMED")) {
-      throw new Error(`ACTION_NOT_ACKNOWLEDGED_${actionResults.map((result) => result?.code).join("_")}_${JSON.stringify({ state: content.state, context: content.observe() })}`);
+    if (actionResults.some((result) => result?.ok !== true || result?.code !== "BID_CONFIRMED")
+      || durableReconciliation?.auctionUncertainty?.code !== "AUCTION_UNCERTAINTY_RECONCILED") {
+      throw new Error(`ACTION_NOT_ACKNOWLEDGED_${actionResults.map((result) => result?.code).join("_")}_${JSON.stringify({
+        durableReconciliation: durableReconciliation?.auctionUncertainty?.code || durableReconciliation?.code || null,
+        state: content.state,
+        context: content.observe(),
+      })}`);
     }
     const submittedMessages = content.state.contentMessages.filter((message) => message.type === "ESPN_ACTION_SUBMITTED");
     if (content.state.bidClicks !== 1

@@ -13,10 +13,14 @@ import {
 import { selectRecoveryWorkspace } from "./recovery-targets.js";
 import { recoverExactDraftRoomContext } from "./recovery-context.js";
 import {
+  AUTHENTICATED_ESPN_PLAYER_POOL_REQUIRED_COUNT,
   contextCanTriggerLiveRoomWatch,
+  createAuthenticatedEspnPlayerPoolEnvelope,
   createLiveRoomHandoffCoordinator,
   createLiveRoomWatch,
   liveLeagueMatchesWatch,
+  sanitizeLiveRoomWatchForStorage,
+  validStoredLiveRoomWatch,
 } from "./live-room-watch.js";
 import {
   actionAvailabilityDeadlineStatus,
@@ -55,6 +59,7 @@ const LIVE_DRAFT_POLL_COORDINATOR_TIMEOUT_MS = 1200;
 const PRE_ROOM_IMPORT_TIMEOUT_MS = 12000;
 const LIVE_ROOM_HANDOFF_TIMEOUT_MS = 1500;
 const LIVE_WORKSPACE_RECOVERY_TIMEOUT_MS = 4000;
+const FINAL_ROOM_CARDINALITY_TIMEOUT_MS = 350;
 const draftPolls = createPollCoordinator({
   minIntervalMs: 1800,
   taskTimeoutMs: LIVE_DRAFT_POLL_COORDINATOR_TIMEOUT_MS,
@@ -67,6 +72,16 @@ const WRITER_LEASE_TTL_MS = 1500;
 const LIVE_ROOM_WATCH_STORAGE_KEY = "draftForgeLiveRoomWatchV1";
 const ACTION_BINDING_STORAGE_KEY = "draftForgeActionBindingV1";
 const WORKSPACE_WRITER_STORAGE_KEY = "draftForgeWorkspaceWriterV1";
+const AUCTION_CLICK_UNCERTAINTY_STORAGE_KEY = "draftForgeAuctionClickUncertaintyV1";
+const MAX_AUCTION_CLICK_UNCERTAINTIES = 1;
+let auctionUncertaintyMutationTail = Promise.resolve();
+try {
+  const storageAccess = chrome.storage.local.setAccessLevel?.({ accessLevel: "TRUSTED_CONTEXTS" });
+  storageAccess?.catch?.(() => {});
+} catch {
+  // Access-level hardening is best effort. Every authoritative read/write is
+  // still checked and fails closed independently below.
+}
 const EXTENSION_INTEGRITY_DOMAIN = "draftforge-extension-tree-v1";
 const EXTENSION_SOURCE_FILES = Object.freeze([
   "README.md",
@@ -118,69 +133,369 @@ async function computeInstalledExtensionIntegrity() {
 const installedExtensionIntegrityPromise = computeInstalledExtensionIntegrity()
   .catch(() => ({ sha256: "", fileCount: 0 }));
 
-function sanitizedWatchPlayer(player) {
+function exactAuctionPlayerId(value) {
+  const playerId = Number(value || 0);
+  return Number.isInteger(playerId) && ![0, -1].includes(playerId) ? playerId : null;
+}
+
+function auctionRoomIdentity(action, sender) {
+  let url;
+  try { url = new URL(sender?.url || sender?.tab?.url || ""); }
+  catch { return null; }
+  const tabId = Number(sender?.tab?.id);
+  const leagueId = String(action?.expectedLeagueId || "");
+  const teamId = Number(action?.expectedTeamId || 0);
+  const season = Number(action?.expectedSeason || 0);
+  if (url.origin !== "https://fantasy.espn.com") return null;
+  return Number.isInteger(tabId) && tabId > 0 && leagueId
+    && Number.isInteger(teamId) && teamId > 0
+    && Number.isInteger(season) && season > 0
+      ? { armedTabId: tabId, leagueId, teamId, season, key: `${leagueId}:${teamId}:${season}` }
+      : null;
+}
+
+function sanitizedAuctionUncertainty(action, room, now = Date.now()) {
+  const playerId = exactAuctionPlayerId(action?.playerId);
+  const amount = Number(action?.amount || 0);
+  const operation = String(action?.operation || "");
+  return playerId && Number.isInteger(amount) && amount >= 1 && ["BID", "NOMINATE"].includes(operation)
+    ? {
+        ...room,
+        operation,
+        playerId,
+        amount,
+        armedAt: now,
+        latestPermitAt: now,
+        actionIdentity: {
+          actionId: String(action?.actionId || ""),
+          decisionId: String(action?.decisionId || ""),
+          commandCenterSessionId: String(action?.commandCenterSessionId || ""),
+          authorizationEpoch: Number(action?.authorizationEpoch),
+          actionRequestId: Number.isInteger(Number(action?.actionRequestId)) ? Number(action.actionRequestId) : null,
+        },
+      }
+    : null;
+}
+
+function sameAuctionActionIdentity(left, right) {
+  return Boolean(left && right
+    && left.actionId === right.actionId
+    && left.decisionId === right.decisionId
+    && left.commandCenterSessionId === right.commandCenterSessionId
+    && left.authorizationEpoch === right.authorizationEpoch
+    && left.actionRequestId === right.actionRequestId);
+}
+
+function validStoredAuctionUncertainty(record, key) {
+  return Boolean(record && typeof record === "object"
+    && record.key === key
+    && Number.isInteger(record.armedTabId) && record.armedTabId > 0
+    && typeof record.leagueId === "string" && record.leagueId
+    && Number.isInteger(record.teamId) && record.teamId > 0
+    && Number.isInteger(record.season) && record.season > 0
+    && ["BID", "NOMINATE"].includes(record.operation)
+    && exactAuctionPlayerId(record.playerId)
+    && Number.isInteger(record.amount) && record.amount >= 1
+    && Number.isFinite(record.armedAt)
+    && typeof record.tokenHash === "string" && /^[a-f0-9]{64}$/.test(record.tokenHash)
+    && ["PLAYER_ROW", "SUBMIT", "CONFIRMATION"].includes(record.stage)
+    && Number.isFinite(record.latestPermitAt) && record.latestPermitAt >= record.armedAt
+    && record.actionIdentity && typeof record.actionIdentity.actionId === "string" && record.actionIdentity.actionId.length >= 8
+    && typeof record.actionIdentity.decisionId === "string" && record.actionIdentity.decisionId.length >= 8
+    && validCommandCenterSessionId(record.actionIdentity.commandCenterSessionId)
+    && Number.isSafeInteger(record.actionIdentity.authorizationEpoch)
+    && record.actionIdentity.authorizationEpoch >= 0);
+}
+
+async function readAuctionUncertainties() {
+  const stored = (await chrome.storage.local.get(AUCTION_CLICK_UNCERTAINTY_STORAGE_KEY))?.[AUCTION_CLICK_UNCERTAINTY_STORAGE_KEY];
+  if (stored === undefined) return {};
+  if (!stored || typeof stored !== "object" || Array.isArray(stored)) throw new Error("AUCTION_UNCERTAINTY_STORAGE_MALFORMED");
+  const entries = Object.entries(stored);
+  if (entries.length > MAX_AUCTION_CLICK_UNCERTAINTIES
+    || entries.some(([key, record]) => !validStoredAuctionUncertainty(record, key))) {
+    throw new Error("AUCTION_UNCERTAINTY_STORAGE_MALFORMED");
+  }
+  return stored;
+}
+
+async function writeAuctionUncertainties(records) {
+  const entries = Object.entries(records);
+  if (entries.length > MAX_AUCTION_CLICK_UNCERTAINTIES
+    || entries.some(([key, record]) => !validStoredAuctionUncertainty(record, key))) {
+    throw new Error("AUCTION_UNCERTAINTY_STORAGE_MALFORMED");
+  }
+  await chrome.storage.local.set({ [AUCTION_CLICK_UNCERTAINTY_STORAGE_KEY]: records });
+  const verified = (await chrome.storage.local.get(AUCTION_CLICK_UNCERTAINTY_STORAGE_KEY))?.[AUCTION_CLICK_UNCERTAINTY_STORAGE_KEY];
+  if (JSON.stringify(verified) !== JSON.stringify(records)) throw new Error("AUCTION_UNCERTAINTY_STORAGE_WRITE_UNVERIFIED");
+}
+
+function exactAuctionReconciliation(record, evidence) {
+  const playerId = exactAuctionPlayerId(record?.playerId);
+  if (!playerId) return false;
+  const evidenceCapturedAt = Date.parse(String(evidence?.contextCapturedAt || ""));
+  if (!Number.isFinite(evidenceCapturedAt) || evidenceCapturedAt <= Number(record.latestPermitAt)) return false;
+  if ((evidence?.ownRosterPlayerIds || []).some((id) => exactAuctionPlayerId(id) === playerId)
+    || (evidence?.auctionSalePlayerIds || []).some((id) => exactAuctionPlayerId(id) === playerId)) return true;
+  const liveNomineeId = exactAuctionPlayerId(evidence?.nominatedPlayerId);
+  if (liveNomineeId && liveNomineeId !== playerId
+    && evidence?.auctionTransactionMode === "OFFER"
+    && evidence?.auctionTransactionReady === true) return true;
+  if (liveNomineeId !== playerId
+    || evidence?.auctionTransactionMode !== "OFFER"
+    || evidence?.auctionTransactionReady !== true
+    || !Number.isInteger(Number(evidence?.currentBid))
+    || Number(evidence.currentBid) < Number(record.amount)) return false;
+  if (record.operation === "NOMINATE") return true;
+  return record.operation === "BID"
+    && (Number(evidence.currentBid) > Number(record.amount) || typeof evidence?.leadingBid === "boolean");
+}
+
+async function auctionTokenHash(token) {
+  if (typeof token !== "string" || token.length < 16) return "";
+  return integritySha256(new TextEncoder().encode(token));
+}
+
+function legalAuctionStage(record, operation, stage) {
+  if (!record) return (operation === "BID" && stage === "SUBMIT")
+    || (operation === "NOMINATE" && stage === "PLAYER_ROW");
+  if (record.stage === stage) return false;
+  if (operation === "NOMINATE" && record.stage === "PLAYER_ROW" && stage === "SUBMIT") return true;
+  return ["BID", "NOMINATE"].includes(operation) && record.stage === "SUBMIT" && stage === "CONFIRMATION";
+}
+
+function publicAuctionUncertainty(record) {
+  if (!record) return null;
   return {
-    id: Number(player?.id || 0),
-    name: String(player?.name || ""),
-    team: String(player?.team || ""),
-    pos: String(player?.pos || ""),
-    rank: Number(player?.rank || 999),
-    adp: Number(player?.adp || 999),
-    auction: Number(player?.auction || 0),
-    projected: Number(player?.projected || 0),
-    availabilityStatus: String(player?.availabilityStatus || "ACTIVE"),
-    injured: player?.injured === true,
-    unavailable: player?.unavailable === true,
+    operation: record.operation,
+    playerId: record.playerId,
+    amount: record.amount,
+    leagueId: record.leagueId,
+    teamId: record.teamId,
+    season: record.season,
+    armedAt: record.armedAt,
   };
 }
 
-function sanitizedLiveRoomWatch(watch) {
-  if (!watch) return null;
-  return {
-    appTabId: Number(watch.appTabId),
-    sourceTabId: Number(watch.sourceTabId),
-    sourceLeagueId: String(watch.sourceLeagueId || ""),
-    sourceLeagueName: String(watch.sourceLeagueName || ""),
-    teamId: Number(watch.teamId),
-    season: Number(watch.season),
-    rules: String(watch.rules || ""),
-    sourcePlayers: (Array.isArray(watch.sourcePlayers) ? watch.sourcePlayers : []).slice(0, 1000).map(sanitizedWatchPlayer),
-    sourcePlayersFetchedAt: String(watch.sourcePlayersFetchedAt || ""),
-    sourcePlayerEnvelope: {
-      fetchedAt: String(watch.sourcePlayerEnvelope?.fetchedAt || ""),
-      leagueId: String(watch.sourcePlayerEnvelope?.leagueId || ""),
-      teamId: Number(watch.sourcePlayerEnvelope?.teamId || 0),
-      season: Number(watch.sourcePlayerEnvelope?.season || 0),
-      playerCount: Number(watch.sourcePlayerEnvelope?.playerCount || 0),
-    },
-    autoArmRequested: watch.autoArmRequested === true,
-    armedAt: Number(watch.armedAt),
-    expiresAt: Number(watch.expiresAt),
-    processingTabId: Number.isInteger(Number(watch.processingTabId)) ? Number(watch.processingTabId) : null,
-    commandCenterSessionId: String(watch.commandCenterSessionId || ""),
-  };
+async function auctionUncertaintyMessageNow(message, sender) {
+  const action = message?.payload?.action || {};
+  const mode = String(message?.payload?.mode || "");
+  const stage = String(message?.payload?.stage || "");
+  const room = auctionRoomIdentity(action, sender);
+  const proposed = room ? sanitizedAuctionUncertainty(action, room) : null;
+  if (!proposed || !["CHECK", "ARM", "RECONCILE", "CANCEL_PRE_CLICK"].includes(mode)) {
+    return { ok: false, code: "AUCTION_UNCERTAINTY_AUTHORITY_REJECTED" };
+  }
+
+  // A permit holder may retire only its own exact pre-click record. This path
+  // intentionally does not require the still-current action binding: deadline,
+  // authorization, or DOM drift is precisely why a proven no-submit path needs
+  // to release the durable permit. The unguessable token, exact action identity,
+  // exact room/tab, and exact cancellable stage remain mandatory. A submit or
+  // confirmation click never enters this branch, and CONFIRMATION can never be
+  // retired without authoritative ESPN reconciliation.
+  if (mode === "CANCEL_PRE_CLICK") {
+    if (!["PLAYER_ROW", "SUBMIT"].includes(stage)) {
+      return { ok: false, code: "AUCTION_UNCERTAINTY_STAGE_INVALID" };
+    }
+    try {
+      const records = await readAuctionUncertainties();
+      const [pendingKey, pending] = Object.entries(records)[0] || [null, null];
+      if (!pending) return { ok: true, code: "AUCTION_UNCERTAINTY_CLEAR" };
+      const suppliedTokenHash = await auctionTokenHash(message.payload?.token);
+      if (pendingKey !== room.key
+        || pending.armedTabId !== room.armedTabId
+        || pending.operation !== proposed.operation
+        || pending.playerId !== proposed.playerId
+        || pending.amount !== proposed.amount
+        || pending.stage !== stage
+        || suppliedTokenHash !== pending.tokenHash
+        || !sameAuctionActionIdentity(pending.actionIdentity, proposed.actionIdentity)) {
+        return { ok: false, code: "AUCTION_CLICK_UNCERTAIN", pending: publicAuctionUncertainty(pending) };
+      }
+      delete records[pendingKey];
+      await writeAuctionUncertainties(records);
+      return { ok: true, code: "AUCTION_UNCERTAINTY_PRE_CLICK_RETIRED" };
+    } catch {
+      return { ok: false, code: "AUCTION_UNCERTAINTY_STORAGE_UNVERIFIED" };
+    }
+  }
+
+  await ensureActionBinding();
+  if (!proposed
+    || actionAuthorizationStatus(action) !== "ACTION_AUTHORIZATION_VALID"
+    || !writerLeaseAuthorizes(actionBinding, action, sender?.tab?.id)) {
+    return { ok: false, code: "AUCTION_UNCERTAINTY_AUTHORITY_REJECTED" };
+  }
+  const authorizedBinding = actionBinding;
+  const authorizedBindingGeneration = actionBindingGeneration;
+  try {
+    const records = await readAuctionUncertainties();
+    const [pendingKey, pending] = Object.entries(records)[0] || [null, null];
+    if (mode === "CHECK") return { ok: true, pending: publicAuctionUncertainty(pending) };
+    if (mode === "ARM") {
+      const deadlineStatus = actionDeadlineStatus(action);
+      if (deadlineStatus !== "ACTION_DEADLINE_VALID") return { ok: false, code: deadlineStatus };
+      const availabilityStatus = actionAvailabilityDeadlineStatus(action);
+      if (availabilityStatus !== "AVAILABILITY_DEADLINE_VALID") return { ok: false, code: availabilityStatus };
+      const serverLease = await verifyServerDispatchLease(action);
+      if (serverLease?.ok !== true) {
+        return { ok: false, code: String(serverLease?.code || "SERVER_DISPATCH_LEASE_UNVERIFIED") };
+      }
+      if (actionBinding !== authorizedBinding
+        || actionBindingGeneration !== authorizedBindingGeneration
+        || actionAuthorizationStatus(action) !== "ACTION_AUTHORIZATION_VALID"
+        || !writerLeaseAuthorizes(actionBinding, action, sender?.tab?.id)
+        || actionDeadlineStatus(action) !== "ACTION_DEADLINE_VALID"
+        || actionAvailabilityDeadlineStatus(action) !== "AVAILABILITY_DEADLINE_VALID") {
+        return { ok: false, code: "AUCTION_UNCERTAINTY_AUTHORITY_REJECTED" };
+      }
+      const suppliedTokenHash = await auctionTokenHash(message.payload?.token);
+      if (pending && (pendingKey !== room.key || pending.operation !== proposed.operation
+        || pending.playerId !== proposed.playerId || pending.amount !== proposed.amount
+        || !sameAuctionActionIdentity(pending.actionIdentity, proposed.actionIdentity)
+        || suppliedTokenHash !== pending.tokenHash
+        || !legalAuctionStage(pending, proposed.operation, stage))) {
+        return { ok: false, code: "AUCTION_CLICK_UNCERTAIN", pending: publicAuctionUncertainty(pending) };
+      }
+      if (!pending && !legalAuctionStage(null, proposed.operation, stage)) {
+        return { ok: false, code: "AUCTION_UNCERTAINTY_STAGE_INVALID" };
+      }
+      if (!pending && Object.keys(records).length >= MAX_AUCTION_CLICK_UNCERTAINTIES) {
+        return { ok: false, code: "AUCTION_UNCERTAINTY_CAPACITY_REACHED" };
+      }
+      const token = pending ? message.payload.token
+        : globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const tokenHash = pending?.tokenHash || await auctionTokenHash(token);
+      if (actionBinding !== authorizedBinding
+        || actionBindingGeneration !== authorizedBindingGeneration
+        || actionAuthorizationStatus(action) !== "ACTION_AUTHORIZATION_VALID"
+        || !writerLeaseAuthorizes(actionBinding, action, sender?.tab?.id)
+        || actionDeadlineStatus(action) !== "ACTION_DEADLINE_VALID"
+        || actionAvailabilityDeadlineStatus(action) !== "AVAILABILITY_DEADLINE_VALID") {
+        return { ok: false, code: "AUCTION_UNCERTAINTY_AUTHORITY_REJECTED" };
+      }
+      records[room.key] = {
+        ...(pending || proposed),
+        stage,
+        latestPermitAt: Date.now(),
+        tokenHash,
+      };
+      await writeAuctionUncertainties(records);
+      // The write is intentionally not rolled back when authority changes at
+      // this boundary: the caller may have received or acted on the permit
+      // even if this response is lost. Retaining the fence is the only safe
+      // outcome once durable storage may have committed.
+      const finalServerLease = await verifyServerDispatchLease(action);
+      if (finalServerLease?.ok !== true
+        || actionBinding !== authorizedBinding
+        || actionBindingGeneration !== authorizedBindingGeneration
+        || actionAuthorizationStatus(action) !== "ACTION_AUTHORIZATION_VALID"
+        || !writerLeaseAuthorizes(actionBinding, action, sender?.tab?.id)
+        || actionDeadlineStatus(action) !== "ACTION_DEADLINE_VALID"
+        || actionAvailabilityDeadlineStatus(action) !== "AVAILABILITY_DEADLINE_VALID") {
+        return {
+          ok: false,
+          code: finalServerLease?.ok !== true
+            ? String(finalServerLease?.code || "SERVER_DISPATCH_LEASE_UNVERIFIED")
+            : "AUCTION_UNCERTAINTY_AUTHORITY_REJECTED",
+          pending: publicAuctionUncertainty(records[room.key]),
+          token,
+        };
+      }
+      return { ok: true, code: "AUCTION_UNCERTAINTY_ARMED", pending: publicAuctionUncertainty(records[room.key]), token };
+    }
+    if (!pending) return { ok: true, code: "AUCTION_UNCERTAINTY_CLEAR" };
+    if (pendingKey !== room.key) return { ok: false, code: "AUCTION_CLICK_UNCERTAIN", pending: publicAuctionUncertainty(pending) };
+    if (!exactAuctionReconciliation(pending, message.payload?.evidence || {})) {
+      return { ok: false, code: "AUCTION_CLICK_UNCERTAIN", pending: publicAuctionUncertainty(pending) };
+    }
+    delete records[room.key];
+    await writeAuctionUncertainties(records);
+    return { ok: true, code: "AUCTION_UNCERTAINTY_RECONCILED" };
+  } catch {
+    return { ok: false, code: "AUCTION_UNCERTAINTY_STORAGE_UNVERIFIED" };
+  }
 }
 
-function validStoredLiveRoomWatch(watch, now = Date.now()) {
-  const playersFetchedAtMs = Date.parse(String(watch?.sourcePlayersFetchedAt || ""));
-  return Boolean(watch
-    && Number.isInteger(watch.appTabId) && watch.appTabId > 0
-    && Number.isInteger(watch.sourceTabId) && watch.sourceTabId > 0
-    && watch.sourceLeagueId
-    && Number.isInteger(watch.teamId) && watch.teamId > 0
-    && Number.isInteger(watch.season) && watch.season > 0
-    && typeof watch.rules === "string" && watch.rules.length > 0
-    && Array.isArray(watch.sourcePlayers) && watch.sourcePlayers.length > 0
-    && Number.isFinite(playersFetchedAtMs)
-    && new Date(playersFetchedAtMs).toISOString() === watch.sourcePlayersFetchedAt
-    && watch.sourcePlayerEnvelope?.fetchedAt === watch.sourcePlayersFetchedAt
-    && watch.sourcePlayerEnvelope?.leagueId === watch.sourceLeagueId
-    && Number(watch.sourcePlayerEnvelope?.teamId) === Number(watch.teamId)
-    && Number(watch.sourcePlayerEnvelope?.season) === Number(watch.season)
-    && Number(watch.sourcePlayerEnvelope?.playerCount) === watch.sourcePlayers.length
-    && Number.isFinite(watch.armedAt) && Number.isFinite(watch.expiresAt)
-    && validCommandCenterSessionId(watch.commandCenterSessionId)
-    && now >= watch.armedAt && now <= watch.expiresAt);
+function auctionUncertaintyMessage(message, sender) {
+  const operation = auctionUncertaintyMutationTail
+    .catch(() => {})
+    .then(() => auctionUncertaintyMessageNow(message, sender));
+  auctionUncertaintyMutationTail = operation.then(() => undefined, () => undefined);
+  return operation;
+}
+
+function reconcileAuctionUncertaintyFromContext(context, sender) {
+  const operation = auctionUncertaintyMutationTail
+    .catch(() => {})
+    .then(async () => {
+      const room = auctionRoomIdentity({
+        expectedLeagueId: context?.leagueId,
+        expectedTeamId: context?.teamId,
+        expectedSeason: context?.season,
+      }, sender);
+      if (!room) return { ok: false, code: "AUCTION_UNCERTAINTY_CONTEXT_INVALID" };
+      try {
+        const records = await readAuctionUncertainties();
+        const pending = records[room.key];
+        if (!pending) return { ok: true, code: "AUCTION_UNCERTAINTY_CLEAR" };
+        const evidence = {
+          nominatedPlayerId: context?.nominatedPlayerId,
+          auctionTransactionMode: context?.auctionTransactionMode,
+          auctionTransactionReady: context?.auctionTransactionReady,
+          currentBid: context?.currentBid,
+          leadingBid: context?.leadingBid,
+          contextCapturedAt: context?.contextCapturedAt,
+          ownRosterPlayerIds: (context?.ownRoster || []).map((entry) => entry?.playerId),
+          auctionSalePlayerIds: (context?.auctionSales || []).map((sale) => sale?.playerId),
+        };
+        if (!exactAuctionReconciliation(pending, evidence)) {
+          return { ok: true, code: "AUCTION_CLICK_UNCERTAIN" };
+        }
+        delete records[room.key];
+        await writeAuctionUncertainties(records);
+        return { ok: true, code: "AUCTION_UNCERTAINTY_RECONCILED" };
+      } catch {
+        return { ok: false, code: "AUCTION_UNCERTAINTY_STORAGE_UNVERIFIED" };
+      }
+    });
+  auctionUncertaintyMutationTail = operation.then(() => undefined, () => undefined);
+  return operation;
+}
+
+function durableAuctionGlobalFence(action) {
+  if (!["BID", "NOMINATE"].includes(action?.operation)) return Promise.resolve(null);
+  const operation = auctionUncertaintyMutationTail
+    .catch(() => {})
+    .then(async () => {
+      try {
+        const records = await readAuctionUncertainties();
+        const pending = Object.values(records)[0];
+        return pending
+          ? { ok: false, code: "AUCTION_CLICK_UNCERTAIN", message: "A durable ESPN auction click fence must reconcile before another auction action can dispatch.", action }
+          : null;
+      } catch {
+        return { ok: false, code: "AUCTION_UNCERTAINTY_STORAGE_UNVERIFIED", message: "DraftForge could not verify durable auction-click storage. No ESPN auction action was dispatched.", action };
+      }
+    });
+  auctionUncertaintyMutationTail = operation.then(() => undefined, () => undefined);
+  return operation;
+}
+
+function durableAuctionLifecycleFence() {
+  const operation = auctionUncertaintyMutationTail
+    .catch(() => {})
+    .then(async () => {
+      try {
+        const pending = Object.values(await readAuctionUncertainties())[0];
+        return pending ? { ok: false, code: "AUCTION_CLICK_UNCERTAIN", message: "An unresolved ESPN auction click must reconcile before reloading or cleaning the managed workspace." } : null;
+      } catch {
+        return { ok: false, code: "AUCTION_UNCERTAINTY_STORAGE_UNVERIFIED", message: "Durable auction-click storage is unverified, so DraftForge refused the lifecycle change." };
+      }
+    });
+  auctionUncertaintyMutationTail = operation.then(() => undefined, () => undefined);
+  return operation;
 }
 
 async function persistLiveRoomWatch(watch) {
@@ -188,13 +503,15 @@ async function persistLiveRoomWatch(watch) {
     await chrome.storage.session.remove(LIVE_ROOM_WATCH_STORAGE_KEY);
     return;
   }
-  await chrome.storage.session.set({ [LIVE_ROOM_WATCH_STORAGE_KEY]: sanitizedLiveRoomWatch(watch) });
+  await chrome.storage.session.set({ [LIVE_ROOM_WATCH_STORAGE_KEY]: sanitizeLiveRoomWatchForStorage(watch) });
 }
 
 async function restoreLiveRoomWatch() {
   try {
     const stored = (await chrome.storage.session.get(LIVE_ROOM_WATCH_STORAGE_KEY))?.[LIVE_ROOM_WATCH_STORAGE_KEY];
-    if (!validStoredLiveRoomWatch(stored)) {
+    if (!validStoredLiveRoomWatch(stored, {
+      commandCenterSessionIdIsValid: validCommandCenterSessionId,
+    })) {
       await persistLiveRoomWatch(null);
       return null;
     }
@@ -731,6 +1048,83 @@ async function findUniqueDraftRoomContext(expectedLeagueId, expectedTeamId) {
   return matches.length === 1 ? matches[0] : null;
 }
 
+function tabUrlClaimsExactDraftRoom(tab, expectedLeagueId, expectedTeamId, expectedSeason) {
+  let url;
+  try { url = new URL(tab?.url || ""); }
+  catch { return false; }
+  return url.origin === "https://fantasy.espn.com"
+    && /^\/football\/draft(?:\/|$)/.test(url.pathname)
+    && url.searchParams.get("leagueId") === String(expectedLeagueId)
+    && Number(url.searchParams.get("teamId")) === Number(expectedTeamId)
+    && Number(url.searchParams.get("seasonId") || url.searchParams.get("season")) === Number(expectedSeason);
+}
+
+async function exactDraftRoomTabIds(expectedLeagueId, expectedTeamId, expectedSeason, candidateTabs) {
+  const tabs = Array.isArray(candidateTabs)
+    ? candidateTabs.filter((tab) => originForTab(tab) === "https://fantasy.espn.com")
+    : await chrome.tabs.query({ url: "https://fantasy.espn.com/*" });
+  const exact = new Set(tabs
+    .filter((tab) => Number.isInteger(Number(tab?.id))
+      && tabUrlClaimsExactDraftRoom(tab, expectedLeagueId, expectedTeamId, expectedSeason))
+    .map((tab) => Number(tab.id)));
+  await Promise.all(tabs.filter((tab) => Number.isInteger(Number(tab?.id))).map(async (tab) => {
+    try {
+      const context = await chrome.tabs.sendMessage(tab.id, { type: "DF_GET_CONTEXT" });
+      if (context?.inDraftRoom === true
+        && String(context?.leagueId || "") === String(expectedLeagueId)
+        && Number(context?.teamId) === Number(expectedTeamId)
+        && Number(context?.season) === Number(expectedSeason)) exact.add(Number(tab.id));
+    } catch {
+      // A loading exact draft URL was already counted above. Other tabs that
+      // cannot prove exact live-room identity are never action authority.
+    }
+  }));
+  return [...exact].sort((left, right) => left - right);
+}
+
+function sortedTabIdentity(tabs) {
+  return tabs
+    .map((tab) => ({ id: Number(tab?.id), url: String(tab?.url || "") }))
+    .sort((left, right) => left.id - right.id || left.url.localeCompare(right.url));
+}
+
+async function finalDispatchWorkspaceSnapshot(expectedLeagueId, expectedTeamId, expectedSeason) {
+  const beforeProbeTabs = await chrome.tabs.query({});
+  const exactRoomTabIds = await exactDraftRoomTabIds(
+    expectedLeagueId,
+    expectedTeamId,
+    expectedSeason,
+    beforeProbeTabs,
+  );
+  // DF_GET_CONTEXT is asynchronous and can yield long enough for another tab
+  // to appear. Re-read every tab after the probe; no later await occurs before
+  // the caller's synchronous authorization checks and DF_EXECUTE_ACTION handoff.
+  const tabs = await chrome.tabs.query({});
+  const tabIds = tabs
+    .map((tab) => Number(tab?.id))
+    .filter(Number.isInteger)
+    .sort((left, right) => left - right);
+  const draftForgeTabIds = tabs
+    .filter((tab) => DRAFTFORGE_APP_ORIGINS.includes(originForTab(tab)))
+    .map((tab) => Number(tab?.id))
+    .filter(Number.isInteger)
+    .sort((left, right) => left - right);
+  const espnTabIds = tabs
+    .filter((tab) => originForTab(tab) === "https://fantasy.espn.com")
+    .map((tab) => Number(tab?.id))
+    .filter(Number.isInteger)
+    .sort((left, right) => left - right);
+  return {
+    browserTabCount: tabs.length,
+    tabIds,
+    draftForgeTabIds,
+    espnTabIds,
+    exactRoomTabIds,
+    stableTabIdentity: JSON.stringify(sortedTabIdentity(beforeProbeTabs))
+      === JSON.stringify(sortedTabIdentity(tabs)),
+  };
+}
+
 async function waitForExactDraftRoomContext(expectedLeagueId, expectedTeamId, expectedTabId, signal) {
   const deadline = Date.now() + RECOVERY_CONTEXT_TIMEOUT_MS;
   do {
@@ -862,7 +1256,15 @@ async function fetchPlayers(leagueId, season, scoringLabel, options = {}) {
     ...options,
     headers: { ...(options.headers || {}), "X-Fantasy-Filter": JSON.stringify(filter) },
   });
-  return normalizePlayers(raw);
+  const players = normalizePlayers(raw);
+  const uniquePlayerCount = new Set(players.map((player) => Number(player.id))).size;
+  if (!Array.isArray(raw?.players)
+    || raw.players.length !== AUTHENTICATED_ESPN_PLAYER_POOL_REQUIRED_COUNT
+    || players.length !== AUTHENTICATED_ESPN_PLAYER_POOL_REQUIRED_COUNT
+    || uniquePlayerCount !== AUTHENTICATED_ESPN_PLAYER_POOL_REQUIRED_COUNT) {
+    throw new Error("ESPN_AUTHENTICATED_PLAYER_POOL_TRUNCATED");
+  }
+  return players;
 }
 
 async function importLeagueMetadata(context, options = {}) {
@@ -880,7 +1282,23 @@ async function importLeague(context, options = {}) {
   const season = Number(context.season || new Date().getFullYear());
   const players = await fetchPlayers(context.leagueId, season, league.scoringLabel, options);
   const authenticatedImportAt = new Date().toISOString();
-  return { league, players, picks: normalizeImportPicks(raw), context, authenticatedImportAt };
+  const authenticatedPlayerPoolEnvelope = createAuthenticatedEspnPlayerPoolEnvelope({
+    players,
+    fetchedAt: authenticatedImportAt,
+    leagueId: league.id,
+    teamId: Number(context.teamId || league.teamId),
+    season: league.season,
+    requestedCount: AUTHENTICATED_ESPN_PLAYER_POOL_REQUIRED_COUNT,
+  });
+  if (!authenticatedPlayerPoolEnvelope) throw new Error("ESPN_AUTHENTICATED_PLAYER_POOL_UNVERIFIED");
+  return {
+    league,
+    players,
+    picks: normalizeImportPicks(raw),
+    context,
+    authenticatedImportAt,
+    authenticatedPlayerPoolEnvelope,
+  };
 }
 
 function importPreRoomLeague(context) {
@@ -1108,6 +1526,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
     }
     if (message.type === "RELOAD_EXTENSION") {
+      const lifecycleFence = await durableAuctionLifecycleFence();
+      if (lifecycleFence) return lifecycleFence;
       if (!isLocalDraftForgeSenderUrl(sender.url || sender.tab?.url || "")) {
         return { ok: false, code: "RELOAD_FORBIDDEN", message: "Companion self-reload is available only from the local DraftForge app." };
       }
@@ -1158,6 +1578,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sourceLeague: sourceData.league,
         sourcePlayers: sourceData.players,
         sourcePlayersFetchedAt: sourceData.authenticatedImportAt,
+        sourcePlayerEnvelope: sourceData.authenticatedPlayerPoolEnvelope,
         autoArmRequested: message.payload?.autoArmRequested === true,
       });
       if (!watch) return { ok: false, code: "LIVE_ROOM_WATCH_INVALID", message: "DraftForge could not prove one exact pre-draft league and team." };
@@ -1174,12 +1595,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       };
     }
     if (message.type === "CLEAN_LOCAL_WORKSPACE") {
+      const lifecycleFence = await durableAuctionLifecycleFence();
+      if (lifecycleFence) return lifecycleFence;
       if (!isLocalDraftForgeSenderUrl(sender.url || sender.tab?.url || "") || !sender.tab?.id) {
         return { ok: false, code: "WORKSPACE_CLEANUP_FORBIDDEN", message: "Workspace cleanup is available only from the active local DraftForge tab." };
       }
       return cleanManagedLocalWorkspace(sender.tab.id, message.payload);
     }
     if (message.type === "CLOSE_PRACTICE_ROOM") {
+      const lifecycleFence = await durableAuctionLifecycleFence();
+      if (lifecycleFence) return lifecycleFence;
       if (!isLocalDraftForgeSenderUrl(sender.url || sender.tab?.url || "")) {
         return { ok: false, code: "PRACTICE_CLOSE_FORBIDDEN", message: "Practice-room cleanup is available only from the local DraftForge app." };
       }
@@ -1258,6 +1683,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       };
     }
     if (message.type === "RECOVER_LIVE_WORKSPACE") {
+      const lifecycleFence = await durableAuctionLifecycleFence();
+      if (lifecycleFence) return lifecycleFence;
       if (!isLocalDraftForgeSenderUrl(sender.url || sender.tab?.url || "")) {
         return { ok: false, code: "RECOVERY_FORBIDDEN", message: "Live workspace recovery is available only from the local DraftForge app." };
       }
@@ -1314,12 +1741,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return { ok: true, skipped: true, code: "ESPN_CONTEXT_STALE_OR_UNSEQUENCED" };
       }
       espnContext = { ...message.payload, tabId: sender.tab?.id };
+      const auctionUncertainty = await reconcileAuctionUncertaintyFromContext(espnContext, sender);
       const roomWatch = await recoverWatchedLiveRoom(espnContext, sender.tab);
       await broadcast("DF_ESPN_CONTEXT", espnContext);
       const poll = espnContext.inDraftRoom && espnContext.leagueId
         ? scheduleDraftPoll(espnContext)
         : { skipped: true, reason: "NOT_IN_DRAFT_ROOM" };
-      return { ok: true, poll, roomWatch };
+      return { ok: true, poll, roomWatch, auctionUncertainty };
     }
     if (message.type === "ESPN_HEARTBEAT") {
       const context = { ...message.payload, tabId: sender.tab?.id };
@@ -1480,6 +1908,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const lease = renewWriterLease(actionBinding);
       return { ok: true, code: "WRITER_LEASE_RENEWED", expiresAt: lease.expiresAt };
     }
+    if (message.type === "AUCTION_CLICK_UNCERTAINTY") {
+      return auctionUncertaintyMessage(message, sender);
+    }
     if (message.type === "VERIFY_ACTION_AUTHORIZATION") {
       await ensureActionBinding();
       const authorizationStatus = actionAuthorizationStatus(message.payload);
@@ -1494,6 +1925,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return { ok: true, code: "ACTION_AUTHORIZATION_VERIFIED" };
     }
     if (message.type === "SUBMIT_ACTION") {
+      const initialAuctionFence = await durableAuctionGlobalFence(message.payload);
+      if (initialAuctionFence) return initialAuctionFence;
       const initialDeadlineStatus = actionDeadlineStatus(message.payload);
       if (initialDeadlineStatus !== "ACTION_DEADLINE_VALID") {
         return { ok: false, code: initialDeadlineStatus, message: "The draft action's absolute click deadline is missing or expired. No ESPN action was sent.", action: message.payload };
@@ -1579,6 +2012,56 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       if (!submittedBindingStillCurrent()) {
         return { ok: false, code: "ACTION_BINDING_REVOKED", message: "The exact ESPN tab binding changed before dispatch. No action was sent.", action: exactAction };
+      }
+      const finalAuctionFence = await durableAuctionGlobalFence(exactAction);
+      if (finalAuctionFence) return finalAuctionFence;
+      let finalWorkspace;
+      try {
+        finalWorkspace = await withOperationDeadline(
+          Math.max(1, Math.min(FINAL_ROOM_CARDINALITY_TIMEOUT_MS, Number(exactAction.notAfter) - Date.now())),
+          "ESPN_EXACT_ROOM_CARDINALITY_TIMEOUT",
+          () => finalDispatchWorkspaceSnapshot(
+            exactAction.expectedLeagueId,
+            exactAction.expectedTeamId,
+            exactAction.expectedSeason,
+          ),
+        );
+      } catch (error) {
+        return {
+          ok: false,
+          code: error?.message || "ESPN_EXACT_ROOM_CARDINALITY_TIMEOUT",
+          message: "DraftForge could not prove one sole exact ESPN live room immediately before dispatch. No action was sent.",
+          action: exactAction,
+        };
+      }
+      if (finalWorkspace.exactRoomTabIds.length !== 1
+        || finalWorkspace.exactRoomTabIds[0] !== Number(submittedBinding.tabId)) {
+        return {
+          ok: false,
+          code: "ESPN_EXACT_ROOM_CARDINALITY_CHANGED",
+          message: "The exact ESPN live room became missing or duplicated immediately before dispatch. No action was sent.",
+          action: exactAction,
+        };
+      }
+      if (finalWorkspace.browserTabCount !== 2
+        || finalWorkspace.tabIds.length !== 2
+        || finalWorkspace.stableTabIdentity !== true
+        || finalWorkspace.draftForgeTabIds.length !== 1
+        || finalWorkspace.draftForgeTabIds[0] !== Number(submittedBinding.appTabId)
+        || finalWorkspace.espnTabIds.length !== 1
+        || finalWorkspace.espnTabIds[0] !== Number(submittedBinding.tabId)) {
+        return {
+          ok: false,
+          code: "DRAFT_WORKSPACE_CARDINALITY_CHANGED",
+          message: "The live browser workspace no longer contains exactly one bound DraftForge tab and one bound ESPN draft room. No action was sent.",
+          action: exactAction,
+        };
+      }
+      if (actionDeadlineStatus(exactAction) !== "ACTION_DEADLINE_VALID"
+        || actionAvailabilityDeadlineStatus(exactAction) !== "AVAILABILITY_DEADLINE_VALID"
+        || actionAuthorizationStatus(exactAction) !== "ACTION_AUTHORIZATION_VALID"
+        || !submittedBindingStillCurrent()) {
+        return { ok: false, code: "ACTION_AUTHORIZATION_REVOKED", message: "Draft-room authority changed during the final sole-room check. No action was sent.", action: exactAction };
       }
       let result;
       try {

@@ -114,6 +114,93 @@ test("delayed and never-resolving POSTs abort and leave zero action authorizatio
   }
 });
 
+test("a timed-out POST settles before a queued successor starts", async () => {
+  const events = [];
+  let activePosts = 0;
+  let maximumActivePosts = 0;
+  let postIndex = 0;
+  const publisher = createDraftAuditPublisher({
+    timeoutMs: 100,
+    abortSettlementGraceMs: 100,
+    retryDelaysMs: [],
+    post: async (candidate, signal) => {
+      postIndex += 1;
+      const currentIndex = postIndex;
+      activePosts += 1;
+      maximumActivePosts = Math.max(maximumActivePosts, activePosts);
+      events.push(`start-${currentIndex}`);
+      try {
+        if (currentIndex === 1) {
+          await new Promise((resolve, reject) => {
+            const timer = setTimeout(resolve, 500);
+            signal.addEventListener("abort", () => {
+              clearTimeout(timer);
+              setTimeout(() => {
+                const error = new Error("abort unwind complete");
+                error.name = "AbortError";
+                reject(error);
+              }, 10);
+            }, { once: true });
+          });
+        }
+        return recorded(candidate);
+      } finally {
+        events.push(`end-${currentIndex}`);
+        activePosts -= 1;
+      }
+    },
+  });
+  publisher.bind(binding);
+  publisher.enqueue(publication("digest-times-out-first", null));
+  publisher.enqueue(publication("digest-successor-exact", "decision-successor"));
+  await publisher.flush();
+
+  assert.equal(maximumActivePosts, 1);
+  assert.deepEqual(events, ["start-1", "end-1", "start-2", "end-2"]);
+  assert.equal(publisher.getAck()?.digest, "digest-successor-exact");
+  assert.equal(publisher.isAuthorized(binding, "decision-successor"), true);
+});
+
+test("an abort-ignoring transport poisons the publisher without starting queued work", async () => {
+  const losses = [];
+  const seen = [];
+  let activePosts = 0;
+  let maximumActivePosts = 0;
+  const publisher = createDraftAuditPublisher({
+    timeoutMs: 100,
+    abortSettlementGraceMs: 20,
+    retryDelaysMs: [],
+    post: async (candidate) => {
+      seen.push(candidate.digest);
+      activePosts += 1;
+      maximumActivePosts = Math.max(maximumActivePosts, activePosts);
+      await new Promise(() => {});
+    },
+    onAuthorizationLost: (failure) => losses.push(failure),
+  });
+  publisher.bind(binding);
+  publisher.enqueue(publication("digest-never-quiesces", null));
+  publisher.enqueue(publication("digest-must-not-start", "decision-must-not-start"));
+  await publisher.flush();
+
+  assert.deepEqual(seen, ["digest-never-quiesces"]);
+  assert.equal(activePosts, 1);
+  assert.equal(maximumActivePosts, 1);
+  assert.equal(publisher.isAuthorized(binding, "decision-must-not-start"), false);
+  assert.equal(losses.at(-1)?.code, "DRAFT_AUDIT_POST_ABORT_UNSETTLED");
+  assert.equal(losses.at(-1)?.permanent, true);
+
+  const rebound = { ...binding, tabId: binding.tabId + 1 };
+  assert.equal(publisher.bind(rebound), true);
+  assert.equal(publisher.enqueue({
+    ...publication("digest-after-rebind", "decision-after-rebind"),
+    binding: rebound,
+  }), false, "the same publisher instance cannot recover from indeterminate delivery");
+  publisher.clear("TEST_CLEAR");
+  publisher.bind(binding);
+  assert.equal(publisher.enqueue(publication("digest-after-clear", "decision-after-clear")), false);
+});
+
 test("HTTP 409 clears a prior ack and permanently fences the bound publisher", async () => {
   let conflict = false;
   const publisher = createDraftAuditPublisher({

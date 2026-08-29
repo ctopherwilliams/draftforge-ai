@@ -61,8 +61,139 @@ export type SnakePlanTiming = {
 export type DraftActionResultSummary = {
   ok?: unknown;
   code?: unknown;
+  clicked?: unknown;
   action?: { operation?: unknown } | null;
 };
+
+export type PendingAuctionClick = {
+  playerId: number;
+  playerName: string;
+  amount?: number;
+  uncertain?: boolean;
+};
+
+export type PendingAuctionBidClick = PendingAuctionClick & {
+  amount: number;
+};
+
+export type AuctionBidCeilingLatch = Readonly<{
+  nomineeKey: string;
+  playerId: number;
+  ceiling: number;
+}>;
+
+/**
+ * A walk-away price may tighten while one exact nominee is live, but may never
+ * rise because room budgets or source-derived context churned mid-transaction.
+ */
+export function latchMonotonicAuctionBidCeiling(
+  current: AuctionBidCeilingLatch | null | undefined,
+  nomineeKey: string,
+  playerId: number,
+  recomputedCeiling: number,
+): AuctionBidCeilingLatch | null {
+  if (!nomineeKey
+    || !Number.isSafeInteger(playerId) || playerId === 0 || playerId === -1
+    || !Number.isSafeInteger(recomputedCeiling) || recomputedCeiling < 0) return null;
+  const ceiling = current?.nomineeKey === nomineeKey && current.playerId === playerId
+    ? Math.min(current.ceiling, recomputedCeiling)
+    : recomputedCeiling;
+  return Object.freeze({ nomineeKey, playerId, ceiling });
+}
+
+export function hasUnresolvedAuctionClick(
+  nomination: PendingAuctionClick | null | undefined,
+  bid: PendingAuctionClick | null | undefined,
+) {
+  return nomination?.uncertain === true || bid?.uncertain === true;
+}
+
+export type AuctionNominationUncertaintyResolution = "UNRESOLVED" | "CONFIRMED" | "TERMINAL";
+
+/**
+ * A clicked nomination is reconciled only by an exact ESPN player id. A
+ * display name is presentation data and may be absent, stale, or ambiguous.
+ */
+export function auctionNominationUncertaintyResolution(
+  pending: PendingAuctionClick | null | undefined,
+  context: {
+    nominatedPlayerId?: unknown;
+    auctionTransactionMode?: unknown;
+    auctionTransactionReady?: unknown;
+    currentBid?: unknown;
+    auctionSales?: Array<{ playerId?: unknown }>;
+  },
+  ownRosterPlayerIds: Iterable<number> = [],
+): AuctionNominationUncertaintyResolution {
+  if (!pending || pending.uncertain !== true) return "UNRESOLVED";
+  if ([...ownRosterPlayerIds].some((playerId) => Number(playerId) === pending.playerId)) return "TERMINAL";
+  if (Array.isArray(context.auctionSales)
+    && context.auctionSales.some((sale) => Number(sale?.playerId) === pending.playerId)) return "TERMINAL";
+
+  const liveId = Number(context.nominatedPlayerId);
+  if (!Number.isInteger(liveId) || liveId === 0) return "UNRESOLVED";
+  if (liveId !== pending.playerId) return "TERMINAL";
+  const amount = Number(pending.amount);
+  const currentBid = Number(context.currentBid);
+  return Number.isSafeInteger(amount)
+    && amount >= 1
+    && context.auctionTransactionMode === "OFFER"
+    && context.auctionTransactionReady === true
+    && Number.isSafeInteger(currentBid)
+    && currentBid >= amount
+      ? "CONFIRMED"
+      : "UNRESOLVED";
+}
+
+/**
+ * A clicked bid may be released only by exact, authoritative room evidence:
+ * roster/sale settlement, a different nominee, or an exact price transition
+ * with an explicit leader state. Timer or presentation churn is insufficient.
+ */
+export function auctionBidUncertaintyResolved(
+  pending: PendingAuctionBidClick | null | undefined,
+  context: {
+    nominatedPlayer?: unknown;
+    nominatedPlayerId?: unknown;
+    currentBid?: unknown;
+    leadingBid?: unknown;
+    auctionSales?: Array<{ playerId?: unknown }>;
+  },
+  ownRosterPlayerIds: Iterable<number> = [],
+) {
+  if (!pending || pending.uncertain !== true) return true;
+  if ([...ownRosterPlayerIds].some((playerId) => Number(playerId) === pending.playerId)) return true;
+  if (Array.isArray(context.auctionSales)
+    && context.auctionSales.some((sale) => Number(sale?.playerId) === pending.playerId)) return true;
+
+  const liveId = Number(context.nominatedPlayerId);
+  const hasExactLiveId = Number.isInteger(liveId) && liveId !== 0;
+  if (!hasExactLiveId) return false;
+  const sameNominee = liveId === pending.playerId;
+  if (!sameNominee) return true;
+
+  const currentBid = Number(context.currentBid);
+  const leaderIsAuthoritative = context.leadingBid === true || context.leadingBid === false;
+  return sameNominee
+    && Number.isSafeInteger(currentBid)
+    && currentBid >= pending.amount
+    && leaderIsAuthoritative;
+}
+
+/**
+ * Only a result that proves no ESPN click occurred may enter a generic retry
+ * class. A clicked result is terminally uncertain unless a separate,
+ * operation-specific acknowledgement (such as BID_SUPERSEDED) authorizes a
+ * new decision from newer authoritative state.
+ */
+export function shouldRetryPreClickResult(
+  result: DraftActionResultSummary,
+  retryableCodes: ReadonlySet<string>,
+) {
+  return result?.ok !== true
+    && result?.clicked !== true
+    && retryableCodes.has(String(result?.code || ""));
+}
 
 /**
  * A superseded bid is a terminal acknowledgement for the click that already

@@ -27,6 +27,16 @@ function snapshot(overrides = {}) {
       commandCenterSessionId: "command-center-doctor",
       commandCenterStartedAt: "2026-08-19T11:59:00.000Z",
       authenticatedImportAt: "2026-08-19T12:00:00.000Z",
+      authenticatedPlayerPool: {
+        schemaVersion: 1,
+        requestedCount: 500,
+        playerCount: 500,
+        uniquePlayerCount: 500,
+        fetchedAt: "2026-08-19T12:00:00.000Z",
+        leagueId: expected.id,
+        teamId: expected.teamId,
+        season: expected.season,
+      },
     },
     runtime: {
       capturedAt: "2026-08-19T12:00:04.000Z",

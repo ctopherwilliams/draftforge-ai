@@ -309,10 +309,13 @@ export function authenticatedEspnCaptureReceiptBindingMatchesAudit(
     || !isRecord(audit)) return false;
   const league = isRecord(audit.league) ? audit.league : null;
   const auditBinding = isRecord(audit.binding) ? audit.binding : null;
+  const authenticatedPlayerPool = auditBinding && isRecord(auditBinding.authenticatedPlayerPool)
+    ? auditBinding.authenticatedPlayerPool
+    : null;
   const safety = isRecord(audit.safety) ? audit.safety : null;
   const capturedAtMs = Date.parse(String(audit.capturedAt || ""));
   const importedAtMs = Date.parse(binding.capturedAt);
-  if (!league || !auditBinding || !safety
+  if (!league || !auditBinding || !authenticatedPlayerPool || !safety
     || !Number.isFinite(now)
     || !Number.isFinite(capturedAtMs)
     || !Number.isFinite(importedAtMs)
@@ -326,7 +329,15 @@ export function authenticatedEspnCaptureReceiptBindingMatchesAudit(
     || Number(auditBinding.tabId) !== binding.tabId
     || auditBinding.dashboardLoadedAt !== binding.dashboardLoadedAt
     || auditBinding.commandCenterSessionId !== binding.commandCenterSessionId
-    || auditBinding.authenticatedImportAt !== binding.capturedAt) return false;
+    || auditBinding.authenticatedImportAt !== binding.capturedAt
+    || authenticatedPlayerPool.schemaVersion !== 1
+    || authenticatedPlayerPool.requestedCount !== 500
+    || authenticatedPlayerPool.playerCount !== binding.profile.playerCount
+    || authenticatedPlayerPool.uniquePlayerCount !== binding.profile.playerCount
+    || authenticatedPlayerPool.fetchedAt !== binding.capturedAt
+    || String(authenticatedPlayerPool.leagueId || "") !== String(binding.profile.leagueId)
+    || Number(authenticatedPlayerPool.teamId) !== Number(binding.profile.teamId)
+    || Number(authenticatedPlayerPool.season) !== Number(binding.profile.season)) return false;
   const expected = buildAuthenticatedEspnCaptureProfile({
     league,
     espnPlayers: Array.from({ length: binding.profile.playerCount }),

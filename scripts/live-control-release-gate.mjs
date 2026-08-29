@@ -59,8 +59,8 @@ function terminate(child, signal = "SIGTERM") {
   }
 }
 
-async function runBoundedNode(arguments_, timeoutMs) {
-  const child = spawn(process.execPath, arguments_, {
+async function runBoundedCommand(executable, arguments_, timeoutMs) {
+  const child = spawn(executable, arguments_, {
     cwd: projectRoot,
     stdio: "inherit",
     detached: process.platform !== "win32",
@@ -93,6 +93,10 @@ async function runBoundedNode(arguments_, timeoutMs) {
   }
 }
 
+function runBoundedNode(arguments_, timeoutMs) {
+  return runBoundedCommand(process.execPath, arguments_, timeoutMs);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.length && !(args.length === 2 && args[0] === "--timeout-ms")) {
@@ -122,6 +126,11 @@ async function main() {
     ], 45_000);
     await runBoundedNode(["--expose-gc", "scripts/live-control-contention.mjs"], 40_000);
     await runBoundedNode(["scripts/live-control-production-path.mjs"], 30_000);
+    await runBoundedCommand(
+      process.platform === "win32" ? "npm.cmd" : "npm",
+      ["run", "test:visual"],
+      120_000,
+    );
     console.log(JSON.stringify({
       ok: true,
       code: "LIVE_CONTROL_RELEASE_GATE_PASSED",
@@ -130,6 +139,7 @@ async function main() {
       contentionWarmSeconds: 5,
       productionContentionSeconds: 25,
       productionPathBidChurnMs: 75,
+      visualScenarios: 10,
     }, null, 2));
   } catch (error) {
     console.error(JSON.stringify({ ok: false, code: "LIVE_CONTROL_RELEASE_GATE_FAILED", message: error instanceof Error ? error.message : String(error) }));

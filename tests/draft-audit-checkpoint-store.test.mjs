@@ -327,10 +327,21 @@ test("draft audit checkpoint round trips atomically with private permissions", a
   const directory = await mkdtemp(join(tmpdir(), "draftforge-audit-checkpoint-"));
   const checkpointPath = join(directory, "checkpoint.json");
   try {
-    const persisted = await persistDraftAuditCheckpoint([snapshot()], checkpointPath, capturedAt);
+    const acceptedSnapshot = snapshot();
+    const persisted = await persistDraftAuditCheckpoint([acceptedSnapshot], checkpointPath, capturedAt);
     assert.equal(persisted.snapshots.length, 1);
+    assert.equal(
+      persisted.snapshots[0].snapshot,
+      acceptedSnapshot,
+      "trusted materialization must return the exact accepted snapshot object",
+    );
     assert.equal((await stat(checkpointPath)).mode & 0o777, 0o600);
-    assert.equal(JSON.parse(await readFile(checkpointPath, "utf8")).schemaVersion, DRAFT_AUDIT_CHECKPOINT_SCHEMA);
+    const diskEnvelope = JSON.parse(await readFile(checkpointPath, "utf8"));
+    assert.equal(diskEnvelope.schemaVersion, DRAFT_AUDIT_CHECKPOINT_SCHEMA);
+    const parsedDisk = parsePersistedDraftAuditCheckpoint(diskEnvelope);
+    assert.equal(parsedDisk.ok, true, "independent disk bytes must pass the strict untrusted parser");
+    assert.equal(parsedDisk.value.snapshots[0].digest, persisted.snapshots[0].digest);
+    assert.equal(parsedDisk.value.snapshots[0].digest, draftAuditCheckpointDigest(parsedDisk.value.snapshots[0].snapshot));
     const loaded = await loadPersistedDraftAuditCheckpoint(checkpointPath);
     assert.equal(loaded.ok, true);
     assert.equal(loaded.value.snapshots[0].snapshot.league.id, "44050");

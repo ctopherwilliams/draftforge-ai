@@ -79,8 +79,12 @@ function serializedSnapshot(snapshot: DraftAuditSnapshot) {
   return JSON.stringify(snapshot);
 }
 
+function digestSerializedSnapshot(serialized: string) {
+  return `sha256:${createHash("sha256").update(serialized, "utf8").digest("hex")}`;
+}
+
 export function draftAuditCheckpointDigest(snapshot: DraftAuditSnapshot) {
-  return `sha256:${createHash("sha256").update(serializedSnapshot(snapshot), "utf8").digest("hex")}`;
+  return digestSerializedSnapshot(serializedSnapshot(snapshot));
 }
 
 /**
@@ -89,20 +93,32 @@ export function draftAuditCheckpointDigest(snapshot: DraftAuditSnapshot) {
  * digest and therefore becomes durability-critical by default.
  */
 export function draftAuditCheckpointCriticalDigest(snapshot: DraftAuditSnapshot) {
-  const value = JSON.parse(serializedSnapshot(snapshot)) as Record<string, unknown>;
+  const value = { ...snapshot } as unknown as Record<string, unknown>;
   delete value.capturedAt;
-  const runtime = value.runtime as Record<string, unknown> | undefined;
-  if (runtime) delete runtime.capturedAt;
-  const safety = value.safety as Record<string, unknown> | undefined;
-  if (safety) delete safety.actionState;
-  const liveControl = value.liveControl as Record<string, unknown> | undefined;
-  const freshness = liveControl?.freshness as Record<string, unknown> | undefined;
+  const runtimeSource = value.runtime as Record<string, unknown> | undefined;
+  if (runtimeSource) {
+    const runtime = { ...runtimeSource };
+    delete runtime.capturedAt;
+    value.runtime = runtime;
+  }
+  const safetySource = value.safety as Record<string, unknown> | undefined;
+  if (safetySource) {
+    const safety = { ...safetySource };
+    delete safety.actionState;
+    value.safety = safety;
+  }
+  const liveControlSource = value.liveControl as Record<string, unknown> | undefined;
+  const freshnessSource = liveControlSource?.freshness as Record<string, unknown> | undefined;
+  const liveControl = liveControlSource ? { ...liveControlSource } : undefined;
+  const freshness = freshnessSource ? { ...freshnessSource } : undefined;
   if (freshness) {
     delete freshness.espnContextAt;
     delete freshness.pickFeedAt;
     delete freshness.pickFeedObservedAt;
     delete freshness.lastActionAt;
+    if (liveControl) liveControl.freshness = freshness;
   }
+  if (liveControl) value.liveControl = liveControl;
   delete value.operator;
   delete value.leagueBoard;
   return `sha256:${createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex")}`;
@@ -156,28 +172,49 @@ function activeIrreversibleCheckpoint(snapshot: DraftAuditSnapshot) {
   return hasIrreversibleHistory(snapshot) && !evaluateDraftAuditSnapshot(snapshot).complete;
 }
 
-function boundedSnapshots(snapshots: Iterable<DraftAuditSnapshot>) {
-  const latest = new Map<string, DraftAuditSnapshot>();
+type MaterializedDraftAuditSnapshot = Readonly<{
+  snapshot: DraftAuditSnapshot;
+  serialized: string;
+  bytes: number;
+  digest: string;
+}>;
+
+function materializeDraftAuditSnapshot(snapshot: DraftAuditSnapshot): MaterializedDraftAuditSnapshot {
+  if (!isDraftAuditSnapshot(snapshot)) throw new Error("DRAFT_AUDIT_CHECKPOINT_SNAPSHOT_INVALID");
+  const serialized = serializedSnapshot(snapshot);
+  const bytes = Buffer.byteLength(serialized, "utf8");
+  if (bytes > MAX_DRAFT_AUDIT_CHECKPOINT_ENTRY_BYTES) {
+    throw new Error("DRAFT_AUDIT_CHECKPOINT_ENTRY_TOO_LARGE");
+  }
+  return {
+    snapshot,
+    serialized,
+    bytes,
+    digest: digestSerializedSnapshot(serialized),
+  };
+}
+
+function boundedSnapshotEntries(snapshots: Iterable<DraftAuditSnapshot>) {
+  const latest = new Map<string, MaterializedDraftAuditSnapshot>();
   for (const snapshot of snapshots) {
-    if (!isDraftAuditSnapshot(snapshot)) throw new Error("DRAFT_AUDIT_CHECKPOINT_SNAPSHOT_INVALID");
-    if (Buffer.byteLength(serializedSnapshot(snapshot), "utf8") > MAX_DRAFT_AUDIT_CHECKPOINT_ENTRY_BYTES) {
-      throw new Error("DRAFT_AUDIT_CHECKPOINT_ENTRY_TOO_LARGE");
-    }
+    const materialized = materializeDraftAuditSnapshot(snapshot);
     const key = checkpointKey(snapshot);
     const previous = latest.get(key);
-    if (!previous || Date.parse(snapshot.capturedAt) >= Date.parse(previous.capturedAt)) latest.set(key, snapshot);
+    if (!previous || Date.parse(snapshot.capturedAt) >= Date.parse(previous.snapshot.capturedAt)) {
+      latest.set(key, materialized);
+    }
   }
   const ordered = [...latest.values()].sort(
-    (left, right) => Date.parse(right.capturedAt) - Date.parse(left.capturedAt),
+    (left, right) => Date.parse(right.snapshot.capturedAt) - Date.parse(left.snapshot.capturedAt),
   );
-  const protectedSnapshots = ordered.filter(activeIrreversibleCheckpoint);
+  const protectedSnapshots = ordered.filter(({ snapshot }) => activeIrreversibleCheckpoint(snapshot));
   if (protectedSnapshots.length > MAX_DRAFT_AUDIT_CHECKPOINTS) {
     throw new Error("DRAFT_AUDIT_CHECKPOINT_ACTIVE_CAPACITY_EXCEEDED");
   }
-  const protectedKeys = new Set(protectedSnapshots.map(checkpointKey));
+  const protectedKeys = new Set(protectedSnapshots.map(({ snapshot }) => checkpointKey(snapshot)));
   return [
     ...protectedSnapshots,
-    ...ordered.filter((snapshot) => !protectedKeys.has(checkpointKey(snapshot))),
+    ...ordered.filter(({ snapshot }) => !protectedKeys.has(checkpointKey(snapshot))),
   ].slice(0, MAX_DRAFT_AUDIT_CHECKPOINTS);
 }
 
@@ -316,17 +353,18 @@ export async function persistDraftAuditCheckpoint(
 ) {
   if (!isStrictUtcTimestamp(writtenAt)) throw new Error("DRAFT_AUDIT_CHECKPOINT_TIME_INVALID");
   if (!exactReleaseRevision(releaseRevision)) throw new Error("DRAFT_AUDIT_CHECKPOINT_RELEASE_INVALID");
-  const bounded = boundedSnapshots(snapshots);
+  const bounded = boundedSnapshotEntries(snapshots);
   if (!bounded.length) throw new Error("DRAFT_AUDIT_CHECKPOINT_EMPTY");
-  const candidate = {
+  const candidate = deepFreeze({
     schemaVersion: DRAFT_AUDIT_CHECKPOINT_SCHEMA,
     releaseRevision,
     writtenAt,
-    snapshots: bounded.map((snapshot) => ({ digest: draftAuditCheckpointDigest(snapshot), snapshot })),
-  };
-  const parsed = parsePersistedDraftAuditCheckpoint(candidate, releaseRevision);
-  if (!parsed.ok) throw new Error(parsed.code);
-  const serialized = `${JSON.stringify(parsed.value)}\n`;
+    snapshots: bounded.map(({ digest, snapshot }) => ({ digest, snapshot })),
+  });
+  const serializedEntries = bounded.map(({ digest, serialized: snapshot }) => (
+    `{"digest":${JSON.stringify(digest)},"snapshot":${snapshot}}`
+  )).join(",");
+  const serialized = `{"schemaVersion":${JSON.stringify(DRAFT_AUDIT_CHECKPOINT_SCHEMA)},"releaseRevision":${JSON.stringify(releaseRevision)},"writtenAt":${JSON.stringify(writtenAt)},"snapshots":[${serializedEntries}]}\n`;
   if (Buffer.byteLength(serialized, "utf8") > MAX_DRAFT_AUDIT_CHECKPOINT_BYTES) {
     throw new Error("DRAFT_AUDIT_CHECKPOINT_TOO_LARGE");
   }
@@ -357,7 +395,7 @@ export async function persistDraftAuditCheckpoint(
     await handle.close().catch(() => {});
     if (!renamed) await unlink(temporaryPath).catch(() => {});
   }
-  return parsed.value;
+  return candidate;
 }
 
 export async function quarantinePersistedDraftAuditCheckpoint(

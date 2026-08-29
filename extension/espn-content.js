@@ -46,6 +46,8 @@ const inFlightActionResults = new Map();
 const completedActionResults = new Map();
 const actionRequestSignatures = new Map();
 const minimumActionAuthorizationEpochs = new Map();
+let auctionClickUncertainty = null;
+const auctionUncertaintyArmTokens = new Map();
 const MAX_COMPLETED_ACTION_RESULTS = 64;
 
 function exactDraftNamespace(url, leagueId, teamId, season) {
@@ -194,7 +196,7 @@ function nominationTransition(context, action) {
   if (nominationMatchesAction(context, action) && Number(context?.currentBid) > 0) {
     return { ok: false, code: "NOMINATION_OPENING_PRICE_UNCONFIRMED", message: `ESPN did not expose the exact $${expectedOpeningBid || "unknown"} opening offer for this nominee.` };
   }
-  if (context.nominatedPlayer || Number(context.currentBid || 0) > 0) {
+  if (context.auctionTransactionMode === "OFFER" || Number(context.currentBid || 0) > 0) {
     return { ok: false, code: "NOMINATION_ACTIVE", message: "ESPN started another salary-cap nomination before this confirmation control appeared." };
   }
   if (!context.onClock) {
@@ -208,6 +210,217 @@ function rosterHasPlayer(context, playerId) {
   return Number.isInteger(targetId)
     && targetId !== 0
     && (context?.ownRoster || []).some((entry) => Number(entry.playerId) === targetId);
+}
+
+function exactEspnPlayerId(value) {
+  const playerId = Number(value || 0);
+  return Number.isInteger(playerId) && ![0, -1].includes(playerId) ? playerId : null;
+}
+
+function auctionClickUncertaintyReconciled(context, pending = auctionClickUncertainty) {
+  if (!pending) return true;
+  const playerId = exactEspnPlayerId(pending.playerId);
+  if (!playerId) return false;
+  if (String(context?.leagueId || "") !== String(pending.leagueId || "")
+    || Number(context?.teamId || 0) !== Number(pending.teamId || 0)
+    || Number(context?.season || 0) !== Number(pending.season || 0)) {
+    return false;
+  }
+  const exactRosterEvidence = (context?.ownRoster || []).some((entry) => (
+    exactEspnPlayerId(entry?.playerId) === playerId
+  ));
+  const exactSaleEvidence = (context?.auctionSales || []).some((sale) => (
+    exactEspnPlayerId(sale?.playerId) === playerId
+  ));
+  if (exactRosterEvidence || exactSaleEvidence) return true;
+
+  const liveNomineeId = exactEspnPlayerId(context?.nominatedPlayerId);
+  if (liveNomineeId && liveNomineeId !== playerId
+    && context?.auctionTransactionMode === "OFFER"
+    && context?.auctionTransactionReady === true) return true;
+  if (liveNomineeId !== playerId || context?.auctionTransactionMode !== "OFFER") return false;
+  const liveBid = Number(context?.currentBid || 0);
+  if (!Number.isInteger(liveBid) || liveBid < Number(pending.amount || 0)) return false;
+  if (pending.operation === "NOMINATE") {
+    return context?.auctionTransactionReady === true;
+  }
+  // A clicked bid is not reconciled by the unchanged pre-click offer. ESPN
+  // must expose at least the intended price and one explicit leader state.
+  return pending.operation === "BID"
+    && context?.auctionTransactionReady === true
+    && (liveBid > Number(pending.amount || 0) || typeof context?.leadingBid === "boolean");
+}
+
+function reconcileAuctionClickUncertainty() {
+  if (!auctionClickUncertainty) return true;
+  let context;
+  try {
+    context = observeAuctionTracking(getContext(false));
+  } catch {
+    return false;
+  }
+  if (!auctionClickUncertaintyReconciled(context)) return false;
+  auctionClickUncertainty = null;
+  return true;
+}
+
+function auctionClickUncertaintyFailure(action) {
+  if (!["BID", "NOMINATE"].includes(action?.operation) || reconcileAuctionClickUncertainty()) return null;
+  return {
+    ok: false,
+    retryable: false,
+    code: "AUCTION_CLICK_UNCERTAIN",
+    message: "A prior ESPN auction click has not been reconciled by exact player-id, price, leader, roster, or sale evidence. DraftForge fenced every bid and nomination in this tab.",
+    action,
+  };
+}
+
+function rememberAuctionClickUncertainty(action, result) {
+  if (!["BID", "NOMINATE"].includes(action?.operation) || result?.ok === true || result?.clicked !== true) return;
+  const exactAction = result?.action || action;
+  let context = {};
+  try {
+    context = getContext(false);
+  } catch {
+    // The click itself can invalidate or rerender the live DOM. Missing room
+    // evidence only makes the latch stricter; it must never erase uncertainty.
+  }
+  auctionClickUncertainty = {
+    operation: action.operation,
+    playerId: exactEspnPlayerId(exactAction?.playerId),
+    amount: Number(exactAction?.amount || action?.amount || 0),
+    leagueId: String(exactAction?.expectedLeagueId || action?.expectedLeagueId || context.leagueId || ""),
+    teamId: Number(exactAction?.expectedTeamId || action?.expectedTeamId || context.teamId || 0),
+    season: Number(exactAction?.expectedSeason || action?.expectedSeason || context.season || 0),
+  };
+}
+
+function auctionUncertaintyEvidence(context) {
+  return {
+    contextCapturedAt: new Date().toISOString(),
+    nominatedPlayerId: exactEspnPlayerId(context?.nominatedPlayerId),
+    auctionTransactionMode: context?.auctionTransactionMode,
+    auctionTransactionReady: context?.auctionTransactionReady === true,
+    currentBid: Number(context?.currentBid || 0),
+    leadingBid: typeof context?.leadingBid === "boolean" ? context.leadingBid : null,
+    ownRosterPlayerIds: (context?.ownRoster || []).map((entry) => exactEspnPlayerId(entry?.playerId)).filter(Boolean),
+    auctionSalePlayerIds: (context?.auctionSales || []).map((sale) => exactEspnPlayerId(sale?.playerId)).filter(Boolean),
+  };
+}
+
+async function backgroundAuctionUncertainty(mode, action, evidence, token, stage) {
+  try {
+    if (!chrome.runtime?.id) throw new Error("EXTENSION_CONTEXT_INVALID");
+    return await chrome.runtime.sendMessage({
+      type: "AUCTION_CLICK_UNCERTAINTY",
+      payload: { mode, action, ...(evidence ? { evidence } : {}), ...(token ? { token } : {}), ...(stage ? { stage } : {}) },
+    });
+  } catch {
+    return { ok: false, code: "AUCTION_UNCERTAINTY_STORAGE_UNVERIFIED" };
+  }
+}
+
+async function durableAuctionUncertaintyFailure(action) {
+  if (!["BID", "NOMINATE"].includes(action?.operation)) return null;
+  const checked = await backgroundAuctionUncertainty("CHECK", action);
+  if (checked?.ok !== true) {
+    return {
+      ok: false,
+      retryable: false,
+      code: String(checked?.code || "AUCTION_UNCERTAINTY_STORAGE_UNVERIFIED"),
+      message: "DraftForge could not verify the durable auction-click fence. No ESPN auction control was clicked.",
+      action,
+    };
+  }
+  if (!checked.pending) return null;
+  auctionClickUncertainty = checked.pending;
+  let context;
+  try { context = observeAuctionTracking(getContext(false)); }
+  catch { return auctionClickUncertaintyFailure(action); }
+  if (!auctionClickUncertaintyReconciled(context, checked.pending)) return auctionClickUncertaintyFailure(action);
+  const reconciled = await backgroundAuctionUncertainty("RECONCILE", action, auctionUncertaintyEvidence(context));
+  if (reconciled?.ok !== true) return auctionClickUncertaintyFailure(action);
+  auctionClickUncertainty = null;
+  auctionUncertaintyArmTokens.clear();
+  return null;
+}
+
+async function armDurableAuctionUncertainty(action, stage) {
+  const signature = actionExecutionSignature(action);
+  const armed = await backgroundAuctionUncertainty("ARM", action, null, auctionUncertaintyArmTokens.get(signature), stage);
+  if (armed?.ok === true) {
+    if (typeof armed.token !== "string" || armed.token.length < 16) {
+      return {
+        ok: false,
+        retryable: false,
+        code: "AUCTION_UNCERTAINTY_TOKEN_UNVERIFIED",
+        message: "DraftForge could not verify the durable auction-click ownership token. No further ESPN auction control was clicked.",
+        action,
+      };
+    }
+    auctionUncertaintyArmTokens.set(signature, armed.token);
+    auctionClickUncertainty = armed.pending || {
+      operation: action.operation,
+      playerId: exactEspnPlayerId(action.playerId),
+      amount: Number(action.amount || 0),
+      leagueId: String(action.expectedLeagueId || ""),
+      teamId: Number(action.expectedTeamId || 0),
+      season: Number(action.expectedSeason || 0),
+    };
+    return null;
+  }
+  // The background can durably persist a permit and then reject its final
+  // lease recheck. When it returns the exact ownership token, prove that this
+  // caller has not clicked and retire only that exact record before surfacing
+  // the original authorization failure. A lost response retains the fence.
+  if (typeof armed?.token === "string" && armed.token.length >= 16 && armed?.pending) {
+    auctionUncertaintyArmTokens.set(signature, armed.token);
+    auctionClickUncertainty = armed.pending;
+    const retirementFailure = await retireDurableAuctionUncertaintyBeforeClick(action, stage);
+    if (retirementFailure) return retirementFailure;
+    return {
+      ok: false,
+      retryable: false,
+      code: String(armed?.code || "AUCTION_UNCERTAINTY_AUTHORITY_REJECTED"),
+      message: "The durable auction permit lost authority before any irreversible ESPN click and was safely retired.",
+      preClickPermitRetired: true,
+      action,
+    };
+  }
+  return {
+    ok: false,
+    retryable: false,
+    code: String(armed?.code || "AUCTION_UNCERTAINTY_STORAGE_UNVERIFIED"),
+    message: "DraftForge could not durably arm the auction-click fence. No further ESPN auction control was clicked.",
+    action,
+  };
+}
+
+async function retireDurableAuctionUncertaintyBeforeClick(action, stage) {
+  const signature = actionExecutionSignature(action);
+  const token = auctionUncertaintyArmTokens.get(signature);
+  if (typeof token !== "string" || token.length < 16) {
+    return {
+      ok: false,
+      retryable: false,
+      code: "AUCTION_UNCERTAINTY_TOKEN_UNVERIFIED",
+      message: "DraftForge could not prove ownership of the pre-click auction permit. The durable fence remains armed.",
+      action,
+    };
+  }
+  const retired = await backgroundAuctionUncertainty("CANCEL_PRE_CLICK", action, null, token, stage);
+  if (retired?.ok !== true) {
+    return {
+      ok: false,
+      retryable: false,
+      code: String(retired?.code || "AUCTION_UNCERTAINTY_STORAGE_UNVERIFIED"),
+      message: "DraftForge could not verify retirement of the exact pre-click auction permit. The durable fence remains armed.",
+      action,
+    };
+  }
+  auctionUncertaintyArmTokens.delete(signature);
+  auctionClickUncertainty = null;
+  return null;
 }
 
 function playerRowFor(node) {
@@ -717,12 +930,14 @@ function getContext(advanceTracking = true) {
     && String(trackedOwnNomination.leagueId) === String(leagueId || "")
     && Number(trackedOwnNomination.teamId) === Number(teamId || 0)
     && Number(trackedOwnNomination.season) === Number(season || 0);
-  const trackedPlayerMatches = trackedRoomMatches && (
-    (Number(trackedOwnNomination.playerId) !== 0
-      && Number(nominatedPlayerId) !== 0
-      && Number(trackedOwnNomination.playerId) === Number(nominatedPlayerId))
-    || playerNamesMatch(trackedOwnNomination.playerName, nominatedPlayerName || "")
-  );
+  const trackedPlayerId = Number(trackedOwnNomination?.playerId || 0);
+  const liveNomineeId = Number(nominatedPlayerId || 0);
+  const bothPlayerIdsExact = trackedPlayerId !== 0 && liveNomineeId !== 0;
+  const trackedPlayerMatches = Boolean(trackedRoomMatches && (
+    bothPlayerIdsExact
+      ? trackedPlayerId === liveNomineeId
+      : playerNamesMatch(trackedOwnNomination.playerName, nominatedPlayerName || "")
+  ));
   const trackedNominationPending = trackedRoomMatches
     && Number(trackedOwnNomination?.pendingUntil || 0) > Date.now();
   if (advanceTracking && trackedOwnNomination && (!trackedRoomMatches
@@ -1198,6 +1413,18 @@ function currentAuctionTransaction() {
   return activeAuctionTransaction(ownTeam, selectingPick, ownPick);
 }
 
+function exactSelectedNominationControl(action, control) {
+  const requestedPlayerId = exactEspnPlayerId(action?.playerId);
+  if (!requestedPlayerId || !control || !isElementVisible(control)) return false;
+  const transaction = currentAuctionTransaction();
+  if (transaction?.mode !== "NOMINATION" || transaction.ready !== true) return false;
+  const selected = visibleNodesWithin(transaction.root, "[data-testid='player-selected']");
+  if (selected.length !== 1) return false;
+  const identity = exactPlayerIdentityWithin(selected[0]);
+  if (identity.ready !== true || exactEspnPlayerId(identity.playerId) !== requestedPlayerId) return false;
+  return visibleNodesWithin(transaction.root, "button, [role='button']").includes(control);
+}
+
 function setNativeValue(input, value) {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
   setter?.call(input, value);
@@ -1327,7 +1554,8 @@ function preflightAction(action, context) {
       message: "ESPN has not yet exposed one exact winner and salary for the prior sale. DraftForge stopped rather than act from stale budgets or roster state.",
     };
   }
-  if (action.operation === "NOMINATE" && (context.nominatedPlayer || Number(context.currentBid || 0) > 0)) {
+  if (action.operation === "NOMINATE"
+    && (context.auctionTransactionMode === "OFFER" || Number(context.currentBid || 0) > 0)) {
     return { ok: false, code: "NOMINATION_ACTIVE", message: "ESPN already has an active salary-cap nominee, so no nomination was sent." };
   }
   if (action.operation === "BID" && context.auctionTransactionMode !== "OFFER") {
@@ -1561,7 +1789,6 @@ async function executeAction(action) {
     if (requestResultKey) rememberCompletedAction(requestResultKey, shared);
     return resultForAction(shared, action);
   }
-
   const execution = actionExecutionTail
     .catch(() => {})
     .then(() => executeActionNow(action));
@@ -1585,11 +1812,16 @@ async function executeAction(action) {
 async function executeActionNow(action) {
   const deadlineFailure = actionDeadlineFailure(action);
   if (deadlineFailure) return deadlineFailure;
+  const uncertaintyFailure = await durableAuctionUncertaintyFailure(action);
+  if (uncertaintyFailure) return uncertaintyFailure;
   const actionDeadlineAt = Math.min(Number(action.notAfter), Date.now() + SELECT_ACTION_BUDGET_MS);
   let currentAction = { ...action, actionDeadlineAt };
   while (true) {
     const result = await executeActionAttempt(currentAction);
-    if (!result?.retryAction) return result;
+    if (!result?.retryAction) {
+      rememberAuctionClickUncertainty(currentAction, result);
+      return result;
+    }
     if (Date.now() >= actionDeadlineAt) {
       return { ok: false, code: "ACTION_TIMEOUT", message: "ESPN did not confirm the exact player quickly enough. DraftForge stopped this candidate while time remained to re-rank." };
     }
@@ -1647,15 +1879,49 @@ async function acknowledgeNomination(action) {
 }
 
 async function executeActionAttempt(action) {
-  const context = getContext();
-  const preflight = preflightAction(action, context);
-  if (!preflight.action) return preflight;
-  action = preflight.action;
-
   let resolvedAction = action;
   let usedPlayerSearch = null;
   let usedPositionFilter = null;
-  let preliminaryClickSent = false;
+  let clickStage = null;
+  let activeDurablePermitStage = null;
+  const terminalizeAfterAnyClick = (result) => {
+    if (!clickStage || result?.ok === true) return result;
+    const message = String(result?.message || "ESPN changed state before the action could complete.")
+      .replace(/\s*No ESPN control was clicked\.?$/i, "");
+    const clickDescription = clickStage === "PLAYER_ROW"
+      ? "the preliminary player-row click"
+      : clickStage === "CONFIRMATION"
+        ? "the final confirmation click"
+        : "the irreversible action click";
+    return {
+      ...result,
+      clicked: true,
+      retryable: false,
+      message: `${message} ESPN may have received ${clickDescription}, so DraftForge will not retry it blindly.`,
+      action: result?.action || resolvedAction,
+    };
+  };
+  const failAfterDurablePermitBeforeIrreversibleClick = async (failure, stage) => {
+    const retirementFailure = await retireDurableAuctionUncertaintyBeforeClick(action, stage);
+    if (retirementFailure) return terminalizeAfterAnyClick(retirementFailure);
+    activeDurablePermitStage = null;
+    const preliminaryClicked = clickStage === "PLAYER_ROW";
+    // A nomination row only prepares ESPN's reversible nomination form. Once
+    // the exact pre-submit permit is retired, it must not be remembered as an
+    // unresolved bid/nomination transaction.
+    if (preliminaryClicked) clickStage = null;
+    return {
+      ...failure,
+      ...(preliminaryClicked ? { preliminaryClicked: true } : {}),
+      action: failure?.action || resolvedAction,
+    };
+  };
+  try {
+    const context = getContext();
+    const preflight = preflightAction(action, context);
+    if (!preflight.action) return preflight;
+    action = preflight.action;
+    resolvedAction = action;
   if (action.operation === "SELECT" || action.operation === "NOMINATE") {
     const exactMetadata = (Array.isArray(action.candidates) ? action.candidates : []).find((candidate) => (
       Number(candidate?.playerId || 0) === Number(action.playerId || 0)
@@ -1795,7 +2061,7 @@ async function executeActionAttempt(action) {
     if (visibleCandidate) resolvedAction = { ...action, ...visibleCandidate };
   }
 
-  const selectControl = action.operation === "SELECT" || action.operation === "NOMINATE"
+  let selectControl = action.operation === "SELECT" || action.operation === "NOMINATE"
     ? visiblePlayerControl(resolvedAction.playerId, resolvedAction.playerName)
     : null;
   const resolvedPlayerId = playerIdForControl(selectControl);
@@ -1844,28 +2110,65 @@ async function executeActionAttempt(action) {
   }
 
   if (action.operation === "NOMINATE") {
+    selectControl.scrollIntoView({ block: "center" });
     const deadlineFailure = actionDeadlineFailure(action);
     if (deadlineFailure) return deadlineFailure;
     const authorizationFailure = await verifiedActionAuthorizationFailure(action);
     if (authorizationFailure) return authorizationFailure;
-    if (playerIdForControl(selectControl) !== requestedPlayerId) {
+    const postAuthorizationDeadlineFailure = actionDeadlineFailure(action);
+    if (postAuthorizationDeadlineFailure) return postAuthorizationDeadlineFailure;
+    const postAuthorizationPreflight = preflightAction(action, getContext());
+    if (!postAuthorizationPreflight.action) return postAuthorizationPreflight;
+    action = postAuthorizationPreflight.action;
+    selectControl = visiblePlayerControl(requestedPlayerId, resolvedAction.playerName);
+    if (!selectControl || playerIdForControl(selectControl) !== requestedPlayerId) {
       return { ok: false, code: "PLAYER_CONTROL_DRIFT", message: "ESPN's nomination row changed player identity before selection." };
     }
-    selectControl.scrollIntoView({ block: "center" });
+    const durableArmFailure = await armDurableAuctionUncertainty(action, "PLAYER_ROW");
+    if (durableArmFailure) return durableArmFailure;
+    activeDurablePermitStage = "PLAYER_ROW";
+    if (!chrome.runtime?.id) {
+      return failAfterDurablePermitBeforeIrreversibleClick({ ok: false, code: "EXTENSION_CONTEXT_INVALID", message: "The extension context changed after the durable permit. No ESPN control was clicked." }, "PLAYER_ROW");
+    }
+    const postPermitAuthorizationFailure = actionAuthorizationFailure(action);
+    if (postPermitAuthorizationFailure) return failAfterDurablePermitBeforeIrreversibleClick(postPermitAuthorizationFailure, "PLAYER_ROW");
+    const postPermitDeadlineFailure = actionDeadlineFailure(action);
+    if (postPermitDeadlineFailure) return failAfterDurablePermitBeforeIrreversibleClick(postPermitDeadlineFailure, "PLAYER_ROW");
+    const postPermitPreflight = preflightAction(action, getContext());
+    if (!postPermitPreflight.action) return failAfterDurablePermitBeforeIrreversibleClick(postPermitPreflight, "PLAYER_ROW");
+    action = postPermitPreflight.action;
+    selectControl = visiblePlayerControl(requestedPlayerId, resolvedAction.playerName);
+    if (!selectControl || playerIdForControl(selectControl) !== requestedPlayerId) {
+      return failAfterDurablePermitBeforeIrreversibleClick({ ok: false, code: "PLAYER_CONTROL_DRIFT", message: "ESPN's nomination row changed player identity after the durable permit." }, "PLAYER_ROW");
+    }
+    clickStage = "PLAYER_ROW";
+    activeDurablePermitStage = null;
+    rememberPendingOwnNomination(context, resolvedAction);
     selectControl.click();
-    preliminaryClickSent = true;
+    // ESPN can apply the selected nominee after our bounded confirmation
+    // window. Persist TARGET/DRAIN as soon as the exact row is clicked so a
+    // late transition or recovery can never turn a DRAIN into price
+    // enforcement. The producer clears this only when authoritative room
+    // state proves a different nominee/room or the bounded pending selection
+    // never became active.
   }
   if (action.operation === "SELECT" && !directSelect) {
+    selectControl.scrollIntoView({ block: "center" });
     const deadlineFailure = actionDeadlineFailure(action);
     if (deadlineFailure) return deadlineFailure;
     const authorizationFailure = await verifiedActionAuthorizationFailure(action);
     if (authorizationFailure) return authorizationFailure;
-    if (playerIdForControl(selectControl) !== requestedPlayerId) {
+    const postAuthorizationDeadlineFailure = actionDeadlineFailure(action);
+    if (postAuthorizationDeadlineFailure) return postAuthorizationDeadlineFailure;
+    const postAuthorizationPreflight = preflightAction(action, getContext());
+    if (!postAuthorizationPreflight.action) return postAuthorizationPreflight;
+    action = postAuthorizationPreflight.action;
+    selectControl = visiblePlayerControl(requestedPlayerId, resolvedAction.playerName);
+    if (!selectControl || playerIdForControl(selectControl) !== requestedPlayerId) {
       return { ok: false, code: "PLAYER_CONTROL_DRIFT", message: "ESPN's player row changed identity before selection." };
     }
-    selectControl.scrollIntoView({ block: "center" });
+    clickStage = "PLAYER_ROW";
     selectControl.click();
-    preliminaryClickSent = true;
   }
 
   const exactIncrementalBidControl = () => {
@@ -1891,7 +2194,11 @@ async function executeActionAttempt(action) {
       : null;
   };
   const exactDraftControl = () => [...document.querySelectorAll(`button.Button--draft[data-player-id="${CSS.escape(String(resolvedPlayerId))}"], button.Button--draft[data-playerid="${CSS.escape(String(resolvedPlayerId))}"]`)]
-    .find(isElementVisible) || null;
+    .find(isElementVisible)
+    || (() => {
+      const replacement = visiblePlayerControl(resolvedPlayerId, resolvedAction.playerName);
+      return replacement && /draft/i.test(replacement.textContent || "") ? replacement : null;
+    })();
   const submitWindowMs = action.operation === "BID"
     ? 180
     : action.operation === "NOMINATE"
@@ -1916,7 +2223,7 @@ async function executeActionAttempt(action) {
       const transition = nominationTransition(getContext(), resolvedAction);
       if (transition) {
         if (usedPlayerSearch instanceof HTMLInputElement) setNativeValue(usedPlayerSearch, "");
-        return transition;
+        return terminalizeAfterAnyClick(transition);
       }
     }
     submit = action.operation === "SELECT"
@@ -1935,7 +2242,7 @@ async function executeActionAttempt(action) {
       : null;
     if (nominationResult) {
       if (usedPlayerSearch instanceof HTMLInputElement) setNativeValue(usedPlayerSearch, "");
-      return nominationResult;
+      return terminalizeAfterAnyClick(nominationResult);
     }
     if (action.operation === "BID") {
       const retryAction = retryBidAction(action, latest);
@@ -1944,20 +2251,20 @@ async function executeActionAttempt(action) {
         ? { ok: false, code: "BID_CHANGED", message: "The ESPN offer changed before the bid control could be sent." }
         : { ok: false, code: "BID_OUT_OF_SEQUENCE", message: "ESPN no longer exposes the exact incremental offer control." };
     }
-    return { ok: false, code: "ACTION_NOT_FOUND", message: "The ESPN confirmation control was not found. ESPN may have changed its draft-room layout." };
+    return terminalizeAfterAnyClick({ ok: false, code: "ACTION_NOT_FOUND", message: "The ESPN confirmation control was not found. ESPN may have changed its draft-room layout." });
   }
 
   if (action.operation === "SELECT") {
     const submitPlayerId = playerIdForControl(submit);
     if (submitPlayerId !== requestedPlayerId) {
-      return { ok: false, code: "PLAYER_CONTROL_DRIFT", message: "ESPN's Draft control does not match the recommended player." };
+      return terminalizeAfterAnyClick({ ok: false, code: "PLAYER_CONTROL_DRIFT", message: "ESPN's Draft control does not match the recommended player." });
     }
   }
 
   if (customAmountSurface) {
     const settledAgain = exactSettledCustomBidSurface(action.amount);
     if (!settledAgain) {
-      return { ok: false, code: "CUSTOM_AMOUNT_UNCONFIRMED", message: "ESPN did not preserve the exact custom dollar amount on one unique visible bid form." };
+      return terminalizeAfterAnyClick({ ok: false, code: "CUSTOM_AMOUNT_UNCONFIRMED", message: "ESPN did not preserve the exact custom dollar amount on one unique visible bid form." });
     }
     customAmountSurface = settledAgain;
     submit = settledAgain.submit;
@@ -1966,16 +2273,16 @@ async function executeActionAttempt(action) {
   const preSubmitContext = getContext();
   const minimumPreSubmitWindow = action.operation === "SELECT" ? MIN_SNAKE_SELECTION_WINDOW_SECONDS : MIN_ACTION_WINDOW_SECONDS;
   if (!hasSafeActionWindow(preSubmitContext, minimumPreSubmitWindow)) {
-    return { ok: false, code: "CLOCK_TOO_SHORT", message: `Only ${preSubmitContext.remainingSeconds ?? "unknown"} seconds remain. DraftForge stopped before an unsafe action.` };
+    return terminalizeAfterAnyClick({ ok: false, code: "CLOCK_TOO_SHORT", message: `Only ${preSubmitContext.remainingSeconds ?? "unknown"} seconds remain. DraftForge stopped before an unsafe action.` });
   }
   // The pick number can remain mounted while ESPN transitions the active team.
   // Never let the stale initial on-clock state override the final authoritative
   // own-clock marker/team identity immediately before the click.
   if (action.operation !== "BID" && preSubmitContext.onClock !== true) {
-    return { ok: false, code: "NOT_ON_CLOCK", message: "ESPN changed turns before the action could be sent." };
+    return terminalizeAfterAnyClick({ ok: false, code: "NOT_ON_CLOCK", message: "ESPN changed turns before the action could be sent." });
   }
   if (action.operation === "SELECT" && Number(action.expectedPick) > 0 && Number(preSubmitContext.currentPick) !== Number(action.expectedPick)) {
-    return { ok: false, code: "PICK_CHANGED", message: "The active ESPN pick changed before the selection could be sent." };
+    return terminalizeAfterAnyClick({ ok: false, code: "PICK_CHANGED", message: "The active ESPN pick changed before the selection could be sent." });
   }
   if (action.operation === "BID") {
     const bidPreflight = preflightAction(action, preSubmitContext);
@@ -1985,7 +2292,7 @@ async function executeActionAttempt(action) {
   if (customAmountSurface) {
     const finalSurface = exactSettledCustomBidSurface(action.amount);
     if (!finalSurface) {
-      return { ok: false, code: "CUSTOM_AMOUNT_DRIFT", message: "ESPN changed the exact custom dollar form immediately before submission." };
+      return terminalizeAfterAnyClick({ ok: false, code: "CUSTOM_AMOUNT_DRIFT", message: "ESPN changed the exact custom dollar form immediately before submission." });
     }
     submit = finalSurface.submit;
   }
@@ -1994,14 +2301,97 @@ async function executeActionAttempt(action) {
     sendToCompanion({ type: "ESPN_ACTION_RESOLVED", payload: resolvedAction });
   }
   const finalDeadlineFailure = actionDeadlineFailure(action);
-  if (finalDeadlineFailure) return finalDeadlineFailure;
+  if (finalDeadlineFailure) return terminalizeAfterAnyClick(finalDeadlineFailure);
   const finalAuthorizationFailure = await verifiedActionAuthorizationFailure(action);
-  if (finalAuthorizationFailure) return preliminaryClickSent
-    ? { ...finalAuthorizationFailure, clicked: true, retryable: false }
-    : finalAuthorizationFailure;
+  if (finalAuthorizationFailure) return terminalizeAfterAnyClick(finalAuthorizationFailure);
+  const postAuthorizationDeadlineFailure = actionDeadlineFailure(action);
+  if (postAuthorizationDeadlineFailure) return terminalizeAfterAnyClick(postAuthorizationDeadlineFailure);
+  const postAuthorizationContext = getContext();
+  if (action.operation === "NOMINATE") {
+    const transition = nominationTransition(postAuthorizationContext, resolvedAction);
+    if (transition) return terminalizeAfterAnyClick(transition);
+  }
+  const postAuthorizationPreflight = preflightAction(action, postAuthorizationContext);
+  if (!postAuthorizationPreflight.action) return terminalizeAfterAnyClick(postAuthorizationPreflight);
+  action = postAuthorizationPreflight.action;
+  if (needsCustomAmountSurface) {
+    const replacementSurface = exactSettledCustomBidSurface(action.amount);
+    if (!replacementSurface) {
+      return terminalizeAfterAnyClick({ ok: false, code: "ACTION_CONTROL_DRIFT", message: "ESPN replaced the exact custom-dollar action control during authorization." });
+    }
+    customAmountSurface = replacementSurface;
+    submit = replacementSurface.submit;
+  } else {
+    submit = action.operation === "SELECT"
+      ? exactDraftControl()
+      : action.operation === "BID"
+        ? exactIncrementalBidControl()
+        : exactNominationControl();
+  }
+  if (!submit || !isElementVisible(submit)
+    || (action.operation === "SELECT" && playerIdForControl(submit) !== requestedPlayerId)) {
+    return terminalizeAfterAnyClick({ ok: false, code: "ACTION_CONTROL_DRIFT", message: "ESPN replaced the exact action control during authorization." });
+  }
+  if (action.operation === "NOMINATE" && !exactSelectedNominationControl(action, submit)) {
+    return terminalizeAfterAnyClick({
+      ok: false,
+      code: "NOMINATION_SELECTED_PLAYER_DRIFT",
+      message: "ESPN's active nomination transaction no longer exposes one exact selected-player id matching the requested player.",
+    });
+  }
+  if (["BID", "NOMINATE"].includes(action.operation)) {
+    const durableArmFailure = await armDurableAuctionUncertainty(action, "SUBMIT");
+    if (durableArmFailure) {
+      if (durableArmFailure.preClickPermitRetired === true) {
+        const preliminaryClicked = clickStage === "PLAYER_ROW";
+        if (preliminaryClicked) clickStage = null;
+        return { ...durableArmFailure, ...(preliminaryClicked ? { preliminaryClicked: true } : {}) };
+      }
+      return terminalizeAfterAnyClick(durableArmFailure);
+    }
+    activeDurablePermitStage = "SUBMIT";
+    if (!chrome.runtime?.id) {
+      return failAfterDurablePermitBeforeIrreversibleClick({ ok: false, code: "EXTENSION_CONTEXT_INVALID", message: "The extension context changed after the durable permit. No further ESPN control was clicked." }, "SUBMIT");
+    }
+    const postPermitAuthorizationFailure = actionAuthorizationFailure(action);
+    if (postPermitAuthorizationFailure) return failAfterDurablePermitBeforeIrreversibleClick(postPermitAuthorizationFailure, "SUBMIT");
+    const postPermitDeadlineFailure = actionDeadlineFailure(action);
+    if (postPermitDeadlineFailure) return failAfterDurablePermitBeforeIrreversibleClick(postPermitDeadlineFailure, "SUBMIT");
+    const postPermitContext = getContext();
+    if (action.operation === "NOMINATE") {
+      const transition = nominationTransition(postPermitContext, resolvedAction);
+      if (transition) return terminalizeAfterAnyClick(transition);
+    }
+    const postPermitPreflight = preflightAction(action, postPermitContext);
+    if (!postPermitPreflight.action) return failAfterDurablePermitBeforeIrreversibleClick(postPermitPreflight, "SUBMIT");
+    action = postPermitPreflight.action;
+    if (needsCustomAmountSurface) {
+      const replacementSurface = exactSettledCustomBidSurface(action.amount);
+      if (!replacementSurface) {
+        return failAfterDurablePermitBeforeIrreversibleClick({ ok: false, code: "ACTION_CONTROL_DRIFT", message: "ESPN replaced the exact custom-dollar action control after the durable permit." }, "SUBMIT");
+      }
+      customAmountSurface = replacementSurface;
+      submit = replacementSurface.submit;
+    } else {
+      submit = action.operation === "BID" ? exactIncrementalBidControl() : exactNominationControl();
+    }
+    if (!submit || !isElementVisible(submit)) {
+      return failAfterDurablePermitBeforeIrreversibleClick({ ok: false, code: "ACTION_CONTROL_DRIFT", message: "ESPN replaced the exact action control after the durable permit." }, "SUBMIT");
+    }
+    if (action.operation === "NOMINATE" && !exactSelectedNominationControl(action, submit)) {
+      return failAfterDurablePermitBeforeIrreversibleClick({
+        ok: false,
+        code: "NOMINATION_SELECTED_PLAYER_DRIFT",
+        message: "ESPN's active nomination transaction changed exact selected-player identity after the durable permit.",
+      }, "SUBMIT");
+    }
+  }
+  let submittedAt = Date.now();
+  resolvedAction = { ...resolvedAction, submittedAt };
+  clickStage = "SUBMIT";
+  activeDurablePermitStage = null;
   submit.click();
   if (action.operation === "NOMINATE") rememberPendingOwnNomination(preSubmitContext, resolvedAction);
-  let submittedAt = Date.now();
   await new Promise((resolve) => setTimeout(resolve, 75));
   if (usedPositionFilter && String(usedPositionFilter.value) !== "-1") {
     setNativeSelectValue(usedPositionFilter, "-1");
@@ -2029,9 +2419,50 @@ async function executeActionAttempt(action) {
         message: "The command center revoked this action after ESPN received the first click. DraftForge did not click the confirmation.",
       };
     }
-    confirmation.click();
+    const postAuthorizationDeadlineFailure = actionDeadlineFailure(action);
+    if (postAuthorizationDeadlineFailure) {
+      return {
+        ...postAuthorizationDeadlineFailure,
+        clicked: true,
+        retryable: false,
+        code: "ACTION_EXPIRED_AFTER_SUBMIT",
+        message: "The action expired during final authorization after ESPN received the first click. DraftForge did not click the confirmation or retry.",
+        action: { ...resolvedAction, submittedAt },
+      };
+    }
+    const postAuthorizationContext = getContext();
+    const postAuthorizationPreflight = preflightAction(action, postAuthorizationContext);
+    if (!postAuthorizationPreflight.action) return terminalizeAfterAnyClick(postAuthorizationPreflight);
+    action = postAuthorizationPreflight.action;
+    let replacementConfirmation = exactVisibleModalConfirmation(resolvedAction);
+    if (!replacementConfirmation) {
+      return terminalizeAfterAnyClick({ ok: false, code: "CONFIRMATION_CONTROL_DRIFT", message: "ESPN replaced or removed the exact confirmation control during authorization." });
+    }
+    if (["BID", "NOMINATE"].includes(action.operation)) {
+      const durableArmFailure = await armDurableAuctionUncertainty(action, "CONFIRMATION");
+      if (durableArmFailure) return terminalizeAfterAnyClick(durableArmFailure);
+      activeDurablePermitStage = "CONFIRMATION";
+      if (!chrome.runtime?.id) {
+        return terminalizeAfterAnyClick({ ok: false, code: "EXTENSION_CONTEXT_INVALID", message: "The extension context changed after the durable confirmation permit." });
+      }
+      const postPermitAuthorizationFailure = actionAuthorizationFailure(action);
+      if (postPermitAuthorizationFailure) return terminalizeAfterAnyClick(postPermitAuthorizationFailure);
+      const postPermitDeadlineFailure = actionDeadlineFailure(action);
+      if (postPermitDeadlineFailure) return terminalizeAfterAnyClick(postPermitDeadlineFailure);
+      const postPermitPreflight = preflightAction(action, getContext());
+      if (!postPermitPreflight.action) return terminalizeAfterAnyClick(postPermitPreflight);
+      action = postPermitPreflight.action;
+      replacementConfirmation = exactVisibleModalConfirmation(resolvedAction);
+      if (!replacementConfirmation) {
+        return terminalizeAfterAnyClick({ ok: false, code: "CONFIRMATION_CONTROL_DRIFT", message: "ESPN replaced or removed the exact confirmation control after the durable permit." });
+      }
+    }
+    clickStage = "CONFIRMATION";
+    activeDurablePermitStage = null;
+    submittedAt = Date.now();
+    resolvedAction = { ...resolvedAction, submittedAt };
+    replacementConfirmation.click();
   }
-  if (confirmation) submittedAt = Date.now();
   resolvedAction = { ...resolvedAction, submittedAt };
   sendToCompanion({ type: "ESPN_ACTION_SUBMITTED", payload: { ...resolvedAction, submittedAt } });
   if (action.operation === "SELECT") {
@@ -2067,6 +2498,35 @@ async function executeActionAttempt(action) {
   }
   if (usedPlayerSearch instanceof HTMLInputElement) setNativeValue(usedPlayerSearch, "");
   return { ok: true, code: "SUBMITTED", message: `${action.operation.toLowerCase()} submitted in ESPN.`, action: resolvedAction };
+  } catch {
+    const failure = {
+      ok: false,
+      code: clickStage === "PLAYER_ROW" ? "PRELIMINARY_CLICK_UNCERTAIN" : clickStage ? "ACTION_CLICK_UNCERTAIN" : "ACTION_EXECUTION_FAILED",
+      message: clickStage
+        ? "ESPN state could not be read after an action control was clicked."
+        : "ESPN state could not be read safely, so DraftForge sent no action.",
+      action: resolvedAction,
+    };
+    if (["PLAYER_ROW", "SUBMIT"].includes(activeDurablePermitStage)) {
+      const retirementFailure = await retireDurableAuctionUncertaintyBeforeClick(
+        action,
+        activeDurablePermitStage,
+      );
+      if (retirementFailure) return terminalizeAfterAnyClick(retirementFailure);
+      activeDurablePermitStage = null;
+      const preliminaryClicked = clickStage === "PLAYER_ROW";
+      if (preliminaryClicked) clickStage = null;
+      return {
+        ...failure,
+        code: "ACTION_EXECUTION_FAILED",
+        ...(preliminaryClicked ? { preliminaryClicked: true } : {}),
+        message: preliminaryClicked
+          ? "ESPN state changed after the reversible player-row selection, but the exact pre-submit permit was safely retired."
+          : "ESPN state could not be read before any irreversible click, and the exact durable permit was safely retired.",
+      };
+    }
+    return clickStage ? terminalizeAfterAnyClick(failure) : failure;
+  }
 }
 
 const ACTIVE_CONTEXT_DEBOUNCE_MS = 25;

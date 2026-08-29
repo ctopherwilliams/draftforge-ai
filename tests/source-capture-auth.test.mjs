@@ -48,10 +48,12 @@ function baseArtifact(overrides = {}) {
         },
       },
     },
-    espnPlayers: [
-      { id: 1, name: "Player One", pos: "QB", status: "ACTIVE" },
-      { id: 2, name: "Player Two", pos: "RB", status: "ACTIVE" },
-    ],
+    espnPlayers: Array.from({ length: 500 }, (_, index) => ({
+      id: index + 1,
+      name: index === 0 ? "Player One" : index === 1 ? "Player Two" : `Player ${index + 1}`,
+      pos: index % 2 === 0 ? "QB" : "RB",
+      status: "ACTIVE",
+    })),
     ...overrides,
   };
 }
@@ -68,6 +70,16 @@ async function artifact(overrides = {}, proofOverrides = {}) {
     league: input.league,
     espnPlayers: input.espnPlayers,
   });
+  input.authenticatedPlayerPoolEnvelope = {
+    schemaVersion: 1,
+    requestedCount: 500,
+    playerCount: 500,
+    uniquePlayerCount: 500,
+    fetchedAt: input.capturedAt,
+    leagueId: input.league.id,
+    teamId: input.league.teamId,
+    season: input.league.season,
+  };
   input.authenticatedEspnCapture = {
     ...buildAuthenticatedEspnCaptureAttestation({
       capturedAt: input.capturedAt,
@@ -88,7 +100,7 @@ test("source capture accepts exact bytes only with the SHA-256 proof", async () 
   assert.equal(verified.capturedAt, capturedAt);
   assert.deepEqual(verified.league, input.league);
   assert.deepEqual(verified.espnPlayers, input.espnPlayers);
-  assert.equal(verified.authenticatedProfile.playerCount, 2);
+  assert.equal(verified.authenticatedProfile.playerCount, 500);
   assert.match(verified.proof.digest, /^sha256:[a-f0-9]{64}$/);
 });
 
@@ -207,6 +219,16 @@ function matchingAudit(input, binding, auditCapturedAt = new Date(now - 1_000).t
       dashboardLoadedAt: binding.dashboardLoadedAt,
       commandCenterSessionId: binding.commandCenterSessionId,
       authenticatedImportAt: binding.capturedAt,
+      authenticatedPlayerPool: {
+        schemaVersion: 1,
+        requestedCount: 500,
+        playerCount: 500,
+        uniquePlayerCount: 500,
+        fetchedAt: binding.capturedAt,
+        leagueId: input.league.id,
+        teamId: input.league.teamId,
+        season: input.league.season,
+      },
     },
     safety: { extensionConnected: true, settingsConfirmed: true, sourceCoverage: 5 },
   };
@@ -287,7 +309,7 @@ test("CLI validates loopback origin and consumes the receipt through the same se
 test("CLI consumes proof before provider I/O, rechecks freshness, and writes atomically", async () => {
   const source = await readFile(new URL("../scripts/capture-source-snapshot.mjs", import.meta.url), "utf8");
   const consumeAt = source.lastIndexOf("await consumeAuthenticatedEspnCaptureReceipt");
-  const publicFetchAt = source.lastIndexOf("await fetchIntelligenceSnapshot");
+  const publicFetchAt = source.lastIndexOf("await fetchCapturedIntelligenceSnapshot");
   const currentAt = source.lastIndexOf("evaluateCurrentSourceSnapshot(snapshot");
   const temporaryWriteAt = source.lastIndexOf("writeFileSync(temporary");
   const renameAt = source.lastIndexOf("renameSync(temporary, output)");

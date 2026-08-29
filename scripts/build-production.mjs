@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { execFileSync, spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -22,19 +22,59 @@ import {
   writeServedReleaseManifest,
 } from "./release-integrity-lib.mjs";
 
-export function productionListenerPids(execFileSyncImpl = execFileSync) {
-  try {
-    return [...new Set(String(execFileSyncImpl(
-      "/usr/sbin/lsof",
-      ["-nP", "-iTCP:3000", "-sTCP:LISTEN", "-t"],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    ) || "").trim().split(/\s+/).filter(Boolean).map(Number).filter(Number.isInteger))];
-  } catch (error) {
-    // lsof exits 1 when the selector has no matches. Any other failure means we
-    // cannot prove that mutating dist is safe.
-    if (error?.status === 1) return [];
-    throw new Error("PRODUCTION_BUILD_LISTENER_CHECK_FAILED");
+export const TRUSTED_PRODUCTION_LSOF_PATHS = Object.freeze(
+  process.platform === "darwin"
+    ? ["/usr/sbin/lsof", "/usr/bin/lsof", "/bin/lsof"]
+    : ["/usr/bin/lsof", "/usr/sbin/lsof", "/bin/lsof"],
+);
+export const PRODUCTION_LISTENER_PROBE_TIMEOUT_MS = 2_000;
+export const PRODUCTION_LISTENER_PROBE_MAX_BUFFER_BYTES = 8_192;
+
+function productionListenerCheckFailed() {
+  return new Error("PRODUCTION_BUILD_LISTENER_CHECK_FAILED");
+}
+
+function parseProductionListenerPids(output) {
+  const trimmed = String(output || "").trim();
+  if (!trimmed) return [];
+  const tokens = trimmed.split(/\s+/);
+  if (!tokens.every((token) => /^[1-9]\d*$/.test(token))) {
+    throw productionListenerCheckFailed();
   }
+  const pids = tokens.map(Number);
+  if (!pids.every(Number.isSafeInteger)) throw productionListenerCheckFailed();
+  return [...new Set(pids)];
+}
+
+export function productionListenerPids(
+  spawnSyncImpl = spawnSync,
+  trustedLsofPaths = TRUSTED_PRODUCTION_LSOF_PATHS,
+) {
+  const candidates = [...new Set(trustedLsofPaths.map(String).filter((path) => path.startsWith("/")))];
+  if (!candidates.length) throw productionListenerCheckFailed();
+  for (const lsofPath of candidates) {
+    const result = spawnSyncImpl(
+      lsofPath,
+      ["-nP", "-iTCP:3000", "-sTCP:LISTEN", "-t"],
+      {
+        encoding: "utf8",
+        timeout: PRODUCTION_LISTENER_PROBE_TIMEOUT_MS,
+        killSignal: "SIGKILL",
+        maxBuffer: PRODUCTION_LISTENER_PROBE_MAX_BUFFER_BYTES,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    if (result?.error?.code === "ENOENT") continue;
+    const stdout = String(result?.stdout || "");
+    const stderr = String(result?.stderr || "");
+    if (result?.error || result?.signal || stderr.trim()) throw productionListenerCheckFailed();
+    // lsof exits 1 with no output when the selector has no matches. A zero
+    // status must prove at least one strict PID; every other result is unsafe.
+    if (result?.status === 1 && !stdout.trim()) return [];
+    if (result?.status !== 0 || !stdout.trim()) throw productionListenerCheckFailed();
+    return parseProductionListenerPids(stdout);
+  }
+  throw productionListenerCheckFailed();
 }
 
 export async function buildProduction({
@@ -42,8 +82,8 @@ export async function buildProduction({
   leasePath = defaultReleaseArtifactLeasePath(repoRoot),
   freezePath = defaultLiveCodeFreezePath(repoRoot),
   spawnImpl = spawn,
-  execFileSyncImpl = execFileSync,
-  listenerPidsImpl = () => productionListenerPids(execFileSyncImpl),
+  listenerProbeImpl = spawnSync,
+  listenerPidsImpl = () => productionListenerPids(listenerProbeImpl),
   inspectReleaseImpl = inspectReleaseRevision,
 } = {}) {
   const exactRepoRoot = resolve(repoRoot);

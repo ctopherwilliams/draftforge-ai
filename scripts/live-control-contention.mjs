@@ -302,6 +302,10 @@ async function runCadence({ samples: sampleCount, intervalMs, phaseOffsetMs, sta
 
 async function runContentionEpoch({ cadencePlan, compactUrl, availabilityUrl, auditUrl, commonHeaders, jsonHeaders, audit }) {
   const cadenceStartedAt = performance.now() + 25;
+  // The browser serializes the audit outside the server process in production.
+  // Keep that fixed client-side allocation out of the measured server event
+  // loop so this gate isolates the route and mutation queue under contention.
+  const auditRequestBody = JSON.stringify({ operation: "AUDIT", audit });
   const [normalObserver, burstObserver, writer, availability] = await Promise.all([
     runCadence({
       ...cadencePlan.normalObserver,
@@ -319,7 +323,7 @@ async function runContentionEpoch({ cadencePlan, compactUrl, availabilityUrl, au
       operation: () => measuredFetch(auditUrl, {
         method: "POST",
         headers: jsonHeaders,
-        body: JSON.stringify({ operation: "AUDIT", audit }),
+        body: auditRequestBody,
       }),
     }),
     runCadence({

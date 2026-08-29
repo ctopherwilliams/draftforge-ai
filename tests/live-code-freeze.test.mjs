@@ -16,7 +16,12 @@ import { EventEmitter } from "node:events";
 import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
 import { Worker } from "node:worker_threads";
-import { buildProduction } from "../scripts/build-production.mjs";
+import {
+  buildProduction,
+  PRODUCTION_LISTENER_PROBE_MAX_BUFFER_BYTES,
+  PRODUCTION_LISTENER_PROBE_TIMEOUT_MS,
+  productionListenerPids,
+} from "../scripts/build-production.mjs";
 import {
   armLiveCodeFreezeAfterDoctor,
   clearLiveCodeFreezeAfterAudit,
@@ -969,6 +974,60 @@ test("npm lifecycle blocks release work and routes every start through the lease
   assert.match(packageJson.scripts.start, /start-production\.mjs/);
   assert.doesNotMatch(packageJson.scripts.start, /live-code-freeze/);
   assert.doesNotMatch(packageJson.scripts.start, /vinext start/);
+});
+
+test("production listener probe uses trusted cross-platform fallbacks and strict PID parsing", () => {
+  const calls = [];
+  const pids = productionListenerPids((command, args, options) => {
+    calls.push({ command, args, options });
+    if (command === "/usr/sbin/lsof") {
+      return { error: Object.assign(new Error("missing"), { code: "ENOENT" }) };
+    }
+    return { status: 0, stdout: "4321\n9876\n4321\n", stderr: "" };
+  }, ["/usr/sbin/lsof", "/usr/bin/lsof"]);
+
+  assert.deepEqual(pids, [4321, 9876]);
+  assert.deepEqual(calls.map(({ command }) => command), ["/usr/sbin/lsof", "/usr/bin/lsof"]);
+  assert.deepEqual(calls[1].args, ["-nP", "-iTCP:3000", "-sTCP:LISTEN", "-t"]);
+  assert.deepEqual(calls[1].options.stdio, ["ignore", "pipe", "pipe"]);
+  assert.equal(calls[1].options.timeout, PRODUCTION_LISTENER_PROBE_TIMEOUT_MS);
+  assert.equal(calls[1].options.killSignal, "SIGKILL");
+  assert.equal(calls[1].options.maxBuffer, PRODUCTION_LISTENER_PROBE_MAX_BUFFER_BYTES);
+});
+
+test("production listener probe distinguishes an empty selection from an unsafe probe failure", () => {
+  assert.deepEqual(productionListenerPids(
+    () => ({ status: 1, stdout: "", stderr: "" }),
+    ["/usr/bin/lsof"],
+  ), []);
+  assert.throws(
+    () => productionListenerPids(
+      () => ({ status: 0, stdout: "4321\n", stderr: "warning" }),
+      ["/usr/bin/lsof"],
+    ),
+    /PRODUCTION_BUILD_LISTENER_CHECK_FAILED/,
+  );
+  assert.throws(
+    () => productionListenerPids(
+      () => ({ status: 0, stdout: "not-a-pid\n", stderr: "" }),
+      ["/usr/bin/lsof"],
+    ),
+    /PRODUCTION_BUILD_LISTENER_CHECK_FAILED/,
+  );
+  assert.throws(
+    () => productionListenerPids(
+      () => ({ error: Object.assign(new Error("missing"), { code: "ENOENT" }) }),
+      ["/usr/bin/lsof", "/usr/sbin/lsof"],
+    ),
+    /PRODUCTION_BUILD_LISTENER_CHECK_FAILED/,
+  );
+  assert.throws(
+    () => productionListenerPids(
+      () => ({ status: null, signal: "SIGKILL", stdout: "", stderr: "", error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }) }),
+      ["/usr/bin/lsof"],
+    ),
+    /PRODUCTION_BUILD_LISTENER_CHECK_FAILED/,
+  );
 });
 
 test("a start lease or live production listener blocks build before the served manifest is removed", async () => {

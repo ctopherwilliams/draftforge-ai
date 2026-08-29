@@ -153,9 +153,10 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   ]);
   assert.match(background, /chrome\.storage\.session/);
   assert.match(background, /LIVE_ROOM_WATCH_STORAGE_KEY/);
-  assert.match(background, /sanitizedLiveRoomWatch/);
+  assert.match(background, /sanitizeLiveRoomWatchForStorage/);
   assert.match(background, /persistLiveRoomWatch/);
   assert.match(background, /restoreLiveRoomWatch/);
+  assert.match(background, /validStoredLiveRoomWatch\(stored, \{\s+commandCenterSessionIdIsValid: validCommandCenterSessionId/);
   assert.doesNotMatch(background, /espn_s2|SWID|memberId|cookie/i);
   assert.match(background, /authorizeRuntimeMessage\(message\?\.type, sender\.url \|\| sender\.tab\?\.url \|\| ""\)/);
   assert.doesNotMatch(content, /espn_s2|SWID/);
@@ -178,6 +179,11 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(background, /draftForgeTabCount/);
   assert.match(background, /espnTabCount/);
   assert.match(background, /managedCleanupReady: true/);
+  const firstAuctionLease = background.indexOf("const serverLease = await verifyServerDispatchLease(action)");
+  const durableAuctionWrite = background.indexOf("await writeAuctionUncertainties(records)", firstAuctionLease);
+  const finalAuctionLease = background.indexOf("const finalServerLease = await verifyServerDispatchLease(action)", durableAuctionWrite);
+  assert.ok(firstAuctionLease >= 0 && durableAuctionWrite > firstAuctionLease && finalAuctionLease > durableAuctionWrite,
+    "durable auction ARM must verify the server lease both before persistence and after storage readback");
   assert.match(background, /chrome\.runtime\.getManifest\(\)\.version/);
   assert.match(background, /keepLiveRoomVisible/);
   assert.match(background, /chrome\.windows\.create\(\{ tabId: roomTabId, focused: false, type: "normal" \}\)/);
@@ -259,7 +265,8 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(page, /workspaceRoleRef\.current !== "writer"/);
   assert.match(page, /if \(workspaceRole !== "writer"\) return;/);
   assert.match(page, /Read-only observer: this tab cannot submit picks, nominations, or bids/);
-  assert.match(page, /runtimeDiagnostics\?\.managedCleanupReady === true/);
+  assert.match(page, /draftRuntimeWorkspaceReady\(runtimeDiagnostics\)/);
+  assert.match(page, /Auto-Draft disarmed: the managed Chrome workspace is no longer exactly one DraftForge tab and one ESPN tab/);
   assert.match(page, /sendToExtension\("CLOSE_PRACTICE_ROOM"/);
   assert.match(page, /resolvePracticeRoomCleanupRequest/);
   assert.match(page, /sendToExtension\("ARM_LIVE_ROOM_WATCH"/);

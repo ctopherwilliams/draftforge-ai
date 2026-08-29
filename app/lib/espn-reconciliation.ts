@@ -40,6 +40,32 @@ export function espnNameMatchesPlayer(value: string | null | undefined, player: 
   return Boolean(nickname && (normalizeName(player.name).includes(nickname) || normalizeName(player.team) === nickname));
 }
 
+function resolveUniqueEspnPlayer(
+  players: DraftPlayer[],
+  identity: {
+    playerId?: unknown;
+    playerName?: string | null;
+    playerTeam?: string | null;
+    position?: string | null;
+  },
+) {
+  const exactId = Number(identity.playerId);
+  if (Number.isInteger(exactId) && ![0, -1].includes(exactId)) {
+    const exactMatches = players.filter((player) => player.id === exactId);
+    if (exactMatches.length === 1) return exactMatches[0];
+  }
+  const playerName = String(identity.playerName || "").trim();
+  if (!playerName) return undefined;
+  const team = normalizeName(identity.playerTeam);
+  const position = String(identity.position || "").trim().toUpperCase();
+  const matches = players.filter((player) => (
+    espnNameMatchesPlayer(playerName, player)
+    && (!team || normalizeName(player.team) === team)
+    && (!position || player.pos === position)
+  ));
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 export function liveEspnRecommendations(
   recommendations: Recommendation[],
   roomContext: EspnContext | undefined,
@@ -84,10 +110,12 @@ export function resolveOwnRoster(roomContext: EspnContext | undefined, players: 
     // Prefer ESPN's exact draft-pool identity whenever it resolves. Defense
     // rows can expose a team/logo id instead, so use the visible name only when
     // the supplied id is absent from the authenticated player pool.
-    const exactPlayer = players.find((player) => player.id === Number(entry.playerId));
-    const playerId = exactPlayer?.id
-      ?? players.find((player) => espnNameMatchesPlayer(entry.name, player))?.id
-      ?? 0;
+    const playerId = resolveUniqueEspnPlayer(players, {
+      playerId: entry.playerId,
+      playerName: entry.name,
+      playerTeam: entry.playerTeam,
+      position: entry.position,
+    })?.id ?? 0;
     return playerId !== 0 && playerId !== -1
       ? [{ playerId, amount: Math.max(0, Number(entry.amount || 0)), index }]
       : [];
@@ -97,8 +125,12 @@ export function resolveOwnRoster(roomContext: EspnContext | undefined, players: 
 export function resolveAuctionSales(roomContext: EspnContext | undefined, league: LeagueSettings, players: DraftPlayer[]) {
   if (!roomContext?.inDraftRoom) return [];
   return (roomContext?.auctionSales || []).flatMap((sale, index) => {
-    const player = players.find((candidate) => candidate.id === Number(sale.playerId))
-      || players.find((candidate) => normalizeName(candidate.name) === normalizeName(sale.playerName));
+    const player = resolveUniqueEspnPlayer(players, {
+      playerId: sale.playerId,
+      playerName: sale.playerName,
+      playerTeam: sale.playerTeam,
+      position: sale.position,
+    });
     const team = resolveUniqueEspnTeam(sale.teamName, league.teams);
     const amount = Number(sale.amount || 0);
     if (!player || !team || amount < 1) return [];
@@ -110,7 +142,7 @@ export function resolveAuctionSales(roomContext: EspnContext | undefined, league
 export function resolveSnakeDraftPicks(roomContext: EspnContext | undefined, league: LeagueSettings, players: DraftPlayer[]) {
   if (league.draftType !== "SNAKE" || !roomContext?.inDraftRoom || !Array.isArray(roomContext.snakePicks)) return [];
   return roomContext.snakePicks.flatMap((pick) => {
-    const player = players.find((candidate) => espnNameMatchesPlayer(pick.playerName, candidate));
+    const player = resolveUniqueEspnPlayer(players, { playerName: pick.playerName });
     const team = resolveUniqueEspnTeam(pick.teamName, league.teams);
     const round = Number(pick.round);
     const roundPick = Number(pick.roundPick);
