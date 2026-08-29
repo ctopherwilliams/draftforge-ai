@@ -85,9 +85,10 @@ test("visual certification serves its own built artifact without weakening produ
   assert.match(visualCertification, /client\.call\("Runtime\.evaluate"/);
   assert.match(visualCertification, /atob\(encoded\)/);
   assert.match(visualCertification, /createImageBitmap/);
-  assert.match(visualCertification, /imageSmoothingQuality = 'high'/);
+  assert.match(visualCertification, /new OffscreenCanvas\(bitmap\.width, bitmap\.height\)/);
+  assert.match(visualCertification, /left\.sum \* right\.count > right\.sum \* left\.count/);
   assert.match(visualCertification, /\^\[0-9a-f\]\{16\}\$/);
-  assert.match(visualCertification, /chrome-canvas-high-dhash-9x8-bt601-v1/);
+  assert.match(visualCertification, /chrome-offscreen-tile-average-dhash-9x8-bt601-v1/);
   assert.match(visualCertification, /visual baseline schema or hash algorithm mismatch/);
   assert.match(visualCertification, /visual baseline scenario set mismatch/);
   assert.match(visualCertification, /visual baseline scenario is malformed/);

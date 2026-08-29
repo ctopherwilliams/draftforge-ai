@@ -11,7 +11,7 @@ const chromeBinary = process.env.CHROME_BIN
 const baselinePath = resolve("tests/fixtures/ui-visual-baseline.json");
 const outputDirectory = resolve("outputs/ui-regression/latest");
 const visualBaselineSchemaVersion = 2;
-const visualHashAlgorithm = "chrome-canvas-high-dhash-9x8-bt601-v1";
+const visualHashAlgorithm = "chrome-offscreen-tile-average-dhash-9x8-bt601-v1";
 const visualHashThreshold = 10;
 const printBaseline = process.argv.includes("--print-baseline");
 const scenarios = [
@@ -102,25 +102,40 @@ async function perceptualHash(client, screenshotBase64, expectedWidth, expectedH
         if (bitmap.width !== ${expectedWidth} || bitmap.height !== ${expectedHeight}) {
           throw new Error('screenshot dimensions do not match the certified viewport');
         }
-        const canvas = document.createElement('canvas');
-        canvas.width = 9;
-        canvas.height = 8;
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
         const context = canvas.getContext('2d', { alpha: false, willReadFrequently: true });
         if (!context) throw new Error('2d canvas unavailable');
-        context.imageSmoothingEnabled = true;
-        context.imageSmoothingQuality = 'high';
-        context.drawImage(bitmap, 0, 0, 9, 8);
-        const rgba = context.getImageData(0, 0, 9, 8).data;
-        if (rgba.length !== 288) throw new Error('unexpected perceptual-hash pixel count');
-        const gray = [];
-        for (let offset = 0; offset < rgba.length; offset += 4) {
-          gray.push(Math.round((rgba[offset] * 299 + rgba[offset + 1] * 587 + rgba[offset + 2] * 114) / 1000));
+        context.drawImage(bitmap, 0, 0);
+        const rgba = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
+        if (rgba.length !== bitmap.width * bitmap.height * 4) throw new Error('unexpected screenshot pixel count');
+        const tiles = [];
+        for (let tileY = 0; tileY < 8; tileY += 1) {
+          const yStart = Math.floor(tileY * bitmap.height / 8);
+          const yEnd = Math.floor((tileY + 1) * bitmap.height / 8);
+          for (let tileX = 0; tileX < 9; tileX += 1) {
+            const xStart = Math.floor(tileX * bitmap.width / 9);
+            const xEnd = Math.floor((tileX + 1) * bitmap.width / 9);
+            let sum = 0;
+            let count = 0;
+            for (let y = yStart; y < yEnd; y += 1) {
+              for (let x = xStart; x < xEnd; x += 1) {
+                const offset = (y * bitmap.width + x) * 4;
+                sum += rgba[offset] * 299 + rgba[offset + 1] * 587 + rgba[offset + 2] * 114;
+                count += 1;
+              }
+            }
+            tiles.push({ sum, count });
+          }
         }
-        if (gray.length !== 72) throw new Error('unexpected perceptual-hash luminance count');
+        if (tiles.length !== 72 || tiles.some(({ count }) => count <= 0)) {
+          throw new Error('unexpected perceptual-hash tile count');
+        }
         let hash = 0n;
         for (let y = 0; y < 8; y += 1) {
           for (let x = 0; x < 8; x += 1) {
-            hash = (hash << 1n) | BigInt(gray[y * 9 + x] > gray[y * 9 + x + 1] ? 1 : 0);
+            const left = tiles[y * 9 + x];
+            const right = tiles[y * 9 + x + 1];
+            hash = (hash << 1n) | BigInt(left.sum * right.count > right.sum * left.count ? 1 : 0);
           }
         }
         return hash.toString(16).padStart(16, '0');
@@ -390,6 +405,8 @@ try {
     const changes = Object.entries(results).map(([name, result]) => ({
       name,
       distance: hamming(result.hash, baseline.scenarios[name].hash),
+      hash: result.hash,
+      baselineHash: baseline.scenarios[name].hash,
       screenshot: result.screenshot,
     }));
     const regressions = changes.filter((change) => change.distance > visualHashThreshold);
