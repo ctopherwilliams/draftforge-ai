@@ -54,3 +54,12 @@ jobs:
 
       - name: Run fail-closed live-control, chaos, load, contention, production-path, and visual gates
         run: npm run test:live-control
+
+      - name: Upload visual diagnostics after a failed gate
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: visual-regression-${{ github.run_id }}-${{ github.run_attempt }}
+          path: outputs/ui-regression/latest/*.png
+          if-no-files-found: ignore
+          retention-days: 3
