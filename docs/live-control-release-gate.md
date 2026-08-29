@@ -19,6 +19,25 @@ The installed Chrome companion and DraftForge dashboard are the only production
 action path. Chat and terminal monitors may only issue GET requests to the
 compact loopback control view.
 
+The browser writer is not identified by league alone. Its authority tuple
+includes the exact DraftForge tab, ESPN tab, immutable audit session,
+per-document command-center ID, ESPN producer ID, and binding generation. A
+1.5-second writer lease is minted only by explicit bind, verified recovery, or
+`APP_HELLO`. A heartbeat or action request may renew only authority that is
+still live; neither can mint or resurrect an expired lease. Every explicit
+establish rotates generation. Storage restore and handoff cleanup are
+serialized and conditional on the exact identity plus generation, so an old
+completion cannot delete or replace a newer binding. Delayed action results
+from another audit session, app document, or ESPN producer are ignored.
+
+During same-authority dashboard replacement, an unchanged ESPN room may emit
+only a heartbeat. The background may use that heartbeat for one-shot recovery
+only when an exact watched room exists. A verified successor preserves the
+established authority and receives a finite cancellation floor for the
+superseded writer; a distinct successor receives a full revoke. No ordinary
+heartbeat adds another writer or bypasses expiry. Tests must prove this
+double-arm path before release.
+
 `npm run draft-day:status` is the preferred one-shot chat query. It performs
 exactly one loopback GET with a 750 ms timeout and 64 KiB response cap. The
 server publishes the control envelope, league board, and observer-health result
@@ -60,6 +79,11 @@ Run the focused live-control gate after the candidate worktree stops changing:
 ```bash
 npm run test:live-control
 ```
+
+After packaging, `config/draft-day-release.json`, the unpacked extension tree,
+and `public/draftforge-espn-companion.zip` must agree on version, source-file
+count, source SHA-256, and ZIP SHA-256. Any mismatch is a release failure, even
+when unit tests pass.
 
 The gate is bounded to three minutes by default, starts each child in its own
 process group, forwards termination signals, and kills a timed-out child group.

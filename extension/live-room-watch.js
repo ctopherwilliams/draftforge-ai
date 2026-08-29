@@ -124,12 +124,17 @@ export function sanitizeLiveRoomWatchForStorage(watch) {
       ? watch.processingTabId
       : null,
     commandCenterSessionId: String(watch.commandCenterSessionId || ""),
+    commandCenterDocumentId: String(watch.commandCenterDocumentId || ""),
   };
 }
 
 export function validStoredLiveRoomWatch(
   watch,
-  { now = Date.now(), commandCenterSessionIdIsValid = () => false } = {},
+  {
+    now = Date.now(),
+    commandCenterSessionIdIsValid = () => false,
+    commandCenterDocumentIdIsValid = () => false,
+  } = {},
 ) {
   const playersFetchedAtMs = Date.parse(String(watch?.sourcePlayersFetchedAt || ""));
   return Boolean(watch
@@ -157,6 +162,8 @@ export function validStoredLiveRoomWatch(
       || (Number.isInteger(watch.processingTabId) && watch.processingTabId > 0))
     && typeof commandCenterSessionIdIsValid === "function"
     && commandCenterSessionIdIsValid(watch.commandCenterSessionId)
+    && typeof commandCenterDocumentIdIsValid === "function"
+    && commandCenterDocumentIdIsValid(watch.commandCenterDocumentId)
     && now >= watch.armedAt && now <= watch.expiresAt);
 }
 

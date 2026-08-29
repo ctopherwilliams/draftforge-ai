@@ -6,8 +6,14 @@ export function sanitizeActionBinding(binding) {
     season: Number(binding.season),
     tabId: Number(binding.tabId),
     appTabId: Number(binding.appTabId),
+    producerSessionId: typeof binding.producerSessionId === "string"
+      ? binding.producerSessionId
+      : "",
     commandCenterSessionId: typeof binding.commandCenterSessionId === "string"
       ? binding.commandCenterSessionId
+      : "",
+    commandCenterDocumentId: typeof binding.commandCenterDocumentId === "string"
+      ? binding.commandCenterDocumentId
       : "",
   };
   return validActionBinding(sanitized) ? sanitized : null;
@@ -21,7 +27,16 @@ export function validActionBinding(binding) {
     && Number.isInteger(binding.season) && binding.season > 0
     && Number.isInteger(binding.tabId) && binding.tabId > 0
     && Number.isInteger(binding.appTabId) && binding.appTabId > 0
-    && validCommandCenterSessionId(binding.commandCenterSessionId));
+    && validProducerSessionId(binding.producerSessionId)
+    && validCommandCenterSessionId(binding.commandCenterSessionId)
+    && validCommandCenterSessionId(binding.commandCenterDocumentId));
+}
+
+export function validProducerSessionId(value) {
+  return typeof value === "string"
+    && value.length >= 8
+    && value.length <= 128
+    && /^[A-Za-z0-9._:-]+$/.test(value);
 }
 
 export function validCommandCenterSessionId(value) {
@@ -59,6 +74,7 @@ export function contextMatchesActionBinding(binding, context, expectedTabId = bi
     && String(context?.leagueId || "") === binding.leagueId
     && Number(context?.teamId) === binding.teamId
     && Number(context?.season) === binding.season
+    && String(context?.producerSessionId || "") === binding.producerSessionId
     && context?.inDraftRoom === true;
 }
 
@@ -73,7 +89,9 @@ export function actionPayloadMatchesBinding(binding, payload, context, expectedT
   return String(payload?.expectedLeagueId || "") === binding.leagueId
     && requestedTeamId === binding.teamId
     && requestedSeason === binding.season
-    && String(payload?.commandCenterSessionId || "") === binding.commandCenterSessionId;
+    && String(payload?.expectedProducerSessionId || "") === binding.producerSessionId
+    && String(payload?.commandCenterSessionId || "") === binding.commandCenterSessionId
+    && String(payload?.commandCenterDocumentId || "") === binding.commandCenterDocumentId;
 }
 
 export function resultMatchesActionBinding(binding, payload, context, senderTabId) {
@@ -104,6 +122,8 @@ export function reboundMatchesActionBinding(binding, context, appTabId) {
     && String(context?.leagueId || "") === binding.leagueId
     && Number(context?.teamId) === binding.teamId
     && Number(context?.season) === binding.season
+    && validProducerSessionId(context?.producerSessionId)
+    && context.producerSessionId !== binding.producerSessionId
     && context?.inDraftRoom === true;
 }
 

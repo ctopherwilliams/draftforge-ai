@@ -238,6 +238,10 @@ test("the bounded production path covers snake and salary-cap actions under chur
   assert.equal(result.scenario.preliminaryNominationClicks, 5);
   assert.equal(result.scenario.exactAcknowledgements, 22);
   assert.equal(result.scenario.observerWrites, 0);
+  assert.deepEqual(result.scenario.bindingRevocation, {
+    code: "ACTION_BINDING_REVOKED",
+    cancellationMessages: 1,
+  });
   assert.deepEqual(result.scenario.snakeObserverOverlap, {
     delayedConfirmationMs: 450,
     physicalClicks: 1,

@@ -371,7 +371,9 @@ test("MV3 binding recovery never renews an action's absolute click deadline", ()
     season: league.season,
     tabId: 77,
     appTabId: 88,
+    producerSessionId: "rapid-auction-producer",
     commandCenterSessionId: "rapid-auction-session",
+    commandCenterDocumentId: "rapid-auction-document",
   };
   const context = {
     leagueId: league.id,
@@ -379,6 +381,7 @@ test("MV3 binding recovery never renews an action's absolute click deadline", ()
     season: league.season,
     tabId: binding.tabId,
     inDraftRoom: true,
+    producerSessionId: binding.producerSessionId,
   };
   const evidence = {
     appTabUrl: "http://127.0.0.1:3000/",
@@ -391,7 +394,9 @@ test("MV3 binding recovery never renews an action's absolute click deadline", ()
     expectedTeamId: league.teamId,
     expectedSeason: league.season,
     expectedTabId: binding.tabId,
+    expectedProducerSessionId: binding.producerSessionId,
     commandCenterSessionId: binding.commandCenterSessionId,
+    commandCenterDocumentId: binding.commandCenterDocumentId,
     actionRequestId: 501,
     notAfter: now + 2_000,
   };

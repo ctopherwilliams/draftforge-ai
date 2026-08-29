@@ -104,7 +104,7 @@ Superseded v0.2.28 local mechanics evidence:
 - visual certification: all ten scenarios PASS; and
 - dependency audit: zero vulnerabilities.
 
-The preceding 595/595, 418-test, 13-acknowledgment, two-minute-soak, memory, Monte Carlo, and replay measurements remain historical evidence for v0.2.27 and earlier candidates. The v0.2.28 and v0.2.29 evidence immediately above is also historical. None replaces v0.2.30's current gate or authenticates current source truth.
+The preceding 595/595, 418-test, 13-acknowledgment, two-minute-soak, memory, Monte Carlo, and replay measurements remain historical evidence for v0.2.27 and earlier candidates. The v0.2.28 and v0.2.29 evidence immediately above is also historical. None replaces a later candidate's gate or authenticates current source truth.
 
 Independent release review found two authorization-integrity gaps and v0.2.28 closes both: the final dispatch lease had not bound every source/availability/economic field, and one decision could own multiple action IDs. The repair is narrow and fail closed, including a post-response deadline recheck. Two retrospectively selected salary underbid tails remain a shadow-experiment candidate, not authority to raise live ceilings. They use synthetic hidden outcomes, have only two full paired continuations, and do not outweigh the negative acquired surplus observed across the general $25–49 tier. No production strategy change was made from this evidence.
 
@@ -120,6 +120,19 @@ Final v0.2.30 local mechanics evidence:
 - dependency audit: zero vulnerabilities.
 
 This candidate adds fail-closed audit-publisher settlement, durable exact checkpoint replay, final post-authorization state/control revalidation, a cross-key per-tab auction uncertainty latch with exact-ID-only release and immediate nomination reconciliation, a server-only Keychain Tradyr reader, a portable fail-closed listener probe, and a dedicated CI live-control job. It does not change the fixed five-source weights, bid ceilings, bidding-war prevention, one-dollar reserve, sleeper protections, ESPN-only scope, or mandatory roster-completion rules.
+
+Final v0.2.31 local mechanics evidence supersedes v0.2.30 for the current candidate:
+
+- package identity: 19 source files; unpacked-source SHA-256 `09a808245d2769264de12118b99001afc0a703bf93406d9236c67c0845abd194`; ZIP SHA-256 `733e572fbc281ce26d24e4e97047fd1329e5d7976c40544db82d557ee82e1268`;
+- full test suite: 681/681 after typecheck and production build, including 20 complete deterministic snake drafts (2,560 picks) and 20 complete deterministic salary-cap drafts (2,560 sales);
+- visual certification: 11/11 states;
+- `npm run test:live-control`: 475/475 focused checks plus 9/9 chaos cases;
+- GET-only load: 1,000/1,000, p95 3.917 ms, p99 6.415 ms;
+- writer/observer contention: observer p95 4.902 ms, observer p99 6.147 ms, writer p99 9.809 ms, availability p99 5.282 ms, event-loop p99 12.616 ms, and peak RSS 137.438 MB;
+- production path: 82 physical clicks, 82 exact acknowledgments, zero observer writes, and maximum one in-flight action; planning p95 2.346 ms and p99 5.598 ms, SELECT p99 88.888 ms, NOMINATE p99 138.821 ms, incremental BID p99 94.394 ms, custom BID p99 86.469 ms, overall action p99 464.799 ms, event-loop p99 24.822 ms, and peak RSS 205.578 MB; and
+- dependency audit: zero vulnerabilities.
+
+v0.2.31 binds writer authority to the exact app tab, ESPN tab, immutable audit session, per-document command-center ID, ESPN producer ID, and binding generation under a 1.5-second lease. Only explicit bind, verified recovery, or `APP_HELLO` may establish authority. Heartbeats and actions cannot mint or renew expired authority. Every explicit establish rotates generation; stale storage recovery and handoff cleanup are conditional on exact identity and generation; delayed results from older documents or ESPN producers are ignored; and unchanged-room heartbeat recovery lets an exact same-authority successor take over without a maximum cancellation floor poisoning its first action. The production path still permits only one in-flight write and records zero observer writes. Strategy and source weights are unchanged.
 
 The exact depleted-TE adversarial failure at base seed `18472631`, trial `154`, was a harness inventory defect: the deepest 14-team variant exhausted all synthetic tight ends after two seeded news removals. The harness-only pool now covers every position cap plus a removal cushion. Exact replay is deterministic, and the full five-seed rerun passed without relaxing roster or nomination legality.
 
@@ -140,7 +153,7 @@ A read-only comparison against the official NFL news and transaction feeds found
 
 The exact official references are `https://www.nfl.com/news/texans-wr-jayden-higgins-torn-acl-out-2026-season` and `https://www.nfl.com/news/nfl-news-roundup-latest-league-updates-from-wednesday-aug-26`. The ignored local artifact `outputs/availability/release-20260828.json` records the sanitized authenticated/official scan receipt and those two hard vetoes; it contains no ESPN credentials or opponent identity. Its freshness is bounded, so it must be rescanned and restaged before arming if its TTL has elapsed. Confirmed availability news stays a separate veto/advisory layer and never becomes a sixth ranking source or a substitute for the blocked exact five-source snapshot.
 
-The code and packaged companion are locally **GO for v0.2.30 mechanics**. Authenticated current-source arming is intentionally **NO-GO**: no exact current schema-v3 5/5 snapshot has been published from the final revision, Chrome has not proven that the installed unpacked companion was reloaded to v0.2.30, and the committed/upstream-matched candidate still requires its exact two-tab no-click rehearsal, authenticated normal/rapid/recovery salary-cap rooms, authenticated snake regression, and three-hour soak. The final companion identity is v0.2.30 with 18 files, unpacked-source SHA-256 `837bc692506a7833ad059aeb9d529af72c3b3a80f2f9cfb6b3d9951dc3f28b13`, and packaged ZIP SHA-256 `1f903d6ead73e393bc7f38824c80e4f04dfc26a29ed62572144dfd1b832d820a`.
+The code and packaged companion are locally **GO for v0.2.31 mechanics**. Authenticated current-source arming is intentionally **NO-GO**: no exact current schema-v3 5/5 snapshot has been published from the final revision, Chrome has not proven that the installed unpacked companion was reloaded to v0.2.31, and the committed/upstream-matched candidate still requires its exact two-tab no-click rehearsal, authenticated normal/rapid/recovery salary-cap rooms, authenticated snake regression, and three-hour soak. The exact salary-cap target is “It’s Fun To Do Bad Things XVII” (league `44050`, team `7`, season `2026`). The final companion identity is v0.2.31 with 19 files, unpacked-source SHA-256 `09a808245d2769264de12118b99001afc0a703bf93406d9236c67c0845abd194`, and packaged ZIP SHA-256 `733e572fbc281ce26d24e4e97047fd1329e5d7976c40544db82d557ee82e1268`.
 
 ## Rollback and no-go triggers
 

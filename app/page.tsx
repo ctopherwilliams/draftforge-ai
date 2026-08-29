@@ -76,10 +76,14 @@ import {
 } from "./lib/practice-room-cleanup";
 import {
   appendLiveControlEvent,
+  authenticatedImportRetiresLiveControl,
   createLiveControlState,
   deterministicSnakeSubmitSecondsRemaining,
   preserveLiveControlForVerifiedRebound,
   validateLiveControlTransition,
+  writerLeaseHeartbeatAcknowledged,
+  writerLeaseHeartbeatAllowed,
+  writerLeaseHeartbeatSnapshotStillCurrent,
   type LiveActionLifecyclePhase,
   type LiveControlEvent,
   type LiveControlFreshness,
@@ -185,7 +189,14 @@ type ExtensionStatus = "checking" | "missing" | "ready" | "connecting" | "connec
 type WorkspaceRole = "unknown" | "writer" | "observer";
 
 function sendToExtension(type: string, payload: Record<string, unknown> = {}) {
-  window.postMessage({ source: "draftforge-web", type, payload }, window.location.origin);
+  window.postMessage({
+    source: "draftforge-web",
+    type,
+    payload: {
+      ...payload,
+      commandCenterDocumentId: COMMAND_CENTER_PUBLISHER.documentId,
+    },
+  }, window.location.origin);
 }
 
 function requestExtensionCommand(
@@ -249,6 +260,8 @@ function normalizeName(value: string | null | undefined) {
 }
 
 const ESPN_ROSTER_CONFIRMATION_GRACE_MS = 6000;
+const WRITER_HEARTBEAT_INTERVAL_MS = 500;
+const WRITER_HEARTBEAT_ACK_GUARD_MS = 800;
 // Refresh shortly after the producer cache turns over. Correctness does not
 // depend on this cadence: accepted dashboard snapshots are leased by exact
 // cryptographic identity for audit-first doctor rechecks.
@@ -268,6 +281,7 @@ const SNAKE_ACTION_RESPONSE_BUDGET_MS = 6_000;
 const PICK_FEED_HEALTH_WINDOW_MS = 4_000;
 const COMMAND_CENTER_PUBLISHER = {
   sessionId: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  documentId: globalThis.crypto?.randomUUID?.() || `document-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   startedAt: new Date().toISOString(),
 };
 // Keep action request ids unique across a dashboard-only reload while the ESPN
@@ -799,6 +813,7 @@ export default function Home() {
     fresh: false,
   });
   const [actionInFlight, setActionInFlight] = useState(false);
+  const [writerLeaseHealthy, setWriterLeaseHealthyState] = useState(true);
   const [availabilityGate, setAvailabilityGate] = useState<AvailabilityGateEvaluation>(() => evaluateAvailabilityGate({
     artifact: null,
     policy: null,
@@ -871,6 +886,16 @@ export default function Home() {
   const liveControlBindingRef = useRef("");
   const liveControlBlockedRef = useRef(false);
   const liveControlSessionSequenceRef = useRef(0);
+  const writerHeartbeatRequestSequenceRef = useRef(0);
+  const writerHeartbeatPendingRef = useRef<{
+    requestId: string;
+    requestedBinding: string;
+    requestedControlSessionId: string;
+    timeoutId: number;
+    timedOut: boolean;
+    failed: boolean;
+  } | null>(null);
+  const writerLeaseHealthyRef = useRef(true);
   const liveControlActionsRef = useRef(new Map<number, PendingLiveAction>());
   const liveControlObservedRosterRef = useRef(new Set<number>());
   const liveControlBaselineRosterRef = useRef(new Set<number>());
@@ -1008,6 +1033,7 @@ export default function Home() {
     // is still intact. Clearing any of these refs first would make the cancel
     // target ambiguous and could leave an already-handed-off click alive.
     setAutoDraft(false);
+    const requestedMinimumAuthorizationEpoch = actionAuthorizationEpochRef.current;
     const expectedTabId = activeEspnTabRef.current;
     const expectedLeagueId = activeLeagueRef.current;
     const expectedTeamId = activeEspnTeamRef.current;
@@ -1018,14 +1044,15 @@ export default function Home() {
       expectedLeagueId,
       expectedTeamId,
       expectedTabId,
-      minimumAuthorizationEpoch: actionAuthorizationEpochRef.current,
+      minimumAuthorizationEpoch: requestedMinimumAuthorizationEpoch,
     });
     const exactAck = result.ok === true
       && result.code === "ACTION_BINDING_REVOKED"
       && Number(result.revokedTabId) === Number(expectedTabId)
       && String(result.revokedLeagueId || "") === String(expectedLeagueId)
       && Number(result.revokedTeamId) === Number(expectedTeamId)
-      && Number(result.minimumAuthorizationEpoch) > actionAuthorizationEpochRef.current;
+      && Number(result.minimumAuthorizationEpoch) === requestedMinimumAuthorizationEpoch
+      && actionAuthorizationEpochRef.current === requestedMinimumAuthorizationEpoch;
     if (exactAck) return ownerToken;
     setExtension("error");
     setActionState(`Transition blocked: ${String(result.code || "ACTION_BINDING_REVOCATION_FAILED")}. The existing ESPN identity remains fail closed.`);
@@ -1240,6 +1267,15 @@ export default function Home() {
     availabilityDecisionsRef.current.delete(staged.actionRequestId);
     return clearPublishedLiveDecision(staged.decision.decisionId);
   }, [clearPublishedLiveDecision, transitionLiveControl]);
+  const retirePendingWriterHeartbeat = useCallback(() => {
+    const pending = writerHeartbeatPendingRef.current;
+    if (pending) window.clearTimeout(pending.timeoutId);
+    writerHeartbeatPendingRef.current = null;
+  }, []);
+  const updateWriterLeaseHealth = useCallback((healthy: boolean) => {
+    writerLeaseHealthyRef.current = healthy;
+    setWriterLeaseHealthyState(healthy);
+  }, []);
   const initializeLiveControl = useCallback((
     importedLeague: LeagueSettings,
     roomContext: EspnContext,
@@ -1249,6 +1285,11 @@ export default function Home() {
     const teamId = Number(roomContext.teamId || importedLeague.teamId);
     const binding = draftAuditChecklistBindingKey(importedLeague.id, teamId, tabId);
     if (roomContext.inDraftRoom !== true || !binding) return false;
+    // CONNECT_ESPN/room recovery is the only same-binding authority allowed
+    // to retire a timed-out or rejected writer-heartbeat latch. Do this before
+    // the existing-control fast path so a verified re-import can resume lease
+    // renewal without discarding the append-only live-control history.
+    retirePendingWriterHeartbeat();
     if (liveControlRef.current) {
       if (liveControlBindingRef.current !== binding) {
         failClosedLiveControl("EXACT_BINDING_CHANGED");
@@ -1260,6 +1301,7 @@ export default function Home() {
         return false;
       }
       if (draftAuditPublisherRef.current?.bind(publisherBinding)) setAuditPublisherAuthorized(false);
+      updateWriterLeaseHealth(true);
       return true;
     }
     const observedAt = new Date().toISOString();
@@ -1294,8 +1336,9 @@ export default function Home() {
     pickFeedStaleTimerRef.current = null;
     setPickFeedHealth({ observedAt: null, lagging: false, fresh: false });
     setLiveControlVersion((version) => version + 1);
+    updateWriterLeaseHealth(true);
     return true;
-  }, [failClosedLiveControl, setPickFeedHealth]);
+  }, [failClosedLiveControl, retirePendingWriterHeartbeat, setPickFeedHealth, updateWriterLeaseHealth]);
   const attributeLiveRosterPlayer = useCallback((
     player: LivePlayerIdentity,
     attribution: LiveRosterAttributionKind,
@@ -1317,6 +1360,7 @@ export default function Home() {
     return accepted;
   }, [transitionLiveControl]);
   const clearLiveControl = useCallback(() => {
+    retirePendingWriterHeartbeat();
     draftAuditPublisherRef.current?.clear("LIVE_CONTROL_CLEARED");
     setAuditPublisherAuthorized(false);
     liveControlRef.current = null;
@@ -1355,7 +1399,7 @@ export default function Home() {
     setAvailabilityStage(null);
     setAvailabilityTransportDegraded(false);
     setLiveControlVersion((version) => version + 1);
-  }, [setPickFeedHealth]);
+  }, [retirePendingWriterHeartbeat, setPickFeedHealth]);
   const authoritativeRosterContext = useMemo(() => ({
     inDraftRoom: context.inDraftRoom,
     ownRoster: context.ownRoster,
@@ -1684,9 +1728,24 @@ export default function Home() {
         // tab select a league or make this dashboard look actionable.
         if (contextMatchesActiveDraftTab(roomContext, activeLeagueRef.current, activeEspnTabRef.current)
           && acceptLiveProducerContext(roomContext)) {
+          if (payload.rebound === true) {
+            if (inFlightActionRef.current) {
+              setAutoDraft(false);
+              failClosedLiveControl("EXACT_BINDING_REBOUND_DURING_ACTION");
+              setActionState("Action stopped: the ESPN document changed while an action was unresolved. No retry will be sent.");
+              return;
+            }
+            setAutoDraft(false);
+            pendingLiveRoomAutoArmRef.current = false;
+            pendingAutoArmRequestRef.current = null;
+            setAutoArmVerification(null);
+            retirePendingWriterHeartbeat();
+            updateWriterLeaseHealth(true);
+            setActionState("Exact ESPN document rebound verified. Prior action history is preserved; Auto-Draft remains off until the fresh no-click checklist passes.");
+          }
           observeLiveContext(roomContext);
           setContext((current) => stabilizeEspnContext(current, roomContext || {}));
-          setExtension("connected");
+          if (writerLeaseHealthyRef.current) setExtension("connected");
         }
       }
       if (type === "DF_ESPN_CONTEXT") {
@@ -1695,7 +1754,7 @@ export default function Home() {
           && acceptLiveProducerContext(roomContext)) {
           observeLiveContext(roomContext);
           setContext((current) => stabilizeEspnContext(current, roomContext || {}));
-          setExtension("connected");
+          if (writerLeaseHealthyRef.current) setExtension("connected");
         }
       }
       if (type === "COMMAND_RESULT" && payload?.context) {
@@ -1704,7 +1763,7 @@ export default function Home() {
           && acceptLiveProducerContext(roomContext)) {
           observeLiveContext(roomContext);
           setContext((current) => stabilizeEspnContext(current, roomContext));
-          setExtension("connected");
+          if (writerLeaseHealthyRef.current) setExtension("connected");
         } else if (payload.rebound === true
           && contextCanRebindDraftTab(roomContext, activeLeagueRef.current, activeEspnTeamRef.current)
           && acceptLiveProducerContext(roomContext)) {
@@ -1736,6 +1795,8 @@ export default function Home() {
           pendingLiveRoomAutoArmRef.current = false;
           pendingAutoArmRequestRef.current = null;
           setAutoArmVerification(null);
+          retirePendingWriterHeartbeat();
+          updateWriterLeaseHealth(true);
           activeEspnTabRef.current = reboundTabId;
           setActiveEspnTabId(reboundTabId);
           if (activeControl) {
@@ -1755,7 +1816,7 @@ export default function Home() {
           }
           observeLiveContext(roomContext);
           setContext((current) => stabilizeEspnContext(current, roomContext));
-          setExtension("connected");
+          if (writerLeaseHealthyRef.current) setExtension("connected");
           setActionState("Exact ESPN room rebound verified. Prior action history is preserved; Auto-Draft remains off until the fresh no-click checklist passes.");
         }
         const autoArmRequestId = Number(payload.autoArmRequestId);
@@ -1842,7 +1903,11 @@ export default function Home() {
           }
           recoveredCandidate = pendingRecovery.candidate;
         }
-        if (activeLeagueRef.current !== importedLeague.id) clearLiveControl();
+        if (authenticatedImportRetiresLiveControl(
+          activeLeagueRef.current,
+          importedLeague.id,
+          importedContext?.inDraftRoom,
+        )) clearLiveControl();
         if (importedContext?.inDraftRoom === true && !acceptLiveProducerContext(importedContext)) {
           if (isWorkspaceRecovery) {
             pendingLiveWorkspaceRecoveryRef.current = null;
@@ -1982,6 +2047,7 @@ export default function Home() {
       }
       if (type === "DF_ACTION_RESOLVED") {
         if (String(payload.commandCenterSessionId || "") !== COMMAND_CENTER_PUBLISHER.sessionId) return;
+        if (String(payload.commandCenterDocumentId || "") !== COMMAND_CENTER_PUBLISHER.documentId) return;
         const actionRequestId = Number(payload.actionRequestId);
         const liveAction = liveControlActionsRef.current.get(actionRequestId);
         if (liveAction && Number(payload.tabId) === activeEspnTabRef.current) {
@@ -2013,6 +2079,7 @@ export default function Home() {
       }
       if (type === "DF_ACTION_SUBMITTED") {
         if (String(payload.commandCenterSessionId || "") !== COMMAND_CENTER_PUBLISHER.sessionId) return;
+        if (String(payload.commandCenterDocumentId || "") !== COMMAND_CENTER_PUBLISHER.documentId) return;
         const actionRequestId = Number(payload.actionRequestId);
         const liveAction = liveControlActionsRef.current.get(actionRequestId);
         if (liveAction && Number(payload.tabId) === activeEspnTabRef.current) {
@@ -2037,9 +2104,10 @@ export default function Home() {
       }
       if (type === "DF_ACTION_RESULT" || (type === "COMMAND_RESULT" && payload?.commandType === "SUBMIT_ACTION")) {
         if (String(payload.action?.commandCenterSessionId || "") !== COMMAND_CENTER_PUBLISHER.sessionId) return;
+        if (String(payload.action?.commandCenterDocumentId || "") !== COMMAND_CENTER_PUBLISHER.documentId) return;
         const actionRequestId = Number(payload.action?.actionRequestId);
         if (!Number.isSafeInteger(actionRequestId) || actionRequestId <= 0) return;
-        const actionResultKey = `${COMMAND_CENTER_PUBLISHER.sessionId}:${actionRequestId}`;
+        const actionResultKey = `${COMMAND_CENTER_PUBLISHER.sessionId}:${COMMAND_CENTER_PUBLISHER.documentId}:${actionRequestId}`;
         if (processedActionResultsRef.current.has(actionResultKey)) return;
         processedActionResultsRef.current.add(actionResultKey);
         while (processedActionResultsRef.current.size > MAX_DRAFT_ACTION_TELEMETRY_EVENTS) {
@@ -2174,7 +2242,7 @@ export default function Home() {
           // must authorize a brand-new exact +$1 action.
           pendingAuctionBidRef.current = null;
           lastAutoAction.current = "";
-          setExtension("connected");
+          if (writerLeaseHealthyRef.current) setExtension("connected");
           setActionRetryNonce((nonce) => nonce + 1);
           setActionState("ESPN advanced the offer during acknowledgement. Re-evaluating the latest exact bid now.");
           return;
@@ -2182,7 +2250,7 @@ export default function Home() {
         if (!payload.ok && payload.action?.operation === "BID" && shouldRetryPreClickResult(payload, RETRIABLE_BID_CODES)) {
           pendingAuctionBidRef.current = null;
           lastAutoAction.current = "";
-          setExtension("connected");
+          if (writerLeaseHealthyRef.current) setExtension("connected");
           setActionRetryNonce((nonce) => nonce + 1);
           setActionState(`ESPN offer changed (${payload.code}). Re-evaluating the live bid immediately.`);
           return;
@@ -2274,6 +2342,50 @@ export default function Home() {
         return;
       }
       if (type === "COMMAND_RESULT" && payload?.commandType === "CANCEL_PENDING_ACTIONS") return;
+      if (type === "COMMAND_RESULT" && payload?.commandType === "WRITER_HEARTBEAT") {
+        const pending = writerHeartbeatPendingRef.current;
+        if (!pending || String(payload?.transitionRequestId || "") !== pending.requestId) return;
+        window.clearTimeout(pending.timeoutId);
+        const currentControl = liveControlRef.current;
+        const currentExpectedBinding = draftAuditChecklistBindingKey(
+          activeLeagueRef.current,
+          Number(activeEspnTeamRef.current),
+          Number(activeEspnTabRef.current),
+        );
+        const heartbeatStillApplies = writerLeaseHeartbeatSnapshotStillCurrent(
+          Boolean(currentControl),
+          liveControlBindingRef.current,
+          currentExpectedBinding,
+          String(currentControl?.sessionId || ""),
+          pending.requestedBinding,
+          pending.requestedControlSessionId,
+        );
+        if (!heartbeatStillApplies) {
+          writerHeartbeatPendingRef.current = null;
+          return;
+        }
+        const expiresAt = Number(payload?.expiresAt);
+        if (writerLeaseHeartbeatAcknowledged(payload?.ok === true, expiresAt, Date.now())) {
+          writerHeartbeatPendingRef.current = null;
+          updateWriterLeaseHealth(true);
+          if (pending.timedOut) {
+            setExtension("connected");
+            setActionState("The exact writer lease renewed after a delayed acknowledgement. Auto-Draft remains off until the live checklist is rerun.");
+          }
+          return;
+        }
+        // A definitive rejection is terminal for this writer authority. Keep
+        // the failed request as a paused latch so the 500 ms interval cannot
+        // create an unbounded heartbeat/cancel loop. Only an authenticated
+        // re-import, verified rebound/recovery, clear, or unmount retires it.
+        pending.failed = true;
+        updateWriterLeaseHealth(false);
+        const heartbeatCode = safeLiveControlCode(payload?.code, "WRITER_LEASE_HEARTBEAT_FAILED");
+        setAutoDraft(false);
+        setExtension("error");
+        setActionState(`Action stopped: the exact ESPN writer lease failed (${heartbeatCode}). Rebind the room and rerun the live checklist before drafting.`);
+        return;
+      }
       if (type === "COMMAND_RESULT" && payload?.ok === false) {
         if (payload?.commandType === "RECOVER_LIVE_WORKSPACE") {
           pendingLiveWorkspaceRecoveryRef.current = null;
@@ -2390,17 +2502,69 @@ export default function Home() {
       }, 0);
       if (cleanWorkspace) window.setTimeout(() => sendToExtension("CLEAN_LOCAL_WORKSPACE", { ownedBlankTabIds }), 0);
     }
-    const writerHeartbeat = window.setInterval(() => {
-      if (!Number.isInteger(activeEspnTabRef.current)
-        || !Number.isInteger(activeEspnTeamRef.current)
-        || !activeLeagueRef.current) return;
+    const renewWriterHeartbeat = () => {
+      if (writerHeartbeatPendingRef.current) return;
+      const control = liveControlRef.current;
+      const expectedBinding = draftAuditChecklistBindingKey(
+        activeLeagueRef.current,
+        Number(activeEspnTeamRef.current),
+        Number(activeEspnTabRef.current),
+      );
+      if (!writerLeaseHeartbeatAllowed(
+        Boolean(control),
+        liveControlBindingRef.current,
+        expectedBinding,
+      )) return;
+      const requestedBinding = liveControlBindingRef.current;
+      const requestedControlSessionId = String(control?.sessionId || "");
+      const requestId = `${COMMAND_CENTER_PUBLISHER.sessionId}:writer-heartbeat:${++writerHeartbeatRequestSequenceRef.current}`;
+      const pending = {
+        requestId,
+        requestedBinding,
+        requestedControlSessionId,
+        timeoutId: 0,
+        timedOut: false,
+        failed: false,
+      };
+      pending.timeoutId = window.setTimeout(() => {
+        if (writerHeartbeatPendingRef.current !== pending) return;
+        pending.timedOut = true;
+        const timeoutControl = liveControlRef.current;
+        const timeoutExpectedBinding = draftAuditChecklistBindingKey(
+          activeLeagueRef.current,
+          Number(activeEspnTeamRef.current),
+          Number(activeEspnTabRef.current),
+        );
+        if (!writerLeaseHeartbeatSnapshotStillCurrent(
+          Boolean(timeoutControl),
+          liveControlBindingRef.current,
+          timeoutExpectedBinding,
+          String(timeoutControl?.sessionId || ""),
+          requestedBinding,
+          requestedControlSessionId,
+        )) {
+          writerHeartbeatPendingRef.current = null;
+          return;
+        }
+        updateWriterLeaseHealth(false);
+        setAutoDraft(false);
+        setExtension("error");
+        setActionState("Action stopped: the exact ESPN writer lease acknowledgement exceeded its safety budget. No new heartbeat will be sent until this request settles; rerun the live checklist after recovery.");
+      }, WRITER_HEARTBEAT_ACK_GUARD_MS);
+      writerHeartbeatPendingRef.current = pending;
       sendToExtension("WRITER_HEARTBEAT", {
         commandCenterSessionId: COMMAND_CENTER_PUBLISHER.sessionId,
         expectedLeagueId: activeLeagueRef.current,
         expectedTeamId: activeEspnTeamRef.current,
         expectedTabId: activeEspnTabRef.current,
+        expectedProducerSessionId: latestEspnContextRef.current.producerSessionId,
+        transitionRequestId: requestId,
       });
-    }, 500);
+    };
+    const writerHeartbeat = window.setInterval(
+      renewWriterHeartbeat,
+      WRITER_HEARTBEAT_INTERVAL_MS,
+    );
     const revokeWriterOnPageHide = () => {
       if (!Number.isInteger(activeEspnTabRef.current)
         || !Number.isInteger(activeEspnTeamRef.current)
@@ -2418,6 +2582,7 @@ export default function Home() {
     window.addEventListener("pagehide", revokeWriterOnPageHide);
     window.addEventListener("beforeunload", revokeWriterOnPageHide);
     return () => {
+      retirePendingWriterHeartbeat();
       window.clearTimeout(timeout);
       window.clearInterval(writerHeartbeat);
       window.removeEventListener("pagehide", revokeWriterOnPageHide);
@@ -2426,7 +2591,7 @@ export default function Home() {
       pickFeedStaleTimerRef.current = null;
       window.removeEventListener("message", onMessage);
     };
-  }, [acceptLiveProducerContext, attributeLiveRosterPlayer, clearLiveControl, clearPublishedLiveDecision, failClosedLiveControl, initializeLiveControl, reconcileAuctionClickUncertaintyNow, setAutoDraft, setPickFeedHealth, syncAuctionClickUncertainty, transitionLiveControl, updateLiveControlFreshness]);
+  }, [acceptLiveProducerContext, attributeLiveRosterPlayer, clearLiveControl, clearPublishedLiveDecision, failClosedLiveControl, initializeLiveControl, reconcileAuctionClickUncertaintyNow, retirePendingWriterHeartbeat, setAutoDraft, setPickFeedHealth, syncAuctionClickUncertainty, transitionLiveControl, updateLiveControlFreshness, updateWriterLeaseHealth]);
 
   useEffect(() => {
     profilesRef.current = profiles;
@@ -2532,6 +2697,7 @@ export default function Home() {
         expectedLeagueId: league.id,
         expectedTeamId: activeEspnTeamRef.current,
         expectedTabId,
+        expectedProducerSessionId: latestEspnContextRef.current.producerSessionId,
       });
     };
     refreshExactDraftTab();
@@ -2597,6 +2763,7 @@ export default function Home() {
         commandCenterSessionId: COMMAND_CENTER_PUBLISHER.sessionId,
         expectedLeagueId: league.id,
         expectedTabId,
+        expectedProducerSessionId: latestEspnContextRef.current.producerSessionId,
       });
     }
   }, [autoDraft, context.autopickActive, context.inDraftRoom, league.id, setAutoDraft, workspaceRole]);
@@ -3004,8 +3171,9 @@ export default function Home() {
   }, [intelligenceSnapshot, sourceCoverageReady, updateLiveControlFreshness]);
   const pickFeedHealthy = pickFeedHealth.fresh && !pickFeedHealth.lagging;
   const runtimeWorkspaceReady = draftRuntimeWorkspaceReady(runtimeDiagnostics);
-  const actionWindowOpen = workspaceRole === "writer" && runtimeWorkspaceReady && authenticatedEspnPlayerPoolReady && sourceCoverageReady && pickFeedHealthy && availabilityGate.armingAllowed && context.actionSurfaceReady === true && context.autopickActive === false && Boolean(context.onClock) && Number.isFinite(remainingSeconds) && remainingSeconds >= minimumActionWindow;
+  const actionWindowOpen = workspaceRole === "writer" && writerLeaseHealthy && runtimeWorkspaceReady && authenticatedEspnPlayerPoolReady && sourceCoverageReady && pickFeedHealthy && availabilityGate.armingAllowed && context.actionSurfaceReady === true && context.autopickActive === false && Boolean(context.onClock) && Number.isFinite(remainingSeconds) && remainingSeconds >= minimumActionWindow;
   const bidWindowOpen = workspaceRole === "writer"
+    && writerLeaseHealthy
     && runtimeWorkspaceReady
     && authenticatedEspnPlayerPoolReady
     && sourceCoverageReady
@@ -3068,6 +3236,7 @@ export default function Home() {
   const preflightReady = preflightChecks.every((check) => check.ok);
   const liveChecks = [
     { label: "Single DraftForge writer is bound; observer tabs are read-only", ok: workspaceRole === "writer" },
+    { label: "Exact ESPN writer heartbeat is current", ok: writerLeaseHealthy },
     { label: "Exact imported league and team are bound to one ESPN draft tab", ok: context.inDraftRoom === true && String(context.leagueId) === String(league.id) && Number(context.teamId) === Number(league.teamId) },
     { label: "Live player pool, roster, timer, and action controls resolved", ok: Boolean(context.actionSurfaceReady && context.availablePlayerIds?.length && Array.isArray(context.ownRoster) && Number.isFinite(context.remainingSeconds)) },
     { label: "Authenticated ESPN pick/sale feed is current and reconciled", ok: pickFeedHealthy },
@@ -3160,6 +3329,7 @@ export default function Home() {
       expectedLeagueId: league.id,
       expectedTeamId: activeEspnTeamRef.current,
       expectedTabId,
+      expectedProducerSessionId: latestEspnContextRef.current.producerSessionId,
       autoArmRequestId: requestId,
     });
   }, [liveChecklistReady, extension, league.id, setAutoDraft, workspaceRole]);
@@ -3411,6 +3581,10 @@ export default function Home() {
   }, [cancelStagedSnakeDecision, currentPick, league.draftType, league.id, league.teamId, liveRecommendations, setAutoDraft, sourceCoverageReady, transitionLiveControl]);
 
   const submit = useCallback(async (player: Recommendation | undefined, automatic = false, operation?: "SELECT" | "NOMINATE" | "BID", amount?: number, nominationIntent: "TARGET" | "DRAIN" = "TARGET") => {
+    if (bindingTransitionOwnerRef.current) {
+      setActionState("Action blocked: the exact ESPN binding is being revoked for a workspace transition.");
+      return;
+    }
     if (workspaceRoleRef.current !== "writer") {
       setAutoDraft(false);
       setActionState("Read-only observer: this tab cannot submit picks, nominations, or bids.");
@@ -3487,9 +3661,14 @@ export default function Home() {
       return;
     }
     const authorizationEpoch = actionAuthorizationEpochRef.current;
+    const expectedProducerSessionId = String(
+      latestEspnContextRef.current.producerSessionId || context.producerSessionId || "",
+    );
     const currentAuthorizationStatus = () => {
+      if (bindingTransitionOwnerRef.current) return "ACTION_BINDING_TRANSITION_ACTIVE";
       if (actionAuthorizationEpochRef.current !== authorizationEpoch) return "ACTION_AUTHORIZATION_SUPERSEDED";
       if (automatic && !autoDraftRef.current) return "AUTO_DRAFT_DISARMED";
+      if (!writerLeaseHealthyRef.current) return "WRITER_LEASE_UNHEALTHY";
       if (workspaceRoleRef.current !== "writer") return "COMMAND_CENTER_WRITER_LOST";
       if (!acceptedIntelligenceSnapshotFresh(intelligenceSnapshot, Date.now(), activeIntelligenceSnapshotKey)) return "FIVE_SOURCE_COVERAGE_BLOCKED";
       const feed = pickFeedHealthRef.current;
@@ -3500,6 +3679,9 @@ export default function Home() {
         || !Number.isFinite(availabilityFreshUntil)
         || availabilityFreshUntil <= Date.now()) return "AVAILABILITY_GATE_BLOCKED";
       if (liveControlBlockedRef.current || liveControlBindingRef.current !== exactBinding) return "LIVE_CONTROL_AUTHORITY_CHANGED";
+      if (!expectedProducerSessionId
+        || expectedProducerSessionId.length > 128
+        || !/^[A-Za-z0-9._:-]+$/.test(expectedProducerSessionId)) return "ESPN_PRODUCER_IDENTITY_INVALID";
       return "ACTION_AUTHORIZED";
     };
     if (inFlightActionRef.current) {
@@ -3807,6 +3989,7 @@ export default function Home() {
     const postAuditClock = Number(postAuditContext.remainingSeconds);
     const postAuditRoomIdentitySafe = contextMatchesActiveDraftTab(postAuditContext, league.id, Number(expectedTabId))
       && Number(postAuditContext.teamId) === Number(league.teamId)
+      && String(postAuditContext.producerSessionId || "") === expectedProducerSessionId
       && postAuditContext.inDraftRoom === true
       && postAuditContext.autopickActive === false;
     const postAuditActionSurfaceReady = resolvedOperation === "BID"
@@ -4011,6 +4194,7 @@ export default function Home() {
       expectedTeamId: league.teamId,
       expectedSeason: league.season,
       expectedTabId,
+      expectedProducerSessionId,
       expectedPick: currentPick,
       availabilityDigest: availabilityDecision.availabilityDigest,
       availabilityDecisionDigest: availabilityDecision.decisionDigest,
@@ -4188,6 +4372,7 @@ export default function Home() {
       expectedLeagueId: league.id,
       expectedTeamId: activeEspnTeamRef.current,
       expectedTabId,
+      expectedProducerSessionId: latestEspnContextRef.current.producerSessionId,
       autoArmRequestId: requestId,
     });
   }

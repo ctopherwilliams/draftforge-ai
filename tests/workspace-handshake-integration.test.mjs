@@ -93,8 +93,8 @@ test("concurrent pre-live handshakes elect the newest local DraftForge tab and c
   });
   try {
     const [older, newer] = await Promise.all([
-      dispatch(fixture.listener, { type: "APP_HELLO", payload: { commandCenterSessionId: "older-session" } }, appSender(10)),
-      dispatch(fixture.listener, { type: "APP_HELLO", payload: { commandCenterSessionId: "newer-session" } }, appSender(11)),
+      dispatch(fixture.listener, { type: "APP_HELLO", payload: { commandCenterSessionId: "older-session", commandCenterDocumentId: "older-document" } }, appSender(10)),
+      dispatch(fixture.listener, { type: "APP_HELLO", payload: { commandCenterSessionId: "newer-session", commandCenterDocumentId: "newer-document" } }, appSender(11)),
     ]);
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(older.workspace.writerTabId, 11);
@@ -118,14 +118,22 @@ test("service-worker restart preserves a bound writer and closes only duplicate 
     tabId: 20,
     appTabId: 10,
     commandCenterSessionId: "bound-writer-session",
+    commandCenterDocumentId: "bound-writer-document",
+    producerSessionId: "bound-espn-producer-session",
   };
   const stored = new Map([
-    ["draftForgeActionBindingV1", binding],
+    ["draftForgeActionBindingV2", binding],
     ["draftForgeWorkspaceWriterV1", 11],
   ]);
   const fixture = await loadBackground({
     stored,
-    context: { leagueId: "701", teamId: 5, season: 2026, inDraftRoom: true },
+    context: {
+      leagueId: "701",
+      teamId: 5,
+      season: 2026,
+      inDraftRoom: true,
+      producerSessionId: "bound-espn-producer-session",
+    },
     tabs: [
       { id: 10, url: "http://127.0.0.1:3000/", lastAccessed: 100, windowId: 1 },
       { id: 11, url: "http://127.0.0.1:3000/", lastAccessed: 900, windowId: 1 },
@@ -136,13 +144,13 @@ test("service-worker restart preserves a bound writer and closes only duplicate 
   try {
     const observer = await dispatch(fixture.listener, {
       type: "APP_HELLO",
-      payload: { commandCenterSessionId: "observer-session" },
+      payload: { commandCenterSessionId: "observer-session", commandCenterDocumentId: "observer-document" },
     }, appSender(11));
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(observer.workspace.writerTabId, 10);
     assert.equal(observer.workspace.role, "observer");
     assert.equal(fixture.stored.get("draftForgeWorkspaceWriterV1"), 10);
-    assert.deepEqual(fixture.stored.get("draftForgeActionBindingV1"), binding);
+    assert.deepEqual(fixture.stored.get("draftForgeActionBindingV2"), binding);
     assert.deepEqual(fixture.removed, [11]);
     assert.equal(fixture.remaining.has(20), true);
     assert.equal(fixture.remaining.has(30), true);

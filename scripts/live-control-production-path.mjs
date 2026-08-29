@@ -35,6 +35,7 @@ const SNAKE_LEAGUE_ID = "qa-snake-observer-production-path";
 const TEAM_ID = 7;
 const SEASON = 2026;
 const COMMAND_CENTER_SESSION_ID = "qa-command-center-20260828";
+const COMMAND_CENTER_DOCUMENT_ID = "qa-command-center-document-20260828";
 const LIVE_CONTROL_SESSION_ID = "qa-live-control-20260828";
 const AVAILABILITY_DIGEST = `sha256:${"a".repeat(64)}`;
 const AVAILABILITY_DECISION_DIGEST = `sha256:${"b".repeat(64)}`;
@@ -413,6 +414,7 @@ globalThis.produceContextForQa = () => {
   return context;
 };
 globalThis.observeContextForQa = () => getObservedContext();
+globalThis.producerSessionIdForQa = () => contextProducerSessionId;
 globalThis.hasCachedProducerContextForQa = () => latestProducerContext?.url === window.location.href;
 globalThis.executeActionForQa = (action) => executeAction(action);
 globalThis.trackingFingerprintForQa = () => JSON.stringify({
@@ -441,8 +443,9 @@ globalThis.executionMetricsForQa = () => ({
       state.currentBid = amount;
       state.leading = false;
     },
-    produce: () => sandbox.produceContextForQa(),
-    observe: () => sandbox.observeContextForQa(),
+    produce: () => ({ ...sandbox.produceContextForQa(), producerSessionId: sandbox.producerSessionIdForQa() }),
+    observe: () => ({ ...sandbox.observeContextForQa(), producerSessionId: sandbox.producerSessionIdForQa() }),
+    producerSessionId: () => sandbox.producerSessionIdForQa(),
     hasCachedProducerContext: () => sandbox.hasCachedProducerContextForQa(),
     execute: (action) => sandbox.executeActionForQa(action),
     trackingFingerprint: () => sandbox.trackingFingerprintForQa(),
@@ -824,6 +827,7 @@ globalThis.produceContextForQa = () => {
   return context;
 };
 globalThis.observeContextForQa = () => getObservedContext();
+globalThis.producerSessionIdForQa = () => contextProducerSessionId;
 globalThis.hasCachedProducerContextForQa = () => latestProducerContext?.url === window.location.href;
 globalThis.executeActionForQa = (action) => executeAction(action);
 globalThis.trackingFingerprintForQa = () => JSON.stringify({
@@ -881,8 +885,9 @@ globalThis.executionMetricsForQa = () => ({
       state.selected = false;
       state.nominated = false;
     },
-    produce: () => sandbox.produceContextForQa(),
-    observe: () => sandbox.observeContextForQa(),
+    produce: () => ({ ...sandbox.produceContextForQa(), producerSessionId: sandbox.producerSessionIdForQa() }),
+    observe: () => ({ ...sandbox.observeContextForQa(), producerSessionId: sandbox.producerSessionIdForQa() }),
+    producerSessionId: () => sandbox.producerSessionIdForQa(),
     hasCachedProducerContext: () => sandbox.hasCachedProducerContextForQa(),
     execute: (action) => sandbox.executeActionForQa(action),
     trackingFingerprint: () => sandbox.trackingFingerprintForQa(),
@@ -913,20 +918,24 @@ function dispatchRuntimeMessage(listener, message, sender, timeoutMs = 2_000) {
 }
 
 async function createBackgroundHarness(content, leagueId = LEAGUE_ID, dispatchLeaseOrigin = null) {
+  const producerSessionId = content.producerSessionId();
   const sessionStorage = new Map([
-    ["draftForgeActionBindingV1", {
+    ["draftForgeActionBindingV2", {
       leagueId,
       teamId: TEAM_ID,
       season: SEASON,
       tabId: ESPN_TAB_ID,
       appTabId: APP_TAB_ID,
       commandCenterSessionId: COMMAND_CENTER_SESSION_ID,
+      commandCenterDocumentId: COMMAND_CENTER_DOCUMENT_ID,
+      producerSessionId,
     }],
     ["draftForgeWorkspaceWriterV1", APP_TAB_ID],
   ]);
   const localStorage = new Map();
   const listeners = [];
   const appMessages = [];
+  const cancellationMessages = [];
   const nativeFetch = globalThis.fetch;
   const previousChrome = globalThis.chrome;
   const previousFetch = globalThis.fetch;
@@ -983,7 +992,15 @@ async function createBackgroundHarness(content, leagueId = LEAGUE_ID, dispatchLe
       async sendMessage(tabId, message) {
         if (tabId === ESPN_TAB_ID && message.type === "DF_GET_CONTEXT") return content.observe();
         if (tabId === ESPN_TAB_ID && message.type === "DF_EXECUTE_ACTION") return content.execute(message.payload);
-        if (tabId === ESPN_TAB_ID && message.type === "DF_CANCEL_PENDING_ACTIONS") return { ok: true };
+        if (tabId === ESPN_TAB_ID && message.type === "DF_CANCEL_PENDING_ACTIONS") {
+          cancellationMessages.push(structuredClone(message.payload));
+          if (message.payload?.commandCenterSessionId !== COMMAND_CENTER_SESSION_ID
+            || message.payload?.commandCenterDocumentId !== COMMAND_CENTER_DOCUMENT_ID
+            || message.payload?.expectedProducerSessionId !== producerSessionId) {
+            return { ok: false, code: "ACTION_CANCELLATION_BINDING_MISMATCH" };
+          }
+          return { ok: true };
+        }
         if (tabId === APP_TAB_ID) {
           appMessages.push(message);
           return { ok: true };
@@ -1005,16 +1022,79 @@ async function createBackgroundHarness(content, leagueId = LEAGUE_ID, dispatchLe
   await import(`${pathToFileURL(path.join(projectRoot, "extension", "background.js")).href}?production-path=${backgroundImportSequence}`);
   if (listeners.length !== 1) throw new Error("BACKGROUND_LISTENER_NOT_INSTALLED");
   const listener = listeners[0];
+  const dispatchApp = (message) => dispatchRuntimeMessage(listener, message, {
+    url: `${APP_ORIGIN}/`,
+    tab: tabs[0],
+  });
   content.connectRuntime?.((message) => dispatchRuntimeMessage(listener, message, {
     url: tabs[1].url,
     tab: tabs[1],
   }));
+  const hello = await dispatchApp({
+    type: "APP_HELLO",
+    payload: {
+      commandCenterSessionId: COMMAND_CENTER_SESSION_ID,
+      commandCenterDocumentId: COMMAND_CENTER_DOCUMENT_ID,
+    },
+  });
+  if (hello?.ready !== true || hello?.workspace?.role !== "writer") {
+    throw new Error(`BACKGROUND_WRITER_RECOVERY_HANDSHAKE_FAILED_${hello?.workspace?.code || "UNKNOWN"}`);
+  }
+  let heartbeatSequence = 0;
   return {
     appMessages,
-    dispatchApp: (message) => dispatchRuntimeMessage(listener, message, {
-      url: `${APP_ORIGIN}/`,
-      tab: tabs[0],
-    }),
+    cancellationMessages,
+    producerSessionId,
+    dispatchApp,
+    async renewWriterLease(liveControlSessionId = LIVE_CONTROL_SESSION_ID) {
+      heartbeatSequence += 1;
+      const transitionRequestId = `qa-writer-heartbeat-${leagueId}-${heartbeatSequence}`;
+      const result = await dispatchApp({
+        type: "WRITER_HEARTBEAT",
+        payload: {
+          commandCenterSessionId: COMMAND_CENTER_SESSION_ID,
+          commandCenterDocumentId: COMMAND_CENTER_DOCUMENT_ID,
+          liveControlSessionId,
+          expectedLeagueId: leagueId,
+          expectedTeamId: TEAM_ID,
+          expectedSeason: SEASON,
+          expectedTabId: ESPN_TAB_ID,
+          expectedProducerSessionId: producerSessionId,
+          transitionRequestId,
+        },
+      });
+      if (result?.ok !== true
+        || result?.code !== "WRITER_LEASE_RENEWED"
+        || result?.transitionRequestId !== transitionRequestId
+        || !Number.isFinite(result?.expiresAt)
+        || result.expiresAt <= Date.now()) {
+        throw new Error(`BACKGROUND_WRITER_HEARTBEAT_FAILED_${result?.code || "UNKNOWN"}`);
+      }
+      return result;
+    },
+    async revokeActionBinding(minimumAuthorizationEpoch = Number.MAX_SAFE_INTEGER) {
+      const transitionRequestId = `qa-action-binding-revoke-${leagueId}`;
+      const result = await dispatchApp({
+        type: "REVOKE_ACTION_BINDING",
+        payload: {
+          commandCenterSessionId: COMMAND_CENTER_SESSION_ID,
+          commandCenterDocumentId: COMMAND_CENTER_DOCUMENT_ID,
+          expectedLeagueId: leagueId,
+          expectedTeamId: TEAM_ID,
+          expectedTabId: ESPN_TAB_ID,
+          minimumAuthorizationEpoch,
+          transitionRequestId,
+        },
+      });
+      if (result?.ok !== true
+        || result?.code !== "ACTION_BINDING_REVOKED"
+        || result?.transitionRequestId !== transitionRequestId
+        || cancellationMessages.length !== 1
+        || cancellationMessages[0]?.bindingRevocation !== true) {
+        throw new Error(`BACKGROUND_ACTION_BINDING_REVOCATION_FAILED_${result?.code || "UNKNOWN"}`);
+      }
+      return result;
+    },
     dispatchEspn: (message) => dispatchRuntimeMessage(listener, message, {
       url: tabs[1].url,
       tab: tabs[1],
@@ -1170,6 +1250,7 @@ function auditSnapshot({ league, capturedAt, liveControl, actionState = "Product
       tabId: ESPN_TAB_ID,
       dashboardLoadedAt: "2026-08-28T00:00:00.000Z",
       commandCenterSessionId: COMMAND_CENTER_SESSION_ID,
+      commandCenterDocumentId: COMMAND_CENTER_DOCUMENT_ID,
       commandCenterStartedAt: "2026-08-28T00:00:00.000Z",
       authenticatedImportAt: "2026-08-28T00:00:01.000Z",
     },
@@ -1480,6 +1561,7 @@ function publication(snapshot) {
     snapshot,
     binding: {
       commandCenterSessionId: COMMAND_CENTER_SESSION_ID,
+      commandCenterDocumentId: COMMAND_CENTER_DOCUMENT_ID,
       liveControlSessionId: LIVE_CONTROL_SESSION_ID,
       leagueId: LEAGUE_ID,
       teamId: TEAM_ID,
@@ -1489,13 +1571,15 @@ function publication(snapshot) {
   };
 }
 
-function authorizedAction(action, actionRequestId) {
+function authorizedAction(action, actionRequestId, expectedProducerSessionId) {
   const notAfter = Date.now() + 4_000;
   return {
     ...action,
     actionId: `qa-production-action-${actionRequestId}`,
     expectedTabId: ESPN_TAB_ID,
+    expectedProducerSessionId,
     commandCenterSessionId: COMMAND_CENTER_SESSION_ID,
+    commandCenterDocumentId: COMMAND_CENTER_DOCUMENT_ID,
     dashboardLoadedAt: "2026-08-28T00:00:00.000Z",
     decisionId: `qa-production-action-${actionRequestId}`,
     sourceSnapshotId: SOURCE_SNAPSHOT_ID,
@@ -1579,7 +1663,8 @@ async function runProductionActionMatrix({ players, sources, evaluatedAt, action
         const clicksBefore = content.state.finalClicks;
         const preliminaryBefore = content.state.preliminaryClicks;
         const messagesBefore = content.state.contentMessages.filter((message) => message.type === "ESPN_ACTION_SUBMITTED").length;
-        const payload = authorizedAction(decision.action, index + 1);
+        const payload = authorizedAction(decision.action, index + 1, background.producerSessionId);
+        await background.renewWriterLease();
         const actionStartedAt = performance.now();
         const first = background.dispatchApp({ type: "SUBMIT_ACTION", payload });
         const duplicate = background.dispatchApp({ type: "SUBMIT_ACTION", payload });
@@ -2130,10 +2215,11 @@ async function runSnakeObserverOverlap({ players, sources, evaluatedAt, routeSer
     await sleep(20);
     const clicksBefore = content.state.finalClicks;
     const messagesBefore = content.state.contentMessages.filter((message) => message.type === "ESPN_ACTION_SUBMITTED").length;
-    const actionPayload = authorizedAction(decision.action, 88_001);
+    const actionPayload = authorizedAction(decision.action, 88_001, background.producerSessionId);
     actionPayload.actionId = "qa-snake-observer-action-1";
     actionPayload.decisionId = envelope.decisionId;
     actionPayload.notAfter = envelope.notAfter;
+    await background.renewWriterLease("qa-snake-observer-control-20260828");
     const actionStartedAt = performance.now();
     const first = background.dispatchApp({ type: "SUBMIT_ACTION", payload: actionPayload });
     const duplicate = background.dispatchApp({ type: "SUBMIT_ACTION", payload: actionPayload });
@@ -2356,6 +2442,7 @@ export async function runLiveControlProductionPath({
     };
     const binding = {
       commandCenterSessionId: COMMAND_CENTER_SESSION_ID,
+      commandCenterDocumentId: COMMAND_CENTER_DOCUMENT_ID,
       liveControlSessionId: LIVE_CONTROL_SESSION_ID,
       leagueId: LEAGUE_ID,
       teamId: TEAM_ID,
@@ -2469,7 +2556,9 @@ export async function runLiveControlProductionPath({
       ...final.decision.action,
       actionId: "qa-auction-action-1",
       expectedTabId: ESPN_TAB_ID,
+      expectedProducerSessionId: background.producerSessionId,
       commandCenterSessionId: COMMAND_CENTER_SESSION_ID,
+      commandCenterDocumentId: COMMAND_CENTER_DOCUMENT_ID,
       dashboardLoadedAt: "2026-08-28T00:00:00.000Z",
       decisionId: envelope.decisionId,
       sourceSnapshotId: SOURCE_SNAPSHOT_ID,
@@ -2480,6 +2569,7 @@ export async function runLiveControlProductionPath({
       notAfter: actionNotAfter,
       availabilityNotAfter: Date.now() + 4_000,
     };
+    await background.renewWriterLease();
     const actionStartedAt = performance.now();
     const actionOne = background.dispatchApp({ type: "SUBMIT_ACTION", payload: actionPayload });
     const actionTwo = background.dispatchApp({ type: "SUBMIT_ACTION", payload: actionPayload });
@@ -2594,6 +2684,7 @@ export async function runLiveControlProductionPath({
       || finalControl.body.control?.events?.filter((event) => event.phase === "ESPN_ACKNOWLEDGED").length !== 1) {
       throw new Error(`FINAL_AUDIT_ROUTE_STATE_INVALID_${JSON.stringify({ finalControl, auditPostResults })}`);
     }
+    const bindingRevocation = await background.revokeActionBinding();
 
     sampleMemory();
     const observerRouteLatencies = [...normal.latencies, ...burst.latencies];
@@ -2679,6 +2770,10 @@ export async function runLiveControlProductionPath({
         preliminaryNominationClicks: actionMatrix.preliminaryClicks,
         exactAcknowledgements: actionMatrix.exactAcknowledgements + 1 + snakeObserverOverlap.exactAcknowledgements,
         observerWrites: actionMatrix.observerWrites + snakeObserverOverlap.observerWrites,
+        bindingRevocation: {
+          code: bindingRevocation.code,
+          cancellationMessages: background.cancellationMessages.length,
+        },
         snakeObserverOverlap: {
           delayedConfirmationMs: 450,
           physicalClicks: snakeObserverOverlap.physicalClicks,

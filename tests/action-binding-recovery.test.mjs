@@ -20,6 +20,8 @@ const binding = Object.freeze({
   tabId: 41,
   appTabId: 17,
   commandCenterSessionId: "command-center-old",
+  commandCenterDocumentId: "command-document-old",
+  producerSessionId: "espn-producer-old",
 });
 const context = Object.freeze({
   leagueId: "44050",
@@ -27,6 +29,7 @@ const context = Object.freeze({
   season: 2026,
   tabId: 41,
   inDraftRoom: true,
+  producerSessionId: "espn-producer-old",
 });
 const payload = Object.freeze({
   expectedLeagueId: "44050",
@@ -34,6 +37,8 @@ const payload = Object.freeze({
   expectedSeason: 2026,
   expectedTabId: 41,
   commandCenterSessionId: "command-center-old",
+  commandCenterDocumentId: "command-document-old",
+  expectedProducerSessionId: "espn-producer-old",
   actionRequestId: 9001,
 });
 const appOrigins = ["http://127.0.0.1:3000", "http://localhost:3000"];
@@ -51,14 +56,17 @@ test("MV3 restart restores only a live exact binding with both authorized tabs",
   assert.equal(restoredBindingMatchesEvidence(binding, { ...evidence, appTabUrl: "https://draftforge-ai.workspace-231977.chatgpt.site/" }, appOrigins), false);
   assert.equal(restoredBindingMatchesEvidence(binding, { ...evidence, espnTabUrl: "https://example.com/" }, appOrigins), false);
   assert.equal(restoredBindingMatchesEvidence(binding, { ...evidence, context: { ...context, teamId: 8 } }, appOrigins), false);
+  assert.equal(restoredBindingMatchesEvidence(binding, { ...evidence, context: { ...context, producerSessionId: "espn-producer-new" } }, appOrigins), false);
   assert.equal(restoredBindingMatchesEvidence(binding, { ...evidence, context: { ...context, inDraftRoom: false } }, appOrigins), false);
   assert.equal(restoredBindingMatchesEvidence({ ...binding, appTabId: 0 }, evidence, appOrigins), false);
   assert.equal(restoredBindingMatchesEvidence({ ...binding, commandCenterSessionId: 12345678 }, evidence, appOrigins), false);
+  assert.equal(restoredBindingMatchesEvidence({ ...binding, producerSessionId: "" }, evidence, appOrigins), false);
 });
 
 test("exact tab rebound updates only the already-bound command center identity", () => {
-  const rebound = { ...context, tabId: 99 };
+  const rebound = { ...context, tabId: 99, producerSessionId: "espn-producer-new" };
   assert.equal(reboundMatchesActionBinding(binding, rebound, 17), true);
+  assert.equal(reboundMatchesActionBinding(binding, { ...rebound, producerSessionId: binding.producerSessionId }, 17), false);
   assert.equal(reboundMatchesActionBinding(binding, rebound, 18), false);
   assert.equal(reboundMatchesActionBinding(binding, { ...rebound, leagueId: "999" }, 17), false);
   assert.equal(reboundMatchesActionBinding(binding, { ...rebound, teamId: 8 }, 17), false);
@@ -72,6 +80,9 @@ test("commands and asynchronous results require exact binding and sender evidenc
   assert.equal(resultMatchesActionBinding(binding, payload, context, 42), false);
   assert.equal(resultMatchesActionBinding(binding, { ...payload, expectedTabId: 42 }, context, 41), false);
   assert.equal(resultMatchesActionBinding(binding, { ...payload, expectedTeamId: 8 }, context, 41), false);
+  assert.equal(resultMatchesActionBinding(binding, { ...payload, commandCenterDocumentId: "command-document-new" }, context, 41), false);
+  assert.equal(resultMatchesActionBinding(binding, { ...payload, expectedProducerSessionId: "espn-producer-new" }, context, 41), false);
+  assert.equal(resultMatchesActionBinding(binding, payload, { ...context, producerSessionId: "espn-producer-new" }, 41), false);
   assert.equal(resultMatchesActionBinding(binding, payload, { ...context, inDraftRoom: false }, 41), false);
   assert.equal(resultMatchesActionBinding(binding, {
     ...payload,
@@ -125,7 +136,7 @@ test("overlapping room-open contexts join one exact handoff", async () => {
 
 test("background persists restart state, re-registers result delivery, and clears failed watch claims", async () => {
   const source = await readFile(new URL("../extension/background.js", import.meta.url), "utf8");
-  assert.match(source, /ACTION_BINDING_STORAGE_KEY = "draftForgeActionBindingV1"/);
+  assert.match(source, /ACTION_BINDING_STORAGE_KEY = "draftForgeActionBindingV2"/);
   assert.match(source, /const actionBindingRestore = restoreActionBinding\(\)/);
   assert.match(source, /chrome\.tabs\.sendMessage\(stored\.tabId, \{ type: "DF_GET_CONTEXT" \}\)/);
   assert.match(source, /appTabs\.add\(stored\.appTabId\)/);

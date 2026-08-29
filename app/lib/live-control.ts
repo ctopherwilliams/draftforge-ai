@@ -164,6 +164,51 @@ export type LiveControlTransitionResult = {
   code: string;
 };
 
+/**
+ * A writer lease exists only for an exact live-room binding. Pre-room ESPN
+ * imports deliberately have no live-control state and must never emit lease
+ * heartbeats: a background mismatch there is expected, not a connection
+ * failure.
+ */
+export function writerLeaseHeartbeatAllowed(
+  liveControlActive: boolean,
+  currentBinding: string,
+  expectedBinding: string | null,
+) {
+  return liveControlActive === true
+    && Boolean(expectedBinding)
+    && currentBinding === expectedBinding;
+}
+
+export function writerLeaseHeartbeatSnapshotStillCurrent(
+  liveControlActive: boolean,
+  currentBinding: string,
+  expectedBinding: string | null,
+  currentControlSessionId: string,
+  requestedBinding: string,
+  requestedControlSessionId: string,
+) {
+  return writerLeaseHeartbeatAllowed(liveControlActive, currentBinding, expectedBinding)
+    && requestedBinding === currentBinding
+    && requestedControlSessionId === currentControlSessionId;
+}
+
+export function writerLeaseHeartbeatAcknowledged(
+  ok: boolean,
+  expiresAt: number,
+  now: number,
+) {
+  return ok === true && Number.isFinite(expiresAt) && expiresAt > now;
+}
+
+export function authenticatedImportRetiresLiveControl(
+  currentLeagueId: string,
+  importedLeagueId: string,
+  importedInDraftRoom: boolean | undefined,
+) {
+  return importedInDraftRoom !== true || currentLeagueId !== importedLeagueId;
+}
+
 const OPERATIONS = new Set<LiveControlOperation>(["SELECT", "BID", "NOMINATE"]);
 const POSITIONS = new Set<LiveControlPosition>(["QB", "RB", "WR", "TE", "DST", "K"]);
 const NOMINATION_INTENTS = new Set<LiveNominationIntent>(["TARGET", "DRAIN"]);

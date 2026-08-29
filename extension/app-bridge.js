@@ -19,11 +19,14 @@ window.addEventListener("message", async (event) => {
   const payload = event.data.payload ?? {};
   if (typeof payload.commandCenterSessionId === "string"
     && payload.commandCenterSessionId
+    && typeof payload.commandCenterDocumentId === "string"
+    && payload.commandCenterDocumentId
     && Number.isInteger(Number(payload.expectedTabId))
     && String(payload.expectedLeagueId || "")
     && Number.isInteger(Number(payload.expectedTeamId))) {
     latestWriterBinding = {
       commandCenterSessionId: payload.commandCenterSessionId,
+      commandCenterDocumentId: payload.commandCenterDocumentId,
       expectedLeagueId: String(payload.expectedLeagueId),
       expectedTeamId: Number(payload.expectedTeamId),
       expectedTabId: Number(payload.expectedTabId),

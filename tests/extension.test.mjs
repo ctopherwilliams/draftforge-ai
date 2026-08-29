@@ -4,7 +4,12 @@ import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import vm from "node:vm";
-import { actionPayloadMatchesBinding, validCommandCenterSessionId } from "../extension/action-binding.js";
+import {
+  actionPayloadMatchesBinding,
+  reboundMatchesActionBinding,
+  validCommandCenterSessionId,
+  validProducerSessionId,
+} from "../extension/action-binding.js";
 import { authorizeRuntimeMessage } from "../extension/origin-policy.js";
 import {
   computeExtensionDirectoryIntegrity,
@@ -20,7 +25,7 @@ test("extension is a narrowly scoped Manifest V3 ESPN companion", async () => {
   assert.equal(manifest.manifest_version, 3);
   assert.equal(release.schemaVersion, 2);
   assert.match(release.extensionSourceSha256, /^[a-f0-9]{64}$/);
-  assert.equal(release.extensionSourceFileCount, 18);
+  assert.equal(release.extensionSourceFileCount, 19);
   assert.deepEqual([...manifest.permissions].sort(), ["storage", "tabs"]);
   assert.equal(manifest.version, release.extensionVersion);
   assert.equal(createHash("sha256").update(companionZip).digest("hex"), release.extensionPackageSha256);
@@ -110,20 +115,27 @@ test("privileged runtime messages require the exact DraftForge or ESPN sender or
   }
 });
 
-test("bound draft actions require the exact tab, league, team, and season", async () => {
+test("bound draft actions require the exact tab, league, team, season, and ESPN producer document", async () => {
   const background = await readFile(new URL("background.js", root), "utf8");
   const bindHelper = background.match(/function proposedDraftActionBinding[\s\S]+?\n\}/)?.[0];
   const matchHelper = background.match(/function actionMatchesBinding[\s\S]+?\n\}/)?.[0];
   const helpers = bindHelper && matchHelper ? `${bindHelper}\n${matchHelper}` : "";
   assert.ok(helpers, "background should expose the pure action-binding helpers");
-  const sandbox = { actionPayloadMatchesBinding, validCommandCenterSessionId };
+  const sandbox = { actionPayloadMatchesBinding, validCommandCenterSessionId, validProducerSessionId };
   vm.runInNewContext(`let actionBinding = null;\n${helpers}\nglobalThis.bind = (...args) => { actionBinding = proposedDraftActionBinding(...args); return actionBinding; }; globalThis.matches = actionMatchesBinding;`, sandbox);
   const bound = sandbox.bind(
-    { leagueId: "701", teamId: 5, season: 2026, tabId: 41 },
+    {
+      leagueId: "701",
+      teamId: 5,
+      season: 2026,
+      tabId: 41,
+      producerSessionId: "espn-producer-document-a",
+    },
     { id: "701", teamId: 5, season: 2026 },
     41,
     17,
     "command-center-test",
+    "command-document-test",
   );
   assert.deepEqual({ ...bound }, {
     leagueId: "701",
@@ -131,16 +143,77 @@ test("bound draft actions require the exact tab, league, team, and season", asyn
     season: 2026,
     tabId: 41,
     appTabId: 17,
+    producerSessionId: "espn-producer-document-a",
     commandCenterSessionId: "command-center-test",
+    commandCenterDocumentId: "command-document-test",
   });
-  const payload = { expectedLeagueId: "701", expectedTeamId: 5, expectedSeason: 2026, commandCenterSessionId: "command-center-test" };
-  const context = { leagueId: "701", teamId: 5, season: 2026, tabId: 41, inDraftRoom: true };
+  const payload = {
+    expectedLeagueId: "701",
+    expectedTeamId: 5,
+    expectedSeason: 2026,
+    expectedProducerSessionId: "espn-producer-document-a",
+    commandCenterSessionId: "command-center-test",
+    commandCenterDocumentId: "command-document-test",
+  };
+  const context = {
+    leagueId: "701",
+    teamId: 5,
+    season: 2026,
+    tabId: 41,
+    producerSessionId: "espn-producer-document-a",
+    inDraftRoom: true,
+  };
 
   assert.equal(sandbox.matches(payload, context, 41), true);
   assert.equal(sandbox.matches({ ...payload, expectedTeamId: 6 }, context, 41), false);
   assert.equal(sandbox.matches({ ...payload, expectedSeason: 2025 }, context, 41), false);
+  assert.equal(sandbox.matches({ ...payload, expectedProducerSessionId: "espn-producer-document-b" }, context, 41), false);
+  assert.equal(sandbox.matches({ ...payload, expectedProducerSessionId: undefined }, context, 41), false);
+  assert.equal(sandbox.matches({ ...payload, commandCenterDocumentId: "command-document-other" }, context, 41), false);
   assert.equal(sandbox.matches(payload, { ...context, leagueId: "702" }, 41), false);
   assert.equal(sandbox.matches(payload, { ...context, tabId: 42 }, 41), false);
+  assert.equal(sandbox.matches(payload, { ...context, producerSessionId: "espn-producer-document-b" }, 41), false);
+  assert.equal(sandbox.matches(payload, { ...context, producerSessionId: undefined }, 41), false);
+  assert.equal(sandbox.bind(
+    { ...context, producerSessionId: "invalid producer session" },
+    { id: "701", teamId: 5, season: 2026 },
+    41,
+    17,
+    "command-center-test",
+    "command-document-test",
+  ), null, "an unsequenced or malformed ESPN document cannot acquire action authority");
+});
+
+test("producer identity is required while an exact rebound can adopt a new verified ESPN document", () => {
+  assert.equal(validProducerSessionId("e7e61115-02a3-44ca-a04e-e8b4c647942f"), true);
+  assert.equal(validProducerSessionId("producer-1770000000000-a1b2c3"), true);
+  assert.equal(validProducerSessionId(""), false);
+  assert.equal(validProducerSessionId("invalid producer"), false);
+  assert.equal(validProducerSessionId("p".repeat(129)), false);
+
+  const binding = {
+    leagueId: "701",
+    teamId: 5,
+    season: 2026,
+    tabId: 41,
+    appTabId: 17,
+    producerSessionId: "espn-producer-document-a",
+    commandCenterSessionId: "command-center-test",
+    commandCenterDocumentId: "command-document-test",
+  };
+  const rebound = {
+    leagueId: "701",
+    teamId: 5,
+    season: 2026,
+    tabId: 42,
+    producerSessionId: "espn-producer-document-b",
+    inDraftRoom: true,
+  };
+  assert.equal(reboundMatchesActionBinding(binding, rebound, 17), true);
+  assert.equal(reboundMatchesActionBinding(binding, { ...rebound, producerSessionId: binding.producerSessionId }, 17), false);
+  assert.equal(reboundMatchesActionBinding(binding, { ...rebound, producerSessionId: "" }, 17), false);
+  assert.equal(reboundMatchesActionBinding(binding, { ...rebound, producerSessionId: "invalid producer" }, 17), false);
+  assert.equal(reboundMatchesActionBinding(binding, rebound, 18), false);
 });
 
 test("draft actions fail closed and private ESPN credentials are not persisted", async () => {
@@ -175,6 +248,8 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(background, /matches\.length === 1/);
   assert.match(background, /createPollCoordinator/);
   assert.match(background, /runtimeDiagnostics/);
+  assert.match(bridge, /commandCenterDocumentId: payload\.commandCenterDocumentId/);
+  assert.match(page, /commandCenterDocumentId: COMMAND_CENTER_PUBLISHER\.documentId/);
   assert.match(background, /browserTabCount/);
   assert.match(background, /draftForgeTabCount/);
   assert.match(background, /espnTabCount/);

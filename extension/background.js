@@ -26,12 +26,14 @@ import {
   actionAvailabilityDeadlineStatus,
   actionDeadlineStatus,
   actionPayloadMatchesBinding,
+  contextMatchesActionBinding,
   reboundMatchesActionBinding,
   restoredBindingMatchesEvidence,
   resultMatchesActionBinding,
   sanitizeActionBinding,
   tabRemovalInvalidatesActionBinding,
   validCommandCenterSessionId,
+  validProducerSessionId,
 } from "./action-binding.js";
 import {
   authorizeWorkspaceMessage,
@@ -41,6 +43,7 @@ import {
   resolveWorkspaceWriterTabId,
   selectManagedWorkspaceCleanup,
 } from "./workspace-lifecycle.js";
+import { renewExistingWriterLease, writerLeaseMatchesBinding } from "./writer-lease.js";
 
 const appTabs = new Set();
 let espnContext = null;
@@ -70,7 +73,7 @@ const RECOVERY_CONTEXT_TIMEOUT_MS = 12000;
 const APP_BROADCAST_TIMEOUT_MS = 250;
 const WRITER_LEASE_TTL_MS = 1500;
 const LIVE_ROOM_WATCH_STORAGE_KEY = "draftForgeLiveRoomWatchV1";
-const ACTION_BINDING_STORAGE_KEY = "draftForgeActionBindingV1";
+const ACTION_BINDING_STORAGE_KEY = "draftForgeActionBindingV2";
 const WORKSPACE_WRITER_STORAGE_KEY = "draftForgeWorkspaceWriterV1";
 const AUCTION_CLICK_UNCERTAINTY_STORAGE_KEY = "draftForgeAuctionClickUncertaintyV1";
 const MAX_AUCTION_CLICK_UNCERTAINTIES = 1;
@@ -102,6 +105,7 @@ const EXTENSION_SOURCE_FILES = Object.freeze([
   "recovery-targets.js",
   "server-dispatch-lease.js",
   "workspace-lifecycle.js",
+  "writer-lease.js",
 ]);
 
 function integrityHex(bytes) {
@@ -170,6 +174,7 @@ function sanitizedAuctionUncertainty(action, room, now = Date.now()) {
           actionId: String(action?.actionId || ""),
           decisionId: String(action?.decisionId || ""),
           commandCenterSessionId: String(action?.commandCenterSessionId || ""),
+          commandCenterDocumentId: String(action?.commandCenterDocumentId || ""),
           authorizationEpoch: Number(action?.authorizationEpoch),
           actionRequestId: Number.isInteger(Number(action?.actionRequestId)) ? Number(action.actionRequestId) : null,
         },
@@ -182,6 +187,7 @@ function sameAuctionActionIdentity(left, right) {
     && left.actionId === right.actionId
     && left.decisionId === right.decisionId
     && left.commandCenterSessionId === right.commandCenterSessionId
+    && left.commandCenterDocumentId === right.commandCenterDocumentId
     && left.authorizationEpoch === right.authorizationEpoch
     && left.actionRequestId === right.actionRequestId);
 }
@@ -203,6 +209,7 @@ function validStoredAuctionUncertainty(record, key) {
     && record.actionIdentity && typeof record.actionIdentity.actionId === "string" && record.actionIdentity.actionId.length >= 8
     && typeof record.actionIdentity.decisionId === "string" && record.actionIdentity.decisionId.length >= 8
     && validCommandCenterSessionId(record.actionIdentity.commandCenterSessionId)
+    && validCommandCenterSessionId(record.actionIdentity.commandCenterDocumentId)
     && Number.isSafeInteger(record.actionIdentity.authorizationEpoch)
     && record.actionIdentity.authorizationEpoch >= 0);
 }
@@ -322,12 +329,12 @@ async function auctionUncertaintyMessageNow(message, sender) {
   }
 
   await ensureActionBinding();
+  const authorizedBinding = actionBinding;
   if (!proposed
-    || actionAuthorizationStatus(action) !== "ACTION_AUTHORIZATION_VALID"
-    || !writerLeaseAuthorizes(actionBinding, action, sender?.tab?.id)) {
+    || actionAuthorizationStatus(action, authorizedBinding) !== "ACTION_AUTHORIZATION_VALID"
+    || !writerLeaseAuthorizes(authorizedBinding, action, sender?.tab?.id)) {
     return { ok: false, code: "AUCTION_UNCERTAINTY_AUTHORITY_REJECTED" };
   }
-  const authorizedBinding = actionBinding;
   const authorizedBindingGeneration = actionBindingGeneration;
   try {
     const records = await readAuctionUncertainties();
@@ -344,7 +351,7 @@ async function auctionUncertaintyMessageNow(message, sender) {
       }
       if (actionBinding !== authorizedBinding
         || actionBindingGeneration !== authorizedBindingGeneration
-        || actionAuthorizationStatus(action) !== "ACTION_AUTHORIZATION_VALID"
+        || actionAuthorizationStatus(action, authorizedBinding) !== "ACTION_AUTHORIZATION_VALID"
         || !writerLeaseAuthorizes(actionBinding, action, sender?.tab?.id)
         || actionDeadlineStatus(action) !== "ACTION_DEADLINE_VALID"
         || actionAvailabilityDeadlineStatus(action) !== "AVAILABILITY_DEADLINE_VALID") {
@@ -369,7 +376,7 @@ async function auctionUncertaintyMessageNow(message, sender) {
       const tokenHash = pending?.tokenHash || await auctionTokenHash(token);
       if (actionBinding !== authorizedBinding
         || actionBindingGeneration !== authorizedBindingGeneration
-        || actionAuthorizationStatus(action) !== "ACTION_AUTHORIZATION_VALID"
+        || actionAuthorizationStatus(action, authorizedBinding) !== "ACTION_AUTHORIZATION_VALID"
         || !writerLeaseAuthorizes(actionBinding, action, sender?.tab?.id)
         || actionDeadlineStatus(action) !== "ACTION_DEADLINE_VALID"
         || actionAvailabilityDeadlineStatus(action) !== "AVAILABILITY_DEADLINE_VALID") {
@@ -390,7 +397,7 @@ async function auctionUncertaintyMessageNow(message, sender) {
       if (finalServerLease?.ok !== true
         || actionBinding !== authorizedBinding
         || actionBindingGeneration !== authorizedBindingGeneration
-        || actionAuthorizationStatus(action) !== "ACTION_AUTHORIZATION_VALID"
+        || actionAuthorizationStatus(action, authorizedBinding) !== "ACTION_AUTHORIZATION_VALID"
         || !writerLeaseAuthorizes(actionBinding, action, sender?.tab?.id)
         || actionDeadlineStatus(action) !== "ACTION_DEADLINE_VALID"
         || actionAvailabilityDeadlineStatus(action) !== "AVAILABILITY_DEADLINE_VALID") {
@@ -511,6 +518,7 @@ async function restoreLiveRoomWatch() {
     const stored = (await chrome.storage.session.get(LIVE_ROOM_WATCH_STORAGE_KEY))?.[LIVE_ROOM_WATCH_STORAGE_KEY];
     if (!validStoredLiveRoomWatch(stored, {
       commandCenterSessionIdIsValid: validCommandCenterSessionId,
+      commandCenterDocumentIdIsValid: validCommandCenterSessionId,
     })) {
       await persistLiveRoomWatch(null);
       return null;
@@ -535,20 +543,40 @@ async function restoreLiveRoomWatch() {
 
 const liveRoomWatchRestore = restoreLiveRoomWatch();
 
-function proposedDraftActionBinding(context, league, tabId = context?.tabId, appTabId, commandCenterSessionId) {
+function proposedDraftActionBinding(
+  context,
+  league,
+  tabId = context?.tabId,
+  appTabId,
+  commandCenterSessionId,
+  commandCenterDocumentId,
+) {
   const leagueId = String(league?.id || context?.leagueId || "");
   const teamId = Number(league?.teamId || context?.teamId || 0);
   const season = Number(league?.season || context?.season || 0);
   const exactTabId = Number(tabId);
   const exactAppTabId = Number(appTabId);
   const exactCommandCenterSessionId = String(commandCenterSessionId || "");
+  const exactCommandCenterDocumentId = String(commandCenterDocumentId || "");
+  const producerSessionId = String(context?.producerSessionId || "");
   return leagueId
     && Number.isInteger(teamId) && teamId > 0
     && Number.isInteger(season) && season > 0
     && Number.isInteger(exactTabId) && exactTabId > 0
     && Number.isInteger(exactAppTabId) && exactAppTabId > 0
     && validCommandCenterSessionId(exactCommandCenterSessionId)
-      ? { leagueId, teamId, season, tabId: exactTabId, appTabId: exactAppTabId, commandCenterSessionId: exactCommandCenterSessionId }
+    && validCommandCenterSessionId(exactCommandCenterDocumentId)
+    && validProducerSessionId(producerSessionId)
+      ? {
+          leagueId,
+          teamId,
+          season,
+          tabId: exactTabId,
+          appTabId: exactAppTabId,
+          commandCenterSessionId: exactCommandCenterSessionId,
+          commandCenterDocumentId: exactCommandCenterDocumentId,
+          producerSessionId,
+        }
       : null;
 }
 
@@ -568,7 +596,49 @@ function sameActionBinding(left, right) {
     && left.season === right.season
     && left.tabId === right.tabId
     && left.appTabId === right.appTabId
-    && left.commandCenterSessionId === right.commandCenterSessionId);
+    && left.commandCenterSessionId === right.commandCenterSessionId
+    && left.commandCenterDocumentId === right.commandCenterDocumentId
+    && left.producerSessionId === right.producerSessionId);
+}
+
+function actionBindingAuthoritySnapshot(binding = actionBinding) {
+  return binding
+    ? {
+        ...binding,
+        bindingGeneration: actionBindingGeneration,
+      }
+    : null;
+}
+
+function successorWatchPreservesEstablishedAuthority(
+  previousWatch,
+  successorWatch,
+  establishedBinding,
+  currentContext,
+) {
+  if (!previousWatch || !successorWatch || previousWatch === successorWatch) return false;
+  const watchAuthorityFields = [
+    "appTabId",
+    "sourceTabId",
+    "sourceLeagueId",
+    "sourceLeagueName",
+    "teamId",
+    "season",
+    "rules",
+    "commandCenterSessionId",
+    "commandCenterDocumentId",
+  ];
+  return watchAuthorityFields.every((field) => previousWatch[field] === successorWatch[field])
+    && Number(successorWatch.appTabId) === Number(establishedBinding?.appTabId)
+    && Number(successorWatch.teamId) === Number(establishedBinding?.teamId)
+    && Number(successorWatch.season) === Number(establishedBinding?.season)
+    && successorWatch.commandCenterSessionId === establishedBinding?.commandCenterSessionId
+    && successorWatch.commandCenterDocumentId === establishedBinding?.commandCenterDocumentId
+    && contextMatchesActionBinding(
+      establishedBinding,
+      currentContext,
+      establishedBinding?.tabId,
+    );
 }
 
 function newWriterLease(binding, now = Date.now()) {
@@ -579,24 +649,33 @@ function newWriterLease(binding, now = Date.now()) {
     leaseId,
     appTabId: binding.appTabId,
     commandCenterSessionId: binding.commandCenterSessionId,
+    commandCenterDocumentId: binding.commandCenterDocumentId,
     bindingGeneration: actionBindingGeneration,
     expiresAt: now + WRITER_LEASE_TTL_MS,
   };
 }
 
-function renewWriterLease(binding, now = Date.now()) {
-  if (!binding) {
-    writerLease = null;
-    return null;
-  }
-  const sameLease = writerLease
-    && writerLease.appTabId === binding.appTabId
-    && writerLease.commandCenterSessionId === binding.commandCenterSessionId
-    && writerLease.bindingGeneration === actionBindingGeneration;
-  writerLease = sameLease
-    ? { ...writerLease, expiresAt: now + WRITER_LEASE_TTL_MS }
-    : newWriterLease(binding, now);
+function establishWriterLease(binding, now = Date.now()) {
+  writerLease = newWriterLease(binding, now);
   return writerLease;
+}
+
+function renewWriterLease(binding, now = Date.now()) {
+  writerLease = renewExistingWriterLease(
+    writerLease,
+    binding,
+    actionBindingGeneration,
+    now,
+    WRITER_LEASE_TTL_MS,
+  );
+  return writerLease;
+}
+
+function currentWriterLease(binding, senderAppTabId, now = Date.now()) {
+  return Number(senderAppTabId) === Number(binding?.appTabId)
+    && writerLeaseMatchesBinding(writerLease, binding, actionBindingGeneration, now)
+    ? writerLease
+    : null;
 }
 
 function writerLeaseAuthorizes(binding, payload, senderTabId, now = Date.now()) {
@@ -605,6 +684,7 @@ function writerLeaseAuthorizes(binding, payload, senderTabId, now = Date.now()) 
     && Number(senderTabId) === Number(binding.tabId)
     && writerLease.appTabId === binding.appTabId
     && writerLease.commandCenterSessionId === binding.commandCenterSessionId
+    && writerLease.commandCenterDocumentId === binding.commandCenterDocumentId
     && writerLease.bindingGeneration === actionBindingGeneration
     && writerLease.expiresAt > now
     && String(payload?.writerLeaseId || "") === writerLease.leaseId
@@ -614,12 +694,20 @@ function writerLeaseAuthorizes(binding, payload, senderTabId, now = Date.now()) 
       season: binding.season,
       inDraftRoom: true,
       tabId: binding.tabId,
+      producerSessionId: binding.producerSessionId,
     }, binding.tabId));
 }
 
-async function revokePriorActionBinding(binding) {
+async function revokePriorActionBinding(binding, minimumAuthorizationEpoch = Number.MAX_SAFE_INTEGER) {
   if (!binding) return true;
-  rememberMinimumActionAuthorizationEpoch(binding.commandCenterSessionId, Number.MAX_SAFE_INTEGER);
+  if (!Number.isSafeInteger(minimumAuthorizationEpoch) || minimumAuthorizationEpoch < 0) {
+    throw new Error("ACTION_AUTHORIZATION_INVALID");
+  }
+  rememberMinimumActionAuthorizationEpoch(
+    binding.commandCenterSessionId,
+    minimumAuthorizationEpoch,
+    binding,
+  );
   try {
     const result = await withOperationDeadline(
       APP_BROADCAST_TIMEOUT_MS,
@@ -628,11 +716,14 @@ async function revokePriorActionBinding(binding) {
         type: "DF_CANCEL_PENDING_ACTIONS",
         payload: {
           commandCenterSessionId: binding.commandCenterSessionId,
-          minimumAuthorizationEpoch: Number.MAX_SAFE_INTEGER,
+          commandCenterDocumentId: binding.commandCenterDocumentId,
+          expectedProducerSessionId: binding.producerSessionId,
+          minimumAuthorizationEpoch,
           bindingRevocation: true,
         },
       }),
     );
+    if (result?.code === "ACTION_AUTHORIZATION_PRODUCER_CHANGED") return true;
     if (result?.ok !== true) throw new Error("PRIOR_ACTION_BINDING_REVOCATION_REJECTED");
     return true;
   } catch (error) {
@@ -652,9 +743,12 @@ async function revokePriorActionBinding(binding) {
   }
 }
 
-async function clearActionBindingNow({ revoke = true } = {}) {
+async function clearActionBindingNow({
+  revoke = true,
+  minimumAuthorizationEpoch = Number.MAX_SAFE_INTEGER,
+} = {}) {
   const previous = actionBinding;
-  if (revoke && previous) await revokePriorActionBinding(previous);
+  if (revoke && previous) await revokePriorActionBinding(previous, minimumAuthorizationEpoch);
   if (actionBinding !== null) actionBindingGeneration += 1;
   actionBinding = null;
   writerLease = null;
@@ -667,19 +761,43 @@ function enqueueActionBindingMutation(operation) {
   return queued;
 }
 
-async function clearActionBinding() {
+async function clearActionBinding(options = {}) {
   await actionBindingRestore;
-  return enqueueActionBindingMutation(() => clearActionBindingNow());
+  return enqueueActionBindingMutation(() => clearActionBindingNow(options));
 }
 
-async function establishActionBinding(context, league, tabId, appTabId, commandCenterSessionId) {
+async function clearActionBindingIfSame(establishedBinding, options = {}) {
+  await actionBindingRestore;
+  return enqueueActionBindingMutation(async () => {
+    if (!sameActionBinding(actionBinding, establishedBinding)
+      || actionBindingGeneration !== establishedBinding?.bindingGeneration) return false;
+    await clearActionBindingNow(options);
+    return true;
+  });
+}
+
+async function establishActionBinding(
+  context,
+  league,
+  tabId,
+  appTabId,
+  commandCenterSessionId,
+  commandCenterDocumentId,
+) {
   await actionBindingRestore;
   return enqueueActionBindingMutation(async () => {
     if (context?.inDraftRoom !== true) {
       await clearActionBindingNow();
       return null;
     }
-    const binding = proposedDraftActionBinding(context, league, tabId, appTabId, commandCenterSessionId);
+    const binding = proposedDraftActionBinding(
+      context,
+      league,
+      tabId,
+      appTabId,
+      commandCenterSessionId,
+      commandCenterDocumentId,
+    );
     if (!binding) {
       await clearActionBindingNow();
       return null;
@@ -687,15 +805,31 @@ async function establishActionBinding(context, league, tabId, appTabId, commandC
     if (!sameActionBinding(actionBinding, binding)) {
       await revokePriorActionBinding(actionBinding);
       actionBinding = binding;
-      actionBindingGeneration += 1;
-      writerLease = null;
     }
+    // Every explicit, verified establish is a new authority generation even
+    // when the bound tabs and identities are unchanged. This fences an older
+    // handoff token and rotates its writer lease instead of letting stale
+    // cleanup act on a later same-identity recovery.
+    actionBindingGeneration += 1;
+    writerLease = null;
     await persistActionBinding(actionBinding);
     workspaceWriterAppTabId = actionBinding.appTabId;
     await persistWorkspaceWriter(actionBinding.appTabId);
     appTabs.add(actionBinding.appTabId);
-    renewWriterLease(actionBinding);
-    return actionBinding;
+    establishWriterLease(actionBinding);
+    return actionBindingAuthoritySnapshot(actionBinding);
+  });
+}
+
+async function freshenEstablishedWriterLease(expectedBinding) {
+  await actionBindingRestore;
+  return enqueueActionBindingMutation(() => {
+    if (!sameActionBinding(actionBinding, expectedBinding)
+      || actionBindingGeneration !== expectedBinding?.bindingGeneration) return null;
+    // Explicit authenticated handoff/recovery is allowed to mint. Keep this
+    // as the final authority step after diagnostics, visibility, and cleanup
+    // so a cold MV3 worker cannot publish an already-expired 1.5 s lease.
+    return establishWriterLease(actionBinding);
   });
 }
 
@@ -855,34 +989,58 @@ async function workspaceMessageAuthorization(senderTabId, messageType) {
 
 async function ensureActionBinding() {
   await actionBindingRestore;
-  if (actionBinding) return actionBinding;
-  return restoreActionBinding();
+  // Restoration is a one-shot MV3 startup operation. Once this worker clears
+  // authority, no concurrent command may re-read a stale session-storage row
+  // while its serialized removal is still pending and resurrect the revoked
+  // binding. A new binding must come only from an explicit import/recovery.
+  await actionBindingMutationTail;
+  return actionBinding;
 }
 
 function commandCenterSessionMatchesBinding(payload) {
   return Boolean(actionBinding
     && validCommandCenterSessionId(payload?.commandCenterSessionId)
-    && payload.commandCenterSessionId === actionBinding.commandCenterSessionId);
+    && payload.commandCenterSessionId === actionBinding.commandCenterSessionId
+    && validCommandCenterSessionId(payload?.commandCenterDocumentId)
+    && payload.commandCenterDocumentId === actionBinding.commandCenterDocumentId);
 }
 
-function actionAuthorizationStatus(payload) {
+function actionAuthorizationEpochKey(sessionId, binding) {
+  if (!validCommandCenterSessionId(sessionId) || !sanitizeActionBinding(binding)) return "";
+  return JSON.stringify([
+    sessionId,
+    binding.appTabId,
+    binding.tabId,
+    binding.leagueId,
+    binding.teamId,
+    binding.season,
+    binding.producerSessionId,
+    binding.commandCenterDocumentId,
+  ]);
+}
+
+function actionAuthorizationStatus(payload, binding = actionBinding) {
   const sessionId = String(payload?.commandCenterSessionId || "");
   const epoch = Number(payload?.authorizationEpoch);
-  if (!validCommandCenterSessionId(sessionId) || !Number.isSafeInteger(epoch) || epoch < 0) {
+  const key = actionAuthorizationEpochKey(sessionId, binding);
+  if (!key || !Number.isSafeInteger(epoch) || epoch < 0) {
     return "ACTION_AUTHORIZATION_INVALID";
   }
-  const minimumEpoch = Number(minimumActionAuthorizationEpochs.get(sessionId) || 0);
+  const minimumEpoch = Number(minimumActionAuthorizationEpochs.get(key) || 0);
   return epoch < minimumEpoch ? "ACTION_AUTHORIZATION_REVOKED" : "ACTION_AUTHORIZATION_VALID";
 }
 
-function rememberMinimumActionAuthorizationEpoch(sessionId, minimumEpoch) {
-  const current = Number(minimumActionAuthorizationEpochs.get(sessionId) || 0);
-  minimumActionAuthorizationEpochs.set(sessionId, Math.max(current, minimumEpoch));
+function rememberMinimumActionAuthorizationEpoch(sessionId, minimumEpoch, binding = actionBinding) {
+  const key = actionAuthorizationEpochKey(sessionId, binding);
+  if (!key || !Number.isSafeInteger(minimumEpoch) || minimumEpoch < 0) return false;
+  const current = Number(minimumActionAuthorizationEpochs.get(key) || 0);
+  minimumActionAuthorizationEpochs.set(key, Math.max(current, minimumEpoch));
   while (minimumActionAuthorizationEpochs.size > 16) {
     const oldest = minimumActionAuthorizationEpochs.keys().next().value;
     if (oldest === undefined) break;
     minimumActionAuthorizationEpochs.delete(oldest);
   }
+  return true;
 }
 
 function acceptEspnProducerContext(payload, tabId) {
@@ -1421,12 +1579,14 @@ async function performWatchedLiveRoomRecovery(watch, context, senderTab) {
       return null;
     }
     espnContext = { ...exactContext, season: data.league.season };
-    await establishActionBinding(
+    if (liveRoomWatch !== watch) return null;
+    const establishedBinding = await establishActionBinding(
       espnContext,
       data.league,
       roomTabId,
       watch.appTabId,
       watch.commandCenterSessionId,
+      watch.commandCenterDocumentId,
     );
     data.runtime = await runtimeDiagnostics();
     data.roomWatch = {
@@ -1439,8 +1599,21 @@ async function performWatchedLiveRoomRecovery(watch, context, senderTab) {
       autoArmRequested: watch.autoArmRequested === true,
       reusedAuthenticatedPlayerPool: Array.isArray(watch.sourcePlayers) && watch.sourcePlayers.length > 0,
     };
+    if (liveRoomWatch !== watch) {
+      const sameAuthoritySuccessor = successorWatchPreservesEstablishedAuthority(
+        watch,
+        liveRoomWatch,
+        establishedBinding,
+        espnContext,
+      );
+      await clearActionBindingIfSame(establishedBinding, { revoke: !sameAuthoritySuccessor });
+      return null;
+    }
     liveRoomWatch = null;
     await persistLiveRoomWatch(null);
+    if (!await freshenEstablishedWriterLease(establishedBinding)) {
+      throw new Error("WRITER_BINDING_CHANGED_BEFORE_HANDOFF");
+    }
     // Broadcast the verified room first. Window separation, source cleanup,
     // and focus are presentation work and must not consume the opening clock.
     await broadcast("DF_IMPORT_SUCCESS", data);
@@ -1493,18 +1666,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           };
       const context = await findEspnContext();
       const helloSessionId = String(message.payload?.commandCenterSessionId || "");
+      const helloDocumentId = String(message.payload?.commandCenterDocumentId || "");
+      if (authorization.senderKind === "app"
+        && liveRoomWatch
+        && Number(sender.tab?.id) === Number(liveRoomWatch.appTabId)
+        && validCommandCenterSessionId(helloDocumentId)
+        && helloDocumentId !== liveRoomWatch.commandCenterDocumentId) {
+        liveRoomWatch = null;
+        await persistLiveRoomWatch(null);
+      }
+      let helloBinding = null;
       if (authorization.senderKind === "app"
         && actionBinding
         && Number(sender.tab?.id) === Number(actionBinding.appTabId)
-        && validCommandCenterSessionId(helloSessionId)) {
-        if (helloSessionId === actionBinding.commandCenterSessionId) {
-          renewWriterLease(actionBinding);
+        && validCommandCenterSessionId(helloSessionId)
+        && validCommandCenterSessionId(helloDocumentId)) {
+        if (helloSessionId === actionBinding.commandCenterSessionId
+          && helloDocumentId === actionBinding.commandCenterDocumentId) {
+          // APP_HELLO is the explicit exact-tab/session recovery handshake
+          // after an MV3 restart. Heartbeats and actions may extend only this
+          // freshly established lease; neither can resurrect an expired one.
+          if (contextMatchesActionBinding(actionBinding, context, actionBinding.tabId)) {
+            helloBinding = actionBindingAuthoritySnapshot(actionBinding);
+          } else {
+            await clearActionBinding();
+          }
         } else {
           // A dashboard reload keeps the Chrome tab id but creates a new
           // command-center session. Revoke the old content-script actuator
           // before the replacement page can become the writer.
           await clearActionBinding();
         }
+      }
+      const runtime = await runtimeDiagnostics();
+      // Runtime integrity can take longer than the deliberately short writer
+      // lease on a cold MV3 worker. Mint only after every deferred hello check
+      // and only if the exact session, tabs, league, team, season, and ESPN
+      // producer document are still bound.
+      if (helloBinding && !await freshenEstablishedWriterLease(helloBinding)) {
+        helloBinding = null;
       }
       return {
         ready: true,
@@ -1513,7 +1713,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         workspace: {
           ...workspace,
         },
-        runtime: await runtimeDiagnostics(),
+        runtime,
+        writerLeaseEstablished: Boolean(helloBinding),
       };
     }
     if (authorization.senderKind === "app") {
@@ -1545,6 +1746,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       if (!validCommandCenterSessionId(message.payload?.commandCenterSessionId)) {
         return { ok: false, code: "COMMAND_CENTER_SESSION_INVALID", message: "Reconnect DraftForge before arming the live-room handoff." };
+      }
+      if (!validCommandCenterSessionId(message.payload?.commandCenterDocumentId)) {
+        return { ok: false, code: "COMMAND_CENTER_DOCUMENT_INVALID", message: "Reload DraftForge before arming the live-room handoff." };
       }
       const requestedLeagueId = String(message.payload?.sourceLeagueId || "");
       const requestedSourceTabId = Number(message.payload?.sourceTabId);
@@ -1583,6 +1787,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       if (!watch) return { ok: false, code: "LIVE_ROOM_WATCH_INVALID", message: "DraftForge could not prove one exact pre-draft league and team." };
       watch.commandCenterSessionId = message.payload.commandCenterSessionId;
+      watch.commandCenterDocumentId = message.payload.commandCenterDocumentId;
       appTabs.add(sender.tab.id);
       liveRoomWatch = watch;
       await persistLiveRoomWatch(watch);
@@ -1692,6 +1897,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!validCommandCenterSessionId(message.payload?.commandCenterSessionId)) {
         return { ok: false, code: "COMMAND_CENTER_SESSION_INVALID", message: "Reload DraftForge before recovering the live workspace." };
       }
+      if (!validCommandCenterSessionId(message.payload?.commandCenterDocumentId)) {
+        return { ok: false, code: "COMMAND_CENTER_DOCUMENT_INVALID", message: "Reload DraftForge before recovering the live workspace." };
+      }
       appTabs.add(sender.tab.id);
       const recovery = selectRecoveryWorkspace(await chrome.tabs.query({}), {
         appTabId: sender.tab.id,
@@ -1711,12 +1919,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!context) return { ok: false, code: "RECOVERY_CONTEXT_TIMEOUT", message: "The exact ESPN room did not reconnect before the recovery deadline." };
 
       espnContext = { ...context, season: data.league.season };
-      await establishActionBinding(
+      const establishedBinding = await establishActionBinding(
         espnContext,
         data.league,
         recovery.roomTabId,
         sender.tab.id,
         message.payload.commandCenterSessionId,
+        message.payload.commandCenterDocumentId,
       );
       data.workspaceRecovery = {
         recovered: true,
@@ -1729,6 +1938,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (cleanupTabIds.length) await chrome.tabs.remove(cleanupTabIds);
       const visibility = await keepLiveRoomVisible(recovery.roomTabId, sender.tab);
       data.runtime = await runtimeDiagnostics();
+      if (!await freshenEstablishedWriterLease(establishedBinding)) {
+        return { ok: false, code: "WRITER_BINDING_CHANGED_BEFORE_RECOVERY", message: "Live workspace authority changed before recovery could be published." };
+      }
       await broadcast("DF_IMPORT_SUCCESS", data);
       return { ok: true, code: "LIVE_WORKSPACE_RECOVERED", data, closedTabCount: cleanupTabIds.length, visibility, reloadedRoom };
     }
@@ -1752,7 +1964,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === "ESPN_HEARTBEAT") {
       const context = { ...message.payload, tabId: sender.tab?.id };
       if (!context.inDraftRoom || !context.leagueId) return { ok: true, skipped: true };
-      return { ok: true, ...scheduleDraftPoll(context) };
+      // A replacement watch can be armed while the prior watched handoff is
+      // settling without changing ESPN's serialized DOM context. In that
+      // case the producer emits heartbeats, not another ESPN_CONTEXT event.
+      // Let the exact, one-shot watch recover from that heartbeat so the
+      // successor cannot remain inert until an unrelated room mutation.
+      const roomWatch = liveRoomWatch
+        ? await recoverWatchedLiveRoom(context, sender.tab)
+        : null;
+      return { ok: true, ...scheduleDraftPoll(context), roomWatch };
     }
     if (message.type === "ESPN_ACTION_RESOLVED") {
       await ensureActionBinding();
@@ -1803,12 +2023,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             context.tabId,
             sender.tab.id,
             message.payload.commandCenterSessionId,
+            message.payload.commandCenterDocumentId,
           );
           return { ok: true, ...verification, context, rebound: true, previousTabId };
         }
         return { ok: false, ...verification, code: "DRAFT_TAB_CHANGED", message: "The imported ESPN draft tab changed or is ambiguous. Reconnect before submitting." };
       }
       if (!actionMatchesBinding(message.payload, context, expectedTabId)) {
+        if (reboundMatchesActionBinding(actionBinding, context, sender.tab?.id)) {
+          const previousTabId = actionBinding.tabId;
+          await establishActionBinding(
+            context,
+            actionBinding,
+            context.tabId,
+            sender.tab.id,
+            message.payload.commandCenterSessionId,
+            message.payload.commandCenterDocumentId,
+          );
+          return { ok: true, ...verification, context, rebound: true, previousTabId };
+        }
         return { ok: false, ...verification, code: "DRAFT_ACTION_IDENTITY_CHANGED", message: "The exact ESPN league, team, season, or bound tab changed. Reconnect before submitting." };
       }
       return { ok: true, ...verification, context };
@@ -1818,6 +2051,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const requestedLeagueId = message.payload?.leagueId;
       if (!validCommandCenterSessionId(message.payload?.commandCenterSessionId)) {
         return { ok: false, code: "COMMAND_CENTER_SESSION_INVALID", message: "Reload DraftForge before connecting to ESPN." };
+      }
+      if (!validCommandCenterSessionId(message.payload?.commandCenterDocumentId)) {
+        return { ok: false, code: "COMMAND_CENTER_DOCUMENT_INVALID", message: "Reload DraftForge before connecting to ESPN." };
       }
       const detected = await waitForEspnContext(requestedLeagueId);
       const context = { ...(detected || (!requestedLeagueId ? espnContext : {}) || {}) };
@@ -1832,6 +2068,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         context.tabId,
         sender.tab?.id,
         message.payload.commandCenterSessionId,
+        message.payload.commandCenterDocumentId,
       );
       await broadcast("DF_IMPORT_SUCCESS", data);
       return { ok: true, data };
@@ -1840,23 +2077,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       await ensureActionBinding();
       const minimumEpoch = Number(message.payload?.minimumAuthorizationEpoch);
       const expectedTabId = Number(message.payload?.expectedTabId);
-      if (!actionBinding
-        || !commandCenterSessionMatchesBinding(message.payload)
+      const cancelledBinding = actionBinding;
+      if (!cancelledBinding
+        || !validCommandCenterSessionId(message.payload?.commandCenterSessionId)
+        || message.payload.commandCenterSessionId !== cancelledBinding.commandCenterSessionId
+        || !validCommandCenterSessionId(message.payload?.commandCenterDocumentId)
+        || message.payload.commandCenterDocumentId !== cancelledBinding.commandCenterDocumentId
         || !Number.isSafeInteger(minimumEpoch) || minimumEpoch < 0
-        || expectedTabId !== Number(actionBinding.tabId)
-        || String(message.payload?.expectedLeagueId || "") !== String(actionBinding.leagueId)
-        || Number(message.payload?.expectedTeamId) !== Number(actionBinding.teamId)) {
+        || expectedTabId !== Number(cancelledBinding.tabId)
+        || String(message.payload?.expectedLeagueId || "") !== String(cancelledBinding.leagueId)
+        || Number(message.payload?.expectedTeamId) !== Number(cancelledBinding.teamId)) {
         return { ok: false, code: "ACTION_CANCELLATION_BINDING_MISMATCH" };
       }
-      rememberMinimumActionAuthorizationEpoch(message.payload.commandCenterSessionId, minimumEpoch);
+      rememberMinimumActionAuthorizationEpoch(
+        message.payload.commandCenterSessionId,
+        minimumEpoch,
+        cancelledBinding,
+      );
       try {
         await withOperationDeadline(
           APP_BROADCAST_TIMEOUT_MS,
           "ACTION_CANCELLATION_DELIVERY_TIMEOUT",
-          () => chrome.tabs.sendMessage(actionBinding.tabId, {
+          () => chrome.tabs.sendMessage(cancelledBinding.tabId, {
             type: "DF_CANCEL_PENDING_ACTIONS",
             payload: {
               commandCenterSessionId: message.payload.commandCenterSessionId,
+              commandCenterDocumentId: cancelledBinding.commandCenterDocumentId,
+              expectedProducerSessionId: cancelledBinding.producerSessionId,
               minimumAuthorizationEpoch: minimumEpoch,
             },
           }),
@@ -1869,59 +2116,84 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return { ok: true, code: "ACTION_AUTHORIZATION_REVOKED", minimumAuthorizationEpoch: minimumEpoch };
     }
     if (message.type === "REVOKE_ACTION_BINDING" || message.type === "REVOKE_WRITER_ON_PAGEHIDE") {
-      await ensureActionBinding();
-      const expectedTabId = Number(message.payload?.expectedTabId);
-      const exact = actionBinding
-        && Number(sender.tab?.id) === Number(actionBinding.appTabId)
-        && commandCenterSessionMatchesBinding(message.payload)
-        && expectedTabId === Number(actionBinding.tabId)
-        && String(message.payload?.expectedLeagueId || "") === String(actionBinding.leagueId)
-        && Number(message.payload?.expectedTeamId) === Number(actionBinding.teamId);
-      if (!exact) {
-        return {
-          ok: false,
-          code: "ACTION_BINDING_REVOCATION_MISMATCH",
-          transitionRequestId: message.payload?.transitionRequestId,
-        };
+      await actionBindingRestore;
+      const pageHide = message.type === "REVOKE_WRITER_ON_PAGEHIDE";
+      const requestedMinimumEpoch = pageHide
+        ? Number.MAX_SAFE_INTEGER
+        : Number(message.payload?.minimumAuthorizationEpoch);
+      if (!Number.isSafeInteger(requestedMinimumEpoch) || requestedMinimumEpoch < 0) {
+        return { ok: false, code: "ACTION_AUTHORIZATION_INVALID" };
       }
-      const revoked = { ...actionBinding };
-      await clearActionBinding();
-      return {
-        ok: true,
-        code: "ACTION_BINDING_REVOKED",
-        transitionRequestId: message.payload?.transitionRequestId,
-        revokedTabId: revoked.tabId,
-        revokedLeagueId: revoked.leagueId,
-        revokedTeamId: revoked.teamId,
-        minimumAuthorizationEpoch: Number.MAX_SAFE_INTEGER,
-      };
+      return enqueueActionBindingMutation(async () => {
+        const expectedTabId = Number(message.payload?.expectedTabId);
+        const revoked = actionBinding;
+        const exact = revoked
+          && Number(sender.tab?.id) === Number(revoked.appTabId)
+          && validCommandCenterSessionId(message.payload?.commandCenterSessionId)
+          && message.payload.commandCenterSessionId === revoked.commandCenterSessionId
+          && validCommandCenterSessionId(message.payload?.commandCenterDocumentId)
+          && message.payload.commandCenterDocumentId === revoked.commandCenterDocumentId
+          && expectedTabId === Number(revoked.tabId)
+          && String(message.payload?.expectedLeagueId || "") === String(revoked.leagueId)
+          && Number(message.payload?.expectedTeamId) === Number(revoked.teamId);
+        if (!exact) {
+          return {
+            ok: false,
+            code: "ACTION_BINDING_REVOCATION_MISMATCH",
+            transitionRequestId: message.payload?.transitionRequestId,
+          };
+        }
+        await clearActionBindingNow({ minimumAuthorizationEpoch: requestedMinimumEpoch });
+        return {
+          ok: true,
+          code: "ACTION_BINDING_REVOKED",
+          transitionRequestId: message.payload?.transitionRequestId,
+          revokedTabId: revoked.tabId,
+          revokedLeagueId: revoked.leagueId,
+          revokedTeamId: revoked.teamId,
+          minimumAuthorizationEpoch: requestedMinimumEpoch,
+        };
+      });
     }
     if (message.type === "WRITER_HEARTBEAT") {
       await ensureActionBinding();
+      const transitionRequestId = message.payload?.transitionRequestId;
       const exact = actionBinding
         && Number(sender.tab?.id) === Number(actionBinding.appTabId)
         && commandCenterSessionMatchesBinding(message.payload)
         && Number(message.payload?.expectedTabId) === Number(actionBinding.tabId)
         && String(message.payload?.expectedLeagueId || "") === String(actionBinding.leagueId)
-        && Number(message.payload?.expectedTeamId) === Number(actionBinding.teamId);
-      if (!exact) return { ok: false, code: "WRITER_LEASE_BINDING_MISMATCH" };
+        && Number(message.payload?.expectedTeamId) === Number(actionBinding.teamId)
+        && String(message.payload?.expectedProducerSessionId || "") === actionBinding.producerSessionId;
+      if (!exact) return { ok: false, code: "WRITER_LEASE_BINDING_MISMATCH", transitionRequestId };
       const lease = renewWriterLease(actionBinding);
-      return { ok: true, code: "WRITER_LEASE_RENEWED", expiresAt: lease.expiresAt };
+      if (!lease) return { ok: false, code: "WRITER_LEASE_EXPIRED", transitionRequestId };
+      return { ok: true, code: "WRITER_LEASE_RENEWED", expiresAt: lease.expiresAt, transitionRequestId };
     }
     if (message.type === "AUCTION_CLICK_UNCERTAINTY") {
       return auctionUncertaintyMessage(message, sender);
     }
     if (message.type === "VERIFY_ACTION_AUTHORIZATION") {
       await ensureActionBinding();
-      const authorizationStatus = actionAuthorizationStatus(message.payload);
+      const verifiedBinding = actionBinding;
+      const verifiedBindingGeneration = actionBindingGeneration;
+      const authorizationStatus = actionAuthorizationStatus(message.payload, verifiedBinding);
       if (authorizationStatus !== "ACTION_AUTHORIZATION_VALID") {
         return { ok: false, code: authorizationStatus };
       }
-      if (!writerLeaseAuthorizes(actionBinding, message.payload, sender.tab?.id)) {
+      if (!writerLeaseAuthorizes(verifiedBinding, message.payload, sender.tab?.id)) {
         return { ok: false, code: "WRITER_LEASE_EXPIRED" };
       }
       const serverLease = await verifyServerDispatchLease(message.payload);
       if (!serverLease.ok) return serverLease;
+      if (actionBinding !== verifiedBinding
+        || actionBindingGeneration !== verifiedBindingGeneration
+        || actionAuthorizationStatus(message.payload, verifiedBinding) !== "ACTION_AUTHORIZATION_VALID"
+        || !writerLeaseAuthorizes(verifiedBinding, message.payload, sender.tab?.id)
+        || actionDeadlineStatus(message.payload) !== "ACTION_DEADLINE_VALID"
+        || actionAvailabilityDeadlineStatus(message.payload) !== "AVAILABILITY_DEADLINE_VALID") {
+        return { ok: false, code: "ACTION_AUTHORIZATION_REVOKED" };
+      }
       return { ok: true, code: "ACTION_AUTHORIZATION_VERIFIED" };
     }
     if (message.type === "SUBMIT_ACTION") {
@@ -1960,12 +2232,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       const submittedBinding = actionBinding;
       const submittedBindingGeneration = actionBindingGeneration;
-      const submittedWriterLease = renewWriterLease(submittedBinding);
+      const submittedWriterLease = currentWriterLease(submittedBinding, sender.tab?.id);
+      if (!submittedWriterLease) {
+        return { ok: false, code: "WRITER_LEASE_EXPIRED", message: "The exact command-center writer lease expired. Rebind the live room before submitting.", action: message.payload };
+      }
       const submittedBindingStillCurrent = () => (
         actionBinding === submittedBinding
         && actionBindingGeneration === submittedBindingGeneration
       );
-      const initialAuthorizationStatus = actionAuthorizationStatus(message.payload);
+      const initialAuthorizationStatus = actionAuthorizationStatus(message.payload, submittedBinding);
       if (initialAuthorizationStatus !== "ACTION_AUTHORIZATION_VALID") {
         return { ok: false, code: initialAuthorizationStatus, message: "The command center revoked this action before ESPN dispatch. No action was sent.", action: message.payload };
       }
@@ -1988,7 +2263,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!actionPayloadMatchesBinding(submittedBinding, message.payload, context, expectedTabId)) {
         return { ok: false, code: "DRAFT_ACTION_IDENTITY_CHANGED", message: "The exact ESPN league, team, season, or bound tab changed. DraftForge sent no action." };
       }
-      const verifiedAuthorizationStatus = actionAuthorizationStatus(message.payload);
+      const verifiedAuthorizationStatus = actionAuthorizationStatus(message.payload, submittedBinding);
       if (verifiedAuthorizationStatus !== "ACTION_AUTHORIZATION_VALID") {
         return { ok: false, code: verifiedAuthorizationStatus, message: "The command center revoked this action during exact-context verification. No action was sent.", action: message.payload };
       }
@@ -1996,6 +2271,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         ...message.payload,
         expectedTeamId: submittedBinding.teamId,
         expectedSeason: submittedBinding.season,
+        expectedProducerSessionId: submittedBinding.producerSessionId,
         writerLeaseId: submittedWriterLease.leaseId,
       };
       const dispatchDeadlineStatus = actionDeadlineStatus(exactAction);
@@ -2006,7 +2282,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (dispatchAvailabilityDeadlineStatus !== "AVAILABILITY_DEADLINE_VALID") {
         return { ok: false, code: dispatchAvailabilityDeadlineStatus, message: "The availability-veto evidence expired while the exact ESPN tab was being verified. No ESPN action was sent.", action: exactAction };
       }
-      const dispatchAuthorizationStatus = actionAuthorizationStatus(exactAction);
+      const dispatchAuthorizationStatus = actionAuthorizationStatus(exactAction, submittedBinding);
       if (dispatchAuthorizationStatus !== "ACTION_AUTHORIZATION_VALID") {
         return { ok: false, code: dispatchAuthorizationStatus, message: "The command center revoked this action immediately before ESPN dispatch. No action was sent.", action: exactAction };
       }
@@ -2059,7 +2335,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       if (actionDeadlineStatus(exactAction) !== "ACTION_DEADLINE_VALID"
         || actionAvailabilityDeadlineStatus(exactAction) !== "AVAILABILITY_DEADLINE_VALID"
-        || actionAuthorizationStatus(exactAction) !== "ACTION_AUTHORIZATION_VALID"
+        || actionAuthorizationStatus(exactAction, submittedBinding) !== "ACTION_AUTHORIZATION_VALID"
         || !submittedBindingStillCurrent()) {
         return { ok: false, code: "ACTION_AUTHORIZATION_REVOKED", message: "Draft-room authority changed during the final sole-room check. No action was sent.", action: exactAction };
       }
@@ -2145,6 +2421,11 @@ chrome.tabs.onUpdated?.addListener?.((tabId, changeInfo) => {
   // A same-tab dashboard reload/navigation retains its numeric tab id. Treat
   // document replacement exactly like writer removal so an action already
   // handed to ESPN cannot outlive its originating command-center document.
-  if (Number(tabId) !== Number(actionBinding?.appTabId)) return;
-  void clearActionBinding().catch(() => {});
+  if (Number(tabId) === Number(liveRoomWatch?.appTabId)) {
+    liveRoomWatch = null;
+    void persistLiveRoomWatch(null).catch(() => {});
+  }
+  if (Number(tabId) === Number(actionBinding?.appTabId)) {
+    void clearActionBinding().catch(() => {});
+  }
 });

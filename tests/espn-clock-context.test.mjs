@@ -5,6 +5,7 @@ import vm from "node:vm";
 import test from "node:test";
 
 const contentUrl = new URL("../extension/espn-content.js", import.meta.url);
+const TEST_COMMAND_CENTER_DOCUMENT_ID = "test-command-document";
 
 async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "", clockTeam, clockDisplay = null, extraGlobalAuctionClock = null, extraGlobalSnakeClock = null, snakeClockDisplays = null, auctionClockDisplays = null, clockOwnMarker = false, ownTeam, ownAuctionTeam, ownAuctionSelecting = false, nominationTurnEndsAfterSelect = false, snakeTurnEndsBeforeSubmit = false, separateDraftConfirmation = false, draftConfirmationDelayMs = 0, nominationConfirmationDelayMs = null, nominationAcknowledged = true, nominationAcknowledgementDelayMs = 0, nominationAcknowledgedAmount = 1, mandatoryPositionFilterDelayMs = null, maximumOffer, nominatedPlayer, nominatedPlayerId = null, nominatedPlayerIds = null, waitingTeamId, availableIds = [], snakeHistory = [], selectPlayer, selectRosterConfirmed = true, rosterPlayerId = null, rosterRootTeamId = 5, opponentRosterContainsSelected = false, duplicateOwnRosterRoots = 0, bidAmount, bidControlVisible = true, bidControlDelayMs = 0, extraBidControls = 0, customBidForm = false, customBidAcceptsAmount = true, customBidActsAsNomination = false, customBidDriftsAfterReads = null, bidAcknowledged = true, bidAcknowledgementDelayMs = 0, leadingBid = false, leadingBidAfterMs = null, opponentLeadingProof = true, decoratedLeader = null, extraAuctionTransactions = 0, modalConfirmations = [], autopickActive = false, autopickControlVisible = true, autopickEnableControlVisible = false, soundMuted = true, authorizationVerifier = null, auctionArmHook = null, auctionUncertaintyStore = new Map(), auctionEventLog = [], auctionUncertaintyStorageFails = false, throwAfterPreliminaryClick = false, throwAfterFinalClickOperation = null, throwAfterModalClickOperation = null, href = "https://fantasy.espn.com/football/draft?leagueId=701&teamId=5&seasonId=2026" }) {
   const source = await readFile(contentUrl, "utf8");
@@ -616,7 +617,7 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
       },
     },
   };
-  vm.runInNewContext(`${source.slice(0, runtimeStart)}\nglobalThis.readDraftContext = getContext; globalThis.readObservedDraftContext = getObservedContext; globalThis.hasSafeWindow = hasSafeActionWindow; globalThis.snakePoolStable = snakePlayerPoolIsStable; globalThis.nominationStarted = nominationHasStarted; globalThis.updateSales = updateAuctionSales; globalThis.advanceTrackedSales = advanceAuctionTracking; globalThis.advanceRapidProducerSales = advanceRapidProducerAuctionTracking; globalThis.observeTrackedSales = observeAuctionTracking; globalThis.executeDraftAction = executeAction; globalThis.revokeDraftActions = rememberMinimumActionAuthorizationEpoch; globalThis.disableDraftAutopick = disableEspnAutopick; globalThis.planCandidateSearch = buildCandidateSearchPlan; globalThis.planPlayerResolution = playerResolutionTiming; globalThis.planMandatoryPosition = buildMandatoryPositionPlan; globalThis.pruneSnakeCandidates = availableSnakeCandidates; globalThis.contextScanPolicyForTest = contextScanPolicy; globalThis.nextContextScanDelayForTest = nextContextScanDelay;`, sandbox);
+  vm.runInNewContext(`${source.slice(0, runtimeStart)}\nglobalThis.readDraftContext = getContext; globalThis.readObservedDraftContext = getObservedContext; globalThis.hasSafeWindow = hasSafeActionWindow; globalThis.snakePoolStable = snakePlayerPoolIsStable; globalThis.nominationStarted = nominationHasStarted; globalThis.updateSales = updateAuctionSales; globalThis.advanceTrackedSales = advanceAuctionTracking; globalThis.advanceRapidProducerSales = advanceRapidProducerAuctionTracking; globalThis.observeTrackedSales = observeAuctionTracking; globalThis.executeDraftAction = executeAction; globalThis.revokeDraftActions = rememberMinimumActionAuthorizationEpoch; globalThis.disableDraftAutopick = disableEspnAutopick; globalThis.planCandidateSearch = buildCandidateSearchPlan; globalThis.planPlayerResolution = playerResolutionTiming; globalThis.planMandatoryPosition = buildMandatoryPositionPlan; globalThis.pruneSnakeCandidates = availableSnakeCandidates; globalThis.contextScanPolicyForTest = contextScanPolicy; globalThis.nextContextScanDelayForTest = nextContextScanDelay; globalThis.contentProducerSessionId = contextProducerSessionId;`, sandbox);
   let context = sandbox.readDraftContext();
   if (context.onClock && !context.actionSurfaceReady) {
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -637,6 +638,8 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
       snakeActionStarted = true;
       return sandbox.executeDraftAction({
         commandCenterSessionId: "test-command-center",
+        commandCenterDocumentId: TEST_COMMAND_CENTER_DOCUMENT_ID,
+        expectedProducerSessionId: sandbox.contentProducerSessionId,
         authorizationEpoch: 0,
         writerLeaseId: "test-writer-lease",
         notAfter: defaultNotAfter,
@@ -644,8 +647,24 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
         ...action,
       });
     },
-    revokeActions: (minimumAuthorizationEpoch) => sandbox.revokeDraftActions("test-command-center", minimumAuthorizationEpoch),
-    disableAutopick: sandbox.disableDraftAutopick,
+    revokeActions: (minimumAuthorizationEpoch) => sandbox.revokeDraftActions(
+      "test-command-center",
+      TEST_COMMAND_CENTER_DOCUMENT_ID,
+      sandbox.contentProducerSessionId,
+      minimumAuthorizationEpoch,
+    ),
+    revokeActionsForIdentity: ({ documentId = TEST_COMMAND_CENTER_DOCUMENT_ID, producerSessionId, minimumAuthorizationEpoch }) => (
+      sandbox.revokeDraftActions(
+        "test-command-center",
+        documentId,
+        producerSessionId,
+        minimumAuthorizationEpoch,
+      )
+    ),
+    disableAutopick: (action = {}) => sandbox.disableDraftAutopick({
+      expectedProducerSessionId: sandbox.contentProducerSessionId,
+      ...action,
+    }),
     candidateSearchPlan: sandbox.planCandidateSearch,
     playerResolutionPlan: sandbox.planPlayerResolution,
     mandatoryPositionPlan: sandbox.planMandatoryPosition,
@@ -655,6 +674,7 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
     actionState,
     auctionUncertaintyStore,
     auctionEventLog,
+    producerSessionId: sandbox.contentProducerSessionId,
     setAuctionOffer({ playerName, playerId, clock, currentBid, leading }) {
       simulatedNominatedPlayer = playerName;
       if (playerId !== undefined) simulatedNominatedPlayerIds = [playerId];
@@ -717,6 +737,83 @@ test("the pre-draft snake grid can pass the no-click checklist without authorizi
   });
   assert.equal(result.code, "NOT_ON_CLOCK");
   assert.equal(room.actionState.selectClicks, 0);
+});
+
+test("an action from the prior ESPN document is rejected by a replacement producer before any click", async () => {
+  const priorDocument = await loadDraftContext({
+    text: "RND 5 OF 16\n00:20\nON THE CLOCK: PICK 47",
+    clockTeam: "Us",
+    ownTeam: "Us",
+    selectPlayer: { id: 12345, name: "Exact Player" },
+  });
+  const replacementDocument = await loadDraftContext({
+    text: "RND 5 OF 16\n00:20\nON THE CLOCK: PICK 47",
+    clockTeam: "Us",
+    ownTeam: "Us",
+    selectPlayer: { id: 12345, name: "Exact Player" },
+  });
+  assert.notEqual(priorDocument.producerSessionId, replacementDocument.producerSessionId);
+
+  const staleAction = {
+    operation: "SELECT",
+    actionRequestId: 7301,
+    playerId: 12345,
+    playerName: "Exact Player",
+    candidates: [{ playerId: 12345, playerName: "Exact Player" }],
+    expectedLeagueId: "701",
+    expectedPick: 47,
+    expectedProducerSessionId: priorDocument.producerSessionId,
+  };
+  const result = await replacementDocument.executeAction(staleAction);
+
+  assert.equal(result.code, "ESPN_PRODUCER_IDENTITY_CHANGED");
+  assert.equal(result.clicked, undefined);
+  assert.equal(replacementDocument.actionState.selectClicks, 0);
+  assert.equal(replacementDocument.actionState.draftSubmitClicks, 0);
+  assert.equal(replacementDocument.actionState.modalClicks, 0);
+});
+
+test("same-tab producer replacement rejects the prior cancellation and accepts only the reconnected producer", async () => {
+  const priorDocument = await loadDraftContext({
+    text: "RND 5 OF 16\n00:20\nON THE CLOCK: PICK 47",
+    clockTeam: "Us",
+    ownTeam: "Us",
+    selectPlayer: { id: 12345, name: "Exact Player" },
+  });
+  const replacementDocument = await loadDraftContext({
+    text: "RND 5 OF 16\n00:20\nON THE CLOCK: PICK 47",
+    clockTeam: "Us",
+    ownTeam: "Us",
+    selectPlayer: { id: 12345, name: "Exact Player" },
+  });
+  assert.notEqual(priorDocument.producerSessionId, replacementDocument.producerSessionId);
+
+  const staleCancellation = replacementDocument.revokeActionsForIdentity({
+    producerSessionId: priorDocument.producerSessionId,
+    minimumAuthorizationEpoch: Number.MAX_SAFE_INTEGER,
+  });
+  assert.equal(staleCancellation, false, "a P1 cancellation cannot poison replacement producer P2 in the same ESPN tab");
+
+  const reconnectedAction = {
+    operation: "SELECT",
+    actionRequestId: 7302,
+    playerId: 12345,
+    playerName: "Exact Player",
+    candidates: [{ playerId: 12345, playerName: "Exact Player" }],
+    expectedLeagueId: "701",
+    expectedPick: 47,
+  };
+  const accepted = await replacementDocument.executeAction(reconnectedAction);
+  assert.equal(accepted.code, "ROSTER_CONFIRMED");
+  assert.equal(replacementDocument.actionState.selectClicks, 1);
+
+  assert.equal(replacementDocument.revokeActionsForIdentity({
+    producerSessionId: replacementDocument.producerSessionId,
+    minimumAuthorizationEpoch: 1,
+  }), true, "the exact P2 cancellation still establishes its local floor");
+  const revoked = await replacementDocument.executeAction({ ...reconnectedAction, actionRequestId: 7303 });
+  assert.equal(revoked.code, "ACTION_AUTHORIZATION_REVOKED");
+  assert.equal(replacementDocument.actionState.selectClicks, 1, "the exact P2 floor prevents any later click");
 });
 
 test("late-round player-grid churn cannot keep the same snake pick locked", async () => {

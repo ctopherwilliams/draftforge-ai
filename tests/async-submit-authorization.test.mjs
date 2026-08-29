@@ -99,6 +99,7 @@ function buildSubmitHarness({
     onClock: true,
     remainingSeconds,
     currentPick: 1,
+    producerSessionId: "espn-producer-session",
   };
   const publisher = {
     waitUntilAuthorized() {
@@ -130,7 +131,9 @@ function buildSubmitHarness({
     league: { id: "1603083723", teamId: 6, season: 2026, rosterSize: 16, draftType },
     classifyPlayerConsensusCorroboration,
     actionAuthorizationEpochRef: { current: 0 },
+    bindingTransitionOwnerRef: { current: null },
     autoDraftRef: { current: true },
+    writerLeaseHealthyRef: { current: true },
     pickFeedHealthRef: { current: { observedAt: new Date().toISOString(), lagging: false, fresh: true } },
     liveControlBlockedRef: { current: false },
     liveControlBindingRef: { current: "binding" },
@@ -203,9 +206,12 @@ function buildSubmitHarness({
     hasUnresolvedAuctionClick,
     resolveOwnRoster: () => [],
     sendToExtension(type, payload) {
-      sent.push({ type, payload });
+      sent.push({
+        type,
+        payload: { ...payload, commandCenterDocumentId: "command-center-document" },
+      });
     },
-    COMMAND_CENTER_PUBLISHER: { sessionId: "command-center-session" },
+    COMMAND_CENTER_PUBLISHER: { sessionId: "command-center-session", documentId: "command-center-document" },
     DASHBOARD_LOADED_AT: "2026-08-28T12:00:00.000Z",
     actionWatchdogsRef: { current: new Map() },
     normalizeName: (value) => String(value || "").toLowerCase().replace(/[^a-z0-9]/g, ""),
@@ -476,6 +482,19 @@ test("an unresolved clicked auction action fences manual and automatic submissio
   assert.match(harness.actionStates.at(-1), /earlier ESPN auction click is still awaiting exact/);
 });
 
+test("a manual action cannot begin while an exact binding transition owns revocation", async () => {
+  const harness = buildSubmitHarness();
+  setBidContext(harness);
+  harness.bindingTransitionOwnerRef.current = "transition-owner";
+
+  await harness.submit(harness.player, false, "BID", 11);
+
+  assert.equal(harness.availabilityWaits.length, 0);
+  assert.equal(harness.auditWaits.length, 0);
+  assert.equal(harness.submissions().length, 0);
+  assert.match(harness.actionStates.at(-1), /binding is being revoked/i);
+});
+
 test("the page roster effect cannot clear an uncertain bid from a different display name without an exact id", () => {
   const pending = {
     actionRequestId: 98,
@@ -713,7 +732,7 @@ test("binding revocation ACK timeout preserves the old exact identity and blocks
       expectedLeagueId: "701",
       expectedTeamId: 5,
       expectedTabId: 77,
-      minimumAuthorizationEpoch: 41,
+    minimumAuthorizationEpoch: 41,
     },
   });
   assert.equal(sandbox.activeEspnTabRef.current, 77);
@@ -778,7 +797,7 @@ test("rapid competing workspace transitions keep one owner until its exact revoc
     revokedTabId: 77,
     revokedLeagueId: "701",
     revokedTeamId: 5,
-    minimumAuthorizationEpoch: Number.MAX_SAFE_INTEGER,
+    minimumAuthorizationEpoch: 8,
   });
   const acquired = await first;
   assert.equal(acquired, activeOwner);

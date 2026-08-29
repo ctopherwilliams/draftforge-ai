@@ -1122,6 +1122,8 @@ function visibleDisableAutopickControl() {
 
 async function disableEspnAutopick(action = {}) {
   let context = getContext();
+  const producerFailure = actionProducerIdentityFailure(action);
+  if (producerFailure) return producerFailure;
   if (!context.inDraftRoom) return { ok: false, code: "NOT_IN_DRAFT_ROOM", message: "Open the ESPN draft room first." };
   if (action.expectedLeagueId && String(context.leagueId) !== String(action.expectedLeagueId)) {
     return { ok: false, code: "WRONG_LEAGUE", message: "The open ESPN draft room is for a different league." };
@@ -1531,6 +1533,8 @@ function exactVisibleModalConfirmation(action) {
 }
 
 function preflightAction(action, context) {
+  const producerFailure = actionProducerIdentityFailure(action);
+  if (producerFailure) return producerFailure;
   const authorizationFailure = actionAuthorizationFailure(action);
   if (authorizationFailure) return authorizationFailure;
   const deadlineFailure = actionDeadlineFailure(action);
@@ -1647,6 +1651,7 @@ function actionExecutionSignature(action) {
     .join(",");
   return [
     action?.commandCenterSessionId || "",
+    action?.commandCenterDocumentId || "",
     action?.dashboardLoadedAt || "",
     action?.actionId || "",
     action?.decisionId || "",
@@ -1656,6 +1661,7 @@ function actionExecutionSignature(action) {
     Number(action?.expectedTeamId || 0),
     Number(action?.expectedSeason || 0),
     Number(action?.expectedTabId || 0),
+    String(action?.expectedProducerSessionId || ""),
     Number(action?.authorizationEpoch ?? -1),
     Number(action?.expectedPick || 0),
     Number(action?.playerId || 0),
@@ -1682,13 +1688,30 @@ function safeCommandCenterSessionId(value) {
     && /^[A-Za-z0-9._:-]+$/.test(value);
 }
 
+function actionProducerIdentityFailure(action) {
+  const expectedProducerSessionId = String(action?.expectedProducerSessionId || "");
+  if (!safeCommandCenterSessionId(expectedProducerSessionId)
+    || expectedProducerSessionId !== contextProducerSessionId) {
+    return {
+      ok: false,
+      code: "ESPN_PRODUCER_IDENTITY_CHANGED",
+      message: "The ESPN draft document changed after this action was authorized. No ESPN action was sent.",
+      action,
+    };
+  }
+  return null;
+}
+
 function actionAuthorizationFailure(action) {
   const sessionId = String(action?.commandCenterSessionId || "");
+  const documentId = String(action?.commandCenterDocumentId || "");
+  const producerSessionId = String(action?.expectedProducerSessionId || "");
   const epoch = Number(action?.authorizationEpoch);
-  if (!safeCommandCenterSessionId(sessionId) || !Number.isSafeInteger(epoch) || epoch < 0) {
+  const key = contentAuthorizationEpochKey(sessionId, documentId, producerSessionId);
+  if (!key || !Number.isSafeInteger(epoch) || epoch < 0) {
     return { ok: false, code: "ACTION_AUTHORIZATION_INVALID", message: "The command-center authorization epoch is missing or invalid. No ESPN action was sent.", action };
   }
-  const minimumEpoch = Number(minimumActionAuthorizationEpochs.get(sessionId) || 0);
+  const minimumEpoch = Number(minimumActionAuthorizationEpochs.get(key) || 0);
   return epoch < minimumEpoch
     ? { ok: false, code: "ACTION_AUTHORIZATION_REVOKED", message: "The command center revoked this action before the ESPN click.", action }
     : null;
@@ -1722,10 +1745,22 @@ async function verifiedActionAuthorizationFailure(action) {
   return actionAuthorizationFailure(action);
 }
 
-function rememberMinimumActionAuthorizationEpoch(sessionId, minimumEpoch) {
-  if (!safeCommandCenterSessionId(sessionId) || !Number.isSafeInteger(minimumEpoch) || minimumEpoch < 0) return false;
-  const current = Number(minimumActionAuthorizationEpochs.get(sessionId) || 0);
-  minimumActionAuthorizationEpochs.set(sessionId, Math.max(current, minimumEpoch));
+function contentAuthorizationEpochKey(sessionId, documentId, producerSessionId) {
+  return safeCommandCenterSessionId(sessionId)
+    && safeCommandCenterSessionId(documentId)
+    && safeCommandCenterSessionId(producerSessionId)
+    ? JSON.stringify([sessionId, documentId, producerSessionId])
+    : "";
+}
+
+function rememberMinimumActionAuthorizationEpoch(sessionId, documentId, producerSessionId, minimumEpoch) {
+  const key = contentAuthorizationEpochKey(sessionId, documentId, producerSessionId);
+  if (!key
+    || producerSessionId !== contextProducerSessionId
+    || !Number.isSafeInteger(minimumEpoch)
+    || minimumEpoch < 0) return false;
+  const current = Number(minimumActionAuthorizationEpochs.get(key) || 0);
+  minimumActionAuthorizationEpochs.set(key, Math.max(current, minimumEpoch));
   while (minimumActionAuthorizationEpochs.size > 16) {
     const oldest = minimumActionAuthorizationEpochs.keys().next().value;
     if (oldest === undefined) break;
@@ -1919,7 +1954,7 @@ async function executeActionAttempt(action) {
   try {
     const context = getContext();
     const preflight = preflightAction(action, context);
-    if (!preflight.action) return preflight;
+    if (preflight.ok !== true || !preflight.action) return preflight;
     action = preflight.action;
     resolvedAction = action;
   if (action.operation === "SELECT" || action.operation === "NOMINATE") {
@@ -2091,7 +2126,7 @@ async function executeActionAttempt(action) {
   // dashboard message or a turn change can never cause even a selection click.
   if (action.operation === "SELECT" || action.operation === "NOMINATE") {
     const refreshedPreflight = preflightAction(action, getContext());
-    if (!refreshedPreflight.action) {
+    if (refreshedPreflight.ok !== true || !refreshedPreflight.action) {
       if (usedPlayerSearch instanceof HTMLInputElement) setNativeValue(usedPlayerSearch, "");
       if (usedPositionFilter && String(usedPositionFilter.value) !== "-1") {
         setNativeSelectValue(usedPositionFilter, "-1");
@@ -2118,7 +2153,7 @@ async function executeActionAttempt(action) {
     const postAuthorizationDeadlineFailure = actionDeadlineFailure(action);
     if (postAuthorizationDeadlineFailure) return postAuthorizationDeadlineFailure;
     const postAuthorizationPreflight = preflightAction(action, getContext());
-    if (!postAuthorizationPreflight.action) return postAuthorizationPreflight;
+    if (postAuthorizationPreflight.ok !== true || !postAuthorizationPreflight.action) return postAuthorizationPreflight;
     action = postAuthorizationPreflight.action;
     selectControl = visiblePlayerControl(requestedPlayerId, resolvedAction.playerName);
     if (!selectControl || playerIdForControl(selectControl) !== requestedPlayerId) {
@@ -2135,7 +2170,7 @@ async function executeActionAttempt(action) {
     const postPermitDeadlineFailure = actionDeadlineFailure(action);
     if (postPermitDeadlineFailure) return failAfterDurablePermitBeforeIrreversibleClick(postPermitDeadlineFailure, "PLAYER_ROW");
     const postPermitPreflight = preflightAction(action, getContext());
-    if (!postPermitPreflight.action) return failAfterDurablePermitBeforeIrreversibleClick(postPermitPreflight, "PLAYER_ROW");
+    if (postPermitPreflight.ok !== true || !postPermitPreflight.action) return failAfterDurablePermitBeforeIrreversibleClick(postPermitPreflight, "PLAYER_ROW");
     action = postPermitPreflight.action;
     selectControl = visiblePlayerControl(requestedPlayerId, resolvedAction.playerName);
     if (!selectControl || playerIdForControl(selectControl) !== requestedPlayerId) {
@@ -2161,7 +2196,7 @@ async function executeActionAttempt(action) {
     const postAuthorizationDeadlineFailure = actionDeadlineFailure(action);
     if (postAuthorizationDeadlineFailure) return postAuthorizationDeadlineFailure;
     const postAuthorizationPreflight = preflightAction(action, getContext());
-    if (!postAuthorizationPreflight.action) return postAuthorizationPreflight;
+    if (postAuthorizationPreflight.ok !== true || !postAuthorizationPreflight.action) return postAuthorizationPreflight;
     action = postAuthorizationPreflight.action;
     selectControl = visiblePlayerControl(requestedPlayerId, resolvedAction.playerName);
     if (!selectControl || playerIdForControl(selectControl) !== requestedPlayerId) {
@@ -2286,7 +2321,7 @@ async function executeActionAttempt(action) {
   }
   if (action.operation === "BID") {
     const bidPreflight = preflightAction(action, preSubmitContext);
-    if (!bidPreflight.action) return bidPreflight;
+    if (bidPreflight.ok !== true || !bidPreflight.action) return bidPreflight;
     action = bidPreflight.action;
   }
   if (customAmountSurface) {
@@ -2312,7 +2347,7 @@ async function executeActionAttempt(action) {
     if (transition) return terminalizeAfterAnyClick(transition);
   }
   const postAuthorizationPreflight = preflightAction(action, postAuthorizationContext);
-  if (!postAuthorizationPreflight.action) return terminalizeAfterAnyClick(postAuthorizationPreflight);
+  if (postAuthorizationPreflight.ok !== true || !postAuthorizationPreflight.action) return terminalizeAfterAnyClick(postAuthorizationPreflight);
   action = postAuthorizationPreflight.action;
   if (needsCustomAmountSurface) {
     const replacementSurface = exactSettledCustomBidSurface(action.amount);
@@ -2363,7 +2398,7 @@ async function executeActionAttempt(action) {
       if (transition) return terminalizeAfterAnyClick(transition);
     }
     const postPermitPreflight = preflightAction(action, postPermitContext);
-    if (!postPermitPreflight.action) return failAfterDurablePermitBeforeIrreversibleClick(postPermitPreflight, "SUBMIT");
+    if (postPermitPreflight.ok !== true || !postPermitPreflight.action) return failAfterDurablePermitBeforeIrreversibleClick(postPermitPreflight, "SUBMIT");
     action = postPermitPreflight.action;
     if (needsCustomAmountSurface) {
       const replacementSurface = exactSettledCustomBidSurface(action.amount);
@@ -2432,7 +2467,7 @@ async function executeActionAttempt(action) {
     }
     const postAuthorizationContext = getContext();
     const postAuthorizationPreflight = preflightAction(action, postAuthorizationContext);
-    if (!postAuthorizationPreflight.action) return terminalizeAfterAnyClick(postAuthorizationPreflight);
+    if (postAuthorizationPreflight.ok !== true || !postAuthorizationPreflight.action) return terminalizeAfterAnyClick(postAuthorizationPreflight);
     action = postAuthorizationPreflight.action;
     let replacementConfirmation = exactVisibleModalConfirmation(resolvedAction);
     if (!replacementConfirmation) {
@@ -2450,7 +2485,7 @@ async function executeActionAttempt(action) {
       const postPermitDeadlineFailure = actionDeadlineFailure(action);
       if (postPermitDeadlineFailure) return terminalizeAfterAnyClick(postPermitDeadlineFailure);
       const postPermitPreflight = preflightAction(action, getContext());
-      if (!postPermitPreflight.action) return terminalizeAfterAnyClick(postPermitPreflight);
+      if (postPermitPreflight.ok !== true || !postPermitPreflight.action) return terminalizeAfterAnyClick(postPermitPreflight);
       action = postPermitPreflight.action;
       replacementConfirmation = exactVisibleModalConfirmation(resolvedAction);
       if (!replacementConfirmation) {
@@ -2588,8 +2623,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return;
   }
   if (message?.type === "DF_CANCEL_PENDING_ACTIONS") {
+    if (String(message.payload?.expectedProducerSessionId || "") !== contextProducerSessionId) {
+      sendResponse({ ok: false, code: "ACTION_AUTHORIZATION_PRODUCER_CHANGED" });
+      return;
+    }
     const accepted = rememberMinimumActionAuthorizationEpoch(
       String(message.payload?.commandCenterSessionId || ""),
+      String(message.payload?.commandCenterDocumentId || ""),
+      String(message.payload?.expectedProducerSessionId || ""),
       Number(message.payload?.minimumAuthorizationEpoch),
     );
     sendResponse(accepted

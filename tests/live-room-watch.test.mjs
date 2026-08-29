@@ -78,11 +78,13 @@ test("one exact authenticated source arms a bounded live-room watch", () => {
 test("an honestly persisted watch restores after serialization while malformed or tampered records fail closed", () => {
   const watch = createLiveRoomWatch(watchInput({ now: 1000, windowMs: 5000 }));
   watch.commandCenterSessionId = "command-center-restart";
+  watch.commandCenterDocumentId = "command-document-restart";
   const persisted = sanitizeLiveRoomWatchForStorage(watch);
   const restoredAfterWorkerRestart = JSON.parse(JSON.stringify(persisted));
   const restoreOptions = {
     now: 2000,
     commandCenterSessionIdIsValid: (value) => value === "command-center-restart",
+    commandCenterDocumentIdIsValid: (value) => value === "command-document-restart",
   };
 
   assert.notDeepEqual(
@@ -133,6 +135,10 @@ test("an honestly persisted watch restores after serialization while malformed o
     ...restoreOptions,
     commandCenterSessionIdIsValid: () => false,
   }), false, "an unverified command-center session cannot restore");
+  assert.equal(validStoredLiveRoomWatch(restoredAfterWorkerRestart, {
+    ...restoreOptions,
+    commandCenterDocumentIdIsValid: () => false,
+  }), false, "an unverified command-center document cannot restore");
 });
 
 test("a source draft room or mismatched source identity cannot arm", () => {

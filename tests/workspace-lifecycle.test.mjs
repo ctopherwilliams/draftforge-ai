@@ -58,7 +58,9 @@ test("a bound writer cannot be displaced by observer open, poll, mutation, or cl
     season: 2026,
     tabId: 41,
     appTabId: 17,
+    producerSessionId: "writer-producer",
     commandCenterSessionId: "writer-session",
+    commandCenterDocumentId: "writer-document",
   });
   const authority = { actionBinding, liveRoomWatch: null, writerAppTabId: 99 };
 

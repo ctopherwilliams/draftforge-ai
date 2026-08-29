@@ -51,6 +51,10 @@ test("live decision precedes secondary player-board detail", () => {
     "every ESPN action must wait for its exact recorded decision",
   );
   assert.match(page, /POST_AUDIT_CONTEXT_CHANGED/);
+  assert.match(page, /if \(bindingTransitionOwnerRef\.current\) return "ACTION_BINDING_TRANSITION_ACTIVE"/);
+  assert.match(page, /Number\(result\.minimumAuthorizationEpoch\) === requestedMinimumAuthorizationEpoch/);
+  assert.match(page, /actionAuthorizationEpochRef\.current === requestedMinimumAuthorizationEpoch/);
+  assert.match(page, /commandCenterDocumentId: COMMAND_CENTER_PUBLISHER\.documentId/);
   assert.match(page, /\[actionRetryNonce, actionInFlight, actionWindowOpen,/,
     "the snake/nomination effect must wake when an old action becomes terminal");
   assert.match(page, /\[actionRetryNonce, actionInFlight, autoDraft, settingsConfirmed, extension, league\.draftType/,
