@@ -81,5 +81,13 @@ test("visual certification serves its own built artifact without weakening produ
   assert.match(visualCertification, /spawn\(process\.execPath/);
   assert.match(visualCertification, /node_modules\/vinext\/dist\/cli\.js/);
   assert.match(visualCertification, /"--hostname",\s*"127\.0\.0\.1"/);
+  assert.match(visualCertification, /client\.call\("Browser\.close"\)/);
+  assert.match(visualCertification, /detached:\s*process\.platform !== "win32"/);
+  assert.match(visualCertification, /process\.kill\(-child\.pid, name\)/);
+  assert.match(visualCertification, /signal\("SIGKILL"\);\s*if \(!await waitForStop\(3000\)\)/);
+  assert.match(visualCertification, /clearTimeout\(timeout\)/);
+  assert.match(visualCertification, /maxRetries:\s*8/);
+  assert.match(visualCertification, /retryDelay:\s*100/);
+  assert.match(visualCertification, /throw new AggregateError\(errors, "visual certification and cleanup both failed"\)/);
   assert.doesNotMatch(visualCertification, /spawn\("npm", \["run", "start"/);
 });

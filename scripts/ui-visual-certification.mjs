@@ -111,14 +111,58 @@ function hamming(left, right) {
   return count;
 }
 
-async function terminate(child) {
-  if (!child || child.exitCode !== null) return;
-  child.kill("SIGTERM");
-  await Promise.race([
-    new Promise((resolveExit) => child.once("exit", resolveExit)),
-    new Promise((resolveWait) => setTimeout(resolveWait, 3000)),
-  ]);
-  if (child.exitCode === null) child.kill("SIGKILL");
+function processGroupAlive(pid) {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+async function terminate(child, { processGroup = false } = {}) {
+  if (!child) return;
+  const ownsProcessGroup = processGroup && process.platform !== "win32";
+  const alive = () => ownsProcessGroup
+    ? processGroupAlive(child.pid)
+    : child.exitCode === null && child.signalCode === null;
+  const signal = (name) => {
+    try {
+      if (ownsProcessGroup) process.kill(-child.pid, name);
+      else child.kill(name);
+    } catch (error) {
+      if (error?.code !== "ESRCH") throw error;
+    }
+  };
+  const waitForStop = async (timeoutMs) => {
+    const deadline = Date.now() + timeoutMs;
+    while (alive() && Date.now() < deadline) {
+      await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+    }
+    return !alive();
+  };
+  if (!alive()) return;
+  signal("SIGTERM");
+  if (await waitForStop(3000)) return;
+  signal("SIGKILL");
+  if (!await waitForStop(3000)) throw new Error(`failed to terminate child process ${child.pid}`);
+}
+
+async function closeBrowser(client) {
+  if (!client) return;
+  let timeout;
+  try {
+    await Promise.race([
+      client.call("Browser.close"),
+      new Promise((resolveWait) => { timeout = setTimeout(resolveWait, 2000); }),
+    ]);
+  } catch {
+    // The browser may close its debugging socket before acknowledging.
+  } finally {
+    clearTimeout(timeout);
+    client.close();
+  }
 }
 
 const auditExpression = `(() => {
@@ -156,6 +200,7 @@ let serverProcess;
 let chromeProcess;
 let client;
 let temporaryDirectory;
+let certificationError;
 try {
   const port = await freePort();
   const origin = `http://127.0.0.1:${port}`;
@@ -192,7 +237,10 @@ try {
     "--remote-debugging-port=0",
     `--user-data-dir=${temporaryDirectory}`,
     "about:blank",
-  ], { stdio: "ignore" });
+  ], {
+    stdio: "ignore",
+    detached: process.platform !== "win32",
+  });
   const activePortFile = join(temporaryDirectory, "DevToolsActivePort");
   const debuggerPort = await waitFor(async () => {
     const content = await readFile(activePortFile, "utf8");
@@ -281,9 +329,28 @@ try {
     if (regressions.length) throw new Error(`visual regression threshold exceeded: ${JSON.stringify(regressions)}`);
     process.stdout.write(`${JSON.stringify({ ok: true, code: "UI_VISUAL_CERTIFIED", changes }, null, 2)}\n`);
   }
-} finally {
-  client?.close();
-  await terminate(chromeProcess);
-  await terminate(serverProcess);
-  if (temporaryDirectory) await rm(temporaryDirectory, { recursive: true, force: true });
+} catch (error) {
+  certificationError = error;
+}
+
+const cleanupErrors = [];
+try { await closeBrowser(client); } catch (error) { cleanupErrors.push(error); }
+try { await terminate(chromeProcess, { processGroup: true }); } catch (error) { cleanupErrors.push(error); }
+try { await terminate(serverProcess); } catch (error) { cleanupErrors.push(error); }
+if (temporaryDirectory) {
+  try {
+    await rm(temporaryDirectory, {
+      recursive: true,
+      force: true,
+      maxRetries: 8,
+      retryDelay: 100,
+    });
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+}
+const errors = [certificationError, ...cleanupErrors].filter(Boolean);
+if (errors.length === 1) throw errors[0];
+if (errors.length > 1) {
+  throw new AggregateError(errors, "visual certification and cleanup both failed");
 }
