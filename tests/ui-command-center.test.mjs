@@ -82,6 +82,17 @@ test("visual certification serves its own built artifact without weakening produ
   assert.match(visualCertification, /node_modules\/vinext\/dist\/cli\.js/);
   assert.match(visualCertification, /"--hostname",\s*"127\.0\.0\.1"/);
   assert.match(visualCertification, /client\.call\("Browser\.close"\)/);
+  assert.match(visualCertification, /client\.call\("Runtime\.evaluate"/);
+  assert.match(visualCertification, /atob\(encoded\)/);
+  assert.match(visualCertification, /createImageBitmap/);
+  assert.match(visualCertification, /imageSmoothingQuality = 'high'/);
+  assert.match(visualCertification, /\^\[0-9a-f\]\{16\}\$/);
+  assert.match(visualCertification, /chrome-canvas-high-dhash-9x8-bt601-v1/);
+  assert.match(visualCertification, /visual baseline schema or hash algorithm mismatch/);
+  assert.match(visualCertification, /visual baseline scenario set mismatch/);
+  assert.match(visualCertification, /visual baseline scenario is malformed/);
+  assert.doesNotMatch(visualCertification, /0000000000000000/);
+  assert.doesNotMatch(visualCertification, /ffmpeg|execFileSync/);
   assert.match(visualCertification, /detached:\s*process\.platform !== "win32"/);
   assert.match(visualCertification, /process\.kill\(-child\.pid, name\)/);
   assert.match(visualCertification, /signal\("SIGKILL"\);\s*if \(!await waitForStop\(3000\)\)/);

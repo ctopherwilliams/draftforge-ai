@@ -1,35 +1,57 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "hashAlgorithm": "chrome-canvas-high-dhash-9x8-bt601-v1",
+  "threshold": 10,
   "scenarios": {
     "pre-room-desktop": {
-      "hash": "c07c414d4979698f"
+      "width": 1440,
+      "height": 1000,
+      "hash": "e46c69e9e969698f"
     },
     "snake-desktop": {
-      "hash": "4cc9697929cf4fcf"
+      "width": 1440,
+      "height": 1000,
+      "hash": "ccc96969ed8f6fcd"
     },
     "salary-desktop": {
-      "hash": "4c49e959794d6dcf"
+      "width": 1440,
+      "height": 1000,
+      "hash": "cce9e97969c9adc7"
     },
     "snake-wide": {
-      "hash": "cc69e94f6f6fc500"
+      "width": 1728,
+      "height": 1000,
+      "hash": "cce9edc56d65c5c1"
     },
     "salary-wide": {
-      "hash": "cc49e9514125c781"
+      "width": 1728,
+      "height": 1000,
+      "hash": "ccc9cdc56525a5d1"
     },
     "snake-ultrawide": {
-      "hash": "8cebdb47c3810000"
+      "width": 2560,
+      "height": 1200,
+      "hash": "eccfcf47c7c08000"
     },
     "salary-ultrawide": {
-      "hash": "8c4bdb5143810101"
+      "width": 2560,
+      "height": 1200,
+      "hash": "eccddd95a1c18101"
     },
     "pre-room-mobile": {
-      "hash": "35576f69733f3767"
+      "width": 390,
+      "height": 844,
+      "hash": "30173f2b03373367"
     },
     "snake-mobile": {
-      "hash": "3537776d6dcc3b66"
+      "width": 390,
+      "height": 844,
+      "hash": "353767bd7effbbe6"
     },
     "salary-mobile": {
-      "hash": "3537776d6d4c7ba7"
+      "width": 390,
+      "height": 844,
+      "hash": "353f67bd7edef6a7"
     }
   }
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -10,6 +10,9 @@ const chromeBinary = process.env.CHROME_BIN
   || (process.platform === "darwin" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : "google-chrome");
 const baselinePath = resolve("tests/fixtures/ui-visual-baseline.json");
 const outputDirectory = resolve("outputs/ui-regression/latest");
+const visualBaselineSchemaVersion = 2;
+const visualHashAlgorithm = "chrome-canvas-high-dhash-9x8-bt601-v1";
+const visualHashThreshold = 10;
 const printBaseline = process.argv.includes("--print-baseline");
 const scenarios = [
   { name: "pre-room-desktop", format: null, width: 1440, height: 1000 },
@@ -87,18 +90,52 @@ class CdpClient {
   }
 }
 
-function perceptualHash(path) {
-  const pixels = execFileSync("ffmpeg", [
-    "-v", "error", "-i", path, "-vf", "scale=9:8,format=gray", "-f", "rawvideo", "-pix_fmt", "gray", "-",
-  ]);
-  if (pixels.length < 72) throw new Error(`could not decode screenshot ${path}`);
-  let value = 0n;
-  for (let y = 0; y < 8; y += 1) {
-    for (let x = 0; x < 8; x += 1) {
-      value = (value << 1n) | BigInt(pixels[y * 9 + x] > pixels[y * 9 + x + 1] ? 1 : 0);
-    }
+async function perceptualHash(client, screenshotBase64, expectedWidth, expectedHeight) {
+  const evaluated = await client.call("Runtime.evaluate", {
+    expression: `(async () => {
+      const encoded = ${JSON.stringify(screenshotBase64)};
+      const binary = atob(encoded);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+      const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+      try {
+        if (bitmap.width !== ${expectedWidth} || bitmap.height !== ${expectedHeight}) {
+          throw new Error('screenshot dimensions do not match the certified viewport');
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = 9;
+        canvas.height = 8;
+        const context = canvas.getContext('2d', { alpha: false, willReadFrequently: true });
+        if (!context) throw new Error('2d canvas unavailable');
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = 'high';
+        context.drawImage(bitmap, 0, 0, 9, 8);
+        const rgba = context.getImageData(0, 0, 9, 8).data;
+        if (rgba.length !== 288) throw new Error('unexpected perceptual-hash pixel count');
+        const gray = [];
+        for (let offset = 0; offset < rgba.length; offset += 4) {
+          gray.push(Math.round((rgba[offset] * 299 + rgba[offset + 1] * 587 + rgba[offset + 2] * 114) / 1000));
+        }
+        if (gray.length !== 72) throw new Error('unexpected perceptual-hash luminance count');
+        let hash = 0n;
+        for (let y = 0; y < 8; y += 1) {
+          for (let x = 0; x < 8; x += 1) {
+            hash = (hash << 1n) | BigInt(gray[y * 9 + x] > gray[y * 9 + x + 1] ? 1 : 0);
+          }
+        }
+        return hash.toString(16).padStart(16, '0');
+      } finally {
+        bitmap.close();
+      }
+    })()`,
+    awaitPromise: true,
+    returnByValue: true,
+  });
+  const hash = evaluated?.result?.value;
+  if (evaluated?.exceptionDetails || !/^[0-9a-f]{16}$/.test(hash || "")) {
+    throw new Error("browser could not compute the screenshot perceptual hash");
   }
-  return value.toString(16).padStart(16, "0");
+  return hash;
 }
 
 function hamming(left, right) {
@@ -312,20 +349,50 @@ try {
     const screenshot = await client.call("Page.captureScreenshot", { format: "png", captureBeyondViewport: false, fromSurface: true });
     const screenshotPath = join(outputDirectory, `${scenario.name}.png`);
     await writeFile(screenshotPath, Buffer.from(screenshot.data, "base64"));
-    results[scenario.name] = { hash: perceptualHash(screenshotPath), metrics, screenshot: screenshotPath };
+    results[scenario.name] = {
+      hash: await perceptualHash(client, screenshot.data, scenario.width, scenario.height),
+      metrics,
+      screenshot: screenshotPath,
+    };
   }
 
-  const generated = { schemaVersion: 1, scenarios: Object.fromEntries(Object.entries(results).map(([name, result]) => [name, { hash: result.hash }])) };
+  const generated = {
+    schemaVersion: visualBaselineSchemaVersion,
+    hashAlgorithm: visualHashAlgorithm,
+    threshold: visualHashThreshold,
+    scenarios: Object.fromEntries(Object.entries(results).map(([name, result]) => {
+      const scenario = scenarios.find((candidate) => candidate.name === name);
+      return [name, { width: scenario.width, height: scenario.height, hash: result.hash }];
+    })),
+  };
   if (printBaseline) {
     process.stdout.write(`${JSON.stringify(generated, null, 2)}\n`);
   } else {
     const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+    if (baseline.schemaVersion !== visualBaselineSchemaVersion
+      || baseline.hashAlgorithm !== visualHashAlgorithm
+      || baseline.threshold !== visualHashThreshold) {
+      throw new Error("visual baseline schema or hash algorithm mismatch");
+    }
+    const expectedScenarioNames = scenarios.map(({ name }) => name).sort();
+    const baselineScenarioNames = Object.keys(baseline.scenarios || {}).sort();
+    if (JSON.stringify(baselineScenarioNames) !== JSON.stringify(expectedScenarioNames)) {
+      throw new Error("visual baseline scenario set mismatch");
+    }
+    for (const scenario of scenarios) {
+      const expected = baseline.scenarios[scenario.name];
+      if (expected?.width !== scenario.width
+        || expected?.height !== scenario.height
+        || !/^[0-9a-f]{16}$/.test(expected?.hash || "")) {
+        throw new Error(`visual baseline scenario is malformed: ${scenario.name}`);
+      }
+    }
     const changes = Object.entries(results).map(([name, result]) => ({
       name,
-      distance: hamming(result.hash, baseline.scenarios?.[name]?.hash || "0000000000000000"),
+      distance: hamming(result.hash, baseline.scenarios[name].hash),
       screenshot: result.screenshot,
     }));
-    const regressions = changes.filter((change) => change.distance > 10);
+    const regressions = changes.filter((change) => change.distance > visualHashThreshold);
     if (regressions.length) throw new Error(`visual regression threshold exceeded: ${JSON.stringify(regressions)}`);
     process.stdout.write(`${JSON.stringify({ ok: true, code: "UI_VISUAL_CERTIFIED", changes }, null, 2)}\n`);
   }
