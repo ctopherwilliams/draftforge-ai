@@ -20,7 +20,7 @@ Open `http://localhost:3000` and open this repository folder as a new Codex task
 
 Paste this prompt into the new task:
 
-> Read `AGENT_HANDOFF.md`, `README.md`, and `docs/data-sources.md` completely. Treat the Git worktree and tests as authoritative. Continue the ESPN-only draft goal from the documented checkpoint. The Codex conversation is the primary guided-draft cockpit; the local app is a secondary dashboard. Support Guided mode by default and scoped, explicitly armed auto mode. Do not add post-draft league-management features. Preserve the deterministic five-source consensus and fail-closed extension safety. First run `npm test`, then inspect the current plan and finish the authenticated ESPN snake and salary-cap mock-draft verification.
+> Read `AGENT_HANDOFF.md`, `README.md`, and `docs/data-sources.md` completely. Treat the Git worktree and tests as authoritative. Continue the ESPN-only draft goal from the documented checkpoint. The Codex conversation is the GET-only strategy/status cockpit; the local DraftForge dashboard and companion are the sole production control plane and ESPN writer. Support Guided mode by default and scoped, explicitly armed auto mode. Do not make Codex/ChatGPT Chrome control, Computer Use, CDP, or another external browser controller a release dependency. Do not add post-draft league-management features. Preserve the deterministic five-source consensus and fail-closed extension safety. First run `npm test`, then inspect the current plan and finish the authenticated ESPN snake and salary-cap mock-draft verification.
 
 The old Codex task, its goal state, and its private Sites ownership should not be assumed to follow the Git repository to a different account. `AGENT_HANDOFF.md` carries the durable context instead.
 

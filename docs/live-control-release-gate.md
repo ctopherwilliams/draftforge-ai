@@ -19,6 +19,13 @@ The installed Chrome companion and DraftForge dashboard are the only production
 action path. Chat and terminal monitors may only issue GET requests to the
 compact loopback control view.
 
+Codex/ChatGPT Chrome control, Computer Use, CDP, Playwright, Puppeteer, and
+remote-debugging transports are outside the production dependency boundary. A
+human or optional external controller may operate visible dashboard controls
+during setup, Guided mode, or recovery, but it can never receive or satisfy a
+DraftForge writer or dispatch lease. Once explicitly armed, the dashboard and
+companion continue independently if every external controller disconnects.
+
 The browser writer is not identified by league alone. Its authority tuple
 includes the exact DraftForge tab, ESPN tab, immutable audit session,
 per-document command-center ID, ESPN producer ID, and binding generation. A

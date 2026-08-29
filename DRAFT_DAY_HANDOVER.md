@@ -1,6 +1,6 @@
 # DraftForge draft-day handover
 
-This is the operational source of truth for running an ESPN draft with Codex as the primary cockpit, DraftForge as the command center, and Chrome as the execution surface. Read it before every rehearsal and real draft. Update the **Certification ledger** and **Known launch risks** whenever a rehearsal changes the evidence.
+This is the operational source of truth for running an ESPN draft with Codex as the strategy/status cockpit, DraftForge as the command center and sole production writer, and Chrome as the execution surface. Read it before every rehearsal and real draft. Update the **Certification ledger** and **Known launch risks** whenever a rehearsal changes the evidence.
 
 For implementation history and exclusions, see [AGENT_HANDOFF.md](AGENT_HANDOFF.md). For installation or migration, see [MIGRATION.md](MIGRATION.md). For source definitions and weights, see [docs/data-sources.md](docs/data-sources.md).
 
@@ -8,13 +8,20 @@ For implementation history and exclusions, see [AGENT_HANDOFF.md](AGENT_HANDOFF.
 
 | Surface | Responsibility |
 | --- | --- |
-| Codex conversation | Primary cockpit: run checklists, explain decisions, change strategy between safe action windows, issue hold/resume commands, and report exceptions. |
-| DraftForge dashboard | Command center: show the exact action, clock, bid ceiling, protected reserve, roster needs, alternatives, source health, and safety state. |
+| Codex conversation | Strategy/status cockpit: run terminal checklists, read the sanitized GET-only status, explain decisions, and report exceptions. It never writes ESPN or mutates DraftForge control state. |
+| DraftForge dashboard | Command center and writer: show the exact action, clock, bid ceiling, protected reserve, roster needs, alternatives, source health, and safety state; own import, confirm, arm, hold/resume, Guided approval, and recovery controls. |
 | Authenticated ESPN tab | Execution surface: provide authoritative rules, room state, player availability, bids, picks, roster confirmation, sound state, and Autopick state. |
 | Chrome companion | Narrow enforcement layer: act only in the exact imported tab, league, team, clock, player/nominee, and offer state. |
 | `draft-day:status` | Read-only chat view: exactly one bounded (750 ms, 64 KiB) loopback GET for one atomic control-and-board snapshot; no Chrome/CDP, POST, source refresh, engine call, or ESPN action. A stale or unsafe snapshot returns blocked with no recommendation. |
 
-Keep Codex open in the desktop app and exactly two controlled Chrome tabs: `http://127.0.0.1:3000` and the one authenticated ESPN lobby or live room. During the live draft, keep those as the active tab in separate Chrome windows so Chrome cannot background-throttle ESPN's exact action timers. Do not use a development server, multiple ESPN draft rooms, or a stale dashboard on draft day.
+Keep Codex open in the desktop app and exactly two companion-managed Chrome tabs: `http://127.0.0.1:3000` and the one authenticated ESPN lobby or live room. During the live draft, keep those as the active tab in separate Chrome windows so Chrome cannot background-throttle ESPN's exact action timers. Codex Chrome control is optional and is not a readiness requirement. Do not use a development server, multiple ESPN draft rooms, or a stale dashboard on draft day.
+
+### Control boundary
+
+- The DraftForge dashboard, loopback server, and DraftForge companion are the complete production control plane.
+- Chat and terminal status tools are GET-only observers. They cannot import, confirm, arm, hold, resume, approve a Guided action, navigate recovery, or click ESPN.
+- A human or optional external controller performs those visible setup/control interactions in the dashboard. After explicit arming, the companion operates independently and an external-controller disconnect does not interrupt or expand its authority.
+- Codex/ChatGPT Chrome control, Computer Use, CDP, Playwright, Puppeteer, and remote-debugging transports are never release dependencies and can never satisfy a writer or dispatch lease.
 
 ## Non-negotiable safety rules
 
@@ -37,7 +44,7 @@ Last updated: 2026-08-28.
 
 | Gate | State |
 | --- | --- |
-| 2026-08-28 post-live control candidate | Local mechanics gate **PASS** for companion v0.2.31: source SHA-256 `09a808245d2769264de12118b99001afc0a703bf93406d9236c67c0845abd194`, ZIP SHA-256 `733e572fbc281ce26d24e4e97047fd1329e5d7976c40544db82d557ee82e1268`, 19 files. The full test suite passes 681/681 with 20 deterministic snake drafts (2,560 picks) and 20 deterministic salary-cap drafts (2,560 sales); visual certification passes 11/11 states; and live control passes 475/475 focused checks plus 9/9 chaos. The 1,000-request load completes 1,000/1,000 at p95 3.917 ms and p99 6.415 ms. Contention records observer p95 4.902 ms, observer p99 6.147 ms, writer p99 9.809 ms, availability p99 5.282 ms, event-loop p99 12.616 ms, and peak RSS 137.438 MB. The production path records 82 physical clicks, 82 exact acknowledgments, zero observer writes, maximum one in-flight action, planning p95 2.346 ms and p99 5.598 ms, SELECT p99 88.888 ms, NOMINATE p99 138.821 ms, incremental BID p99 94.394 ms, custom BID p99 86.469 ms, overall action p99 464.799 ms, event-loop p99 24.822 ms, and peak RSS 205.578 MB. Dependency audit reports zero vulnerabilities. The release adds exact per-document/per-producer/generation browser authority, a 1.5-second non-minting writer lease, safe successor handoff, and stale-result fencing while retaining fail-closed publisher settlement, exact checkpoint replay, post-authorization revalidation, auction uncertainty reconciliation, Keychain credential isolation, and portable process control. Current authenticated arming remains **NO-GO** until an exact current 5/5 schema-v3 snapshot is published, Chrome proves the installed companion is v0.2.31, and the exact two-tab no-click, authenticated normal/rapid/recovery salary-cap, snake regression, and three-hour soak gates pass. Synthetic or local evidence does not certify current rankings or a room. |
+| 2026-08-28 post-live control candidate | Local mechanics gate **PASS** for companion v0.2.31: source SHA-256 `09a808245d2769264de12118b99001afc0a703bf93406d9236c67c0845abd194`, ZIP SHA-256 `733e572fbc281ce26d24e4e97047fd1329e5d7976c40544db82d557ee82e1268`, 19 files. The full test suite passes 683/683 with 20 deterministic snake drafts (2,560 picks) and 20 deterministic salary-cap drafts (2,560 sales); visual certification passes 11/11 states; and live control passes 477/477 focused checks plus 9/9 chaos. The 1,000-request load completes 1,000/1,000 at p95 3.917 ms and p99 6.415 ms. Contention records observer p95 4.902 ms, observer p99 6.147 ms, writer p99 9.809 ms, availability p99 5.282 ms, event-loop p99 12.616 ms, and peak RSS 137.438 MB. The production path records 82 physical clicks, 82 exact acknowledgments, zero observer writes, maximum one in-flight action, planning p95 2.346 ms and p99 5.598 ms, SELECT p99 88.888 ms, NOMINATE p99 138.821 ms, incremental BID p99 94.394 ms, custom BID p99 86.469 ms, overall action p99 464.799 ms, event-loop p99 24.822 ms, and peak RSS 205.578 MB. Dependency audit reports zero vulnerabilities. The release adds exact per-document/per-producer/generation browser authority, a 1.5-second non-minting writer lease, safe successor handoff, stale-result fencing, and a tested production boundary that excludes external browser controllers while retaining fail-closed publisher settlement, exact checkpoint replay, post-authorization revalidation, auction uncertainty reconciliation, Keychain credential isolation, and portable process control. Current authenticated arming remains **NO-GO** until an exact current 5/5 schema-v3 snapshot is published, Chrome proves the installed companion is v0.2.31, and the exact two-tab no-click, authenticated normal/rapid/recovery salary-cap, snake regression, and three-hour soak gates pass. Synthetic or local evidence does not certify current rankings or a room. |
 | Historical local release gate | v0.2.24: 201/201 tests, lint, typecheck, production build, UI, extension safety, replay, managed workspace cleanup, recovery targeting, and latency passing; visual certification covered pre-room plus snake/salary command centers at 390, 1440, 1728, and 2560 widths with nine zero-distance captures and one accepted one-pixel mobile distance. This does not certify the current working tree. |
 | Historical deterministic drafts | 20/20 snake and 20/20 salary-cap complete and legal under the recorded candidate |
 | Historical live-snapshot Monte Carlo | Seed `20260820`: 10,000 snake + 10,000 salary-cap, including 4,000 exposed holdouts; zero failures, hard violations, or simulation errors under that snapshot |
@@ -72,7 +79,7 @@ Do not advance an authenticated count without a complete final-ready loopback au
    ```
 
 3. Confirm Chrome reports companion v0.2.31 loaded from this repository's `extension/` directory, and verify `config/draft-day-release.json` matches source SHA-256 `09a808245d2769264de12118b99001afc0a703bf93406d9236c67c0845abd194`, ZIP SHA-256 `733e572fbc281ce26d24e4e97047fd1329e5d7976c40544db82d557ee82e1268`, and 19 source files. Older authenticated rooms and package digests remain historical regression evidence; the current candidate must receive its own authenticated no-click and salary-cap certification after the keyed schema-v3 source gate passes. The dashboard preflight must also report companion-managed workspace cleanup ready.
-4. Run one cold-start, no-click rehearsal for the exact league. Do not wait until the real room opens to discover an ESPN login, extension, source, firewall, or Chrome-control problem.
+4. Run one cold-start, no-click rehearsal for the exact league. Do not wait until the real room opens to discover an ESPN login, companion, source, or firewall problem. External browser-control availability is not a gate.
 5. Keep the companion zip digest and current release evidence in [AGENT_HANDOFF.md](AGENT_HANDOFF.md).
 
 ## Cold-start kickoff
@@ -143,17 +150,17 @@ Verify the complete live-room dry run:
 
 For a regulation-timer room, run the matching terminal command with `--phase live`; it must return `DRAFT_DAY_READY`. A 30-second practice room may use the dashboard's identical in-process checklist and exact-tab revalidation so terminal startup cannot consume the opening clock. Neither path weakens the action guards.
 
-Only then may Codex arm Auto-Draft for that named room. Arming is scoped to the room and resets on reload, league switch, safety failure, completion, `hold`, or `stop`.
+Only then may the user arm Auto-Draft from the local DraftForge dashboard for that named room. Arming is scoped to the room and resets on reload, league switch, safety failure, completion, `hold`, or `stop`.
 
-## Chat-owned Chrome recovery
+## Companion-owned recovery
 
-Routine recovery is Codex-owned. The user should not have to reload the extension, close stale DraftForge tabs, or reconnect an exact practice room by hand.
+The companion owns exact-tab selection, stale DraftForge cleanup, room reconciliation, and ESPN action authority. Recovery controls are deliberately loopback-only and visible in the local dashboard. An optional external controller may click them, but it is not trusted as a writer and is not required once armed auto is healthy.
 
-- `http://localhost:3000/?reloadCompanion=1` reloads the already-installed unpacked companion from disk. Codex then reloads the dashboard so the new bridge context is active. Never run this inside an active action window.
+- `http://localhost:3000/?reloadCompanion=1` reloads the already-installed unpacked companion from disk. Reload the dashboard so the new bridge context is active. Never run this inside an active action window.
 - A loopback-only `recoverLive=1` command requires the exact generated practice-room league ID, source league ID, team, and season. It fails closed unless exactly one matching ESPN live room exists, reuses a healthy exact companion context without reloading ESPN, reloads only when that context is missing, imports authenticated settings and roster, closes only stale DraftForge tabs plus the matching source-league parent, and keeps ESPN visible in its own Chrome window. It never closes unrelated ESPN or browser tabs.
 - After a final-ready parity audit, the dashboard automatically requests closure of the exact generated practice room, matching source-league parent, and stale DraftForge dashboards. Live verification still requires ESPN's league name to begin with `Practice Draft for `. If ESPN has expired the room, the audit fallback requires the exact generated room ID, Chrome tab ID, parity, automatic shutdown, and a room ID distinct from the real source league. A manual loopback-only `closePractice=1` command retains the same proof boundary.
-- On every local handshake, the companion elects the newest exact DraftForge dashboard and closes only older DraftForge-origin dashboards. The manual `cleanWorkspace=1` path may additionally close `about:blank` tabs only when Codex supplies their exact observed IDs. Neither path closes Gmail, an unrelated ESPN page, an arbitrary blank tab, or any other user tab.
-- Every recovery turns Auto-Draft off and settings confirmation false. Codex must re-warm five sources if needed, confirm the imported checklist, rerun the live dry run, and explicitly re-arm the exact room.
+- On every local handshake, the companion elects the newest exact DraftForge dashboard and closes only older DraftForge-origin dashboards. The manual `cleanWorkspace=1` path may additionally close `about:blank` tabs only when an operator supplies their exact observed IDs. Neither path closes Gmail, an unrelated ESPN page, an arbitrary blank tab, or any other user tab.
+- Every recovery turns Auto-Draft off and settings confirmation false. Re-warm five sources if needed, confirm the imported checklist in the local dashboard, rerun the live dry run, and explicitly re-arm the exact room.
 - Optional recovery drills must run before the room starts, while ESPN is paused, or only after authoritative state proves the team is safely outside its action window. Do not begin an optional recovery during or immediately before an own snake turn; 30-second Auto-team mocks can advance an entire round while the checklist is being rebuilt.
 
 ## Live-draft protocol
@@ -180,13 +187,13 @@ npm run draft-day:freeze -- clear \
 
 Emergency clear writes a local hashed-reason receipt under `.draftforge/`; it does not authorize a hurried rebuild or re-arm inside an unsafe action window.
 
-Short chat commands:
+Short chat requests are observational or advisory unless the user separately performs the visible dashboard control:
 
 - `status` — report clock, action, roster needs, budget/reserve, and next targets;
 - `explain` — explain the current recommendation without changing it;
-- `draft it`, `bid`, or `pass` — approve the current Guided-mode action;
-- `hold` or `stop` — prevent new actions immediately;
-- `resume` — rerun live safety checks before continuing; and
+- `draft it`, `bid`, or `pass` — ask for the recommended Guided action; approve it in the dashboard;
+- `hold` or `stop` — ask for a stop, then use the dashboard control unless armed auto has already failed closed;
+- `resume` — ask for refreshed checks, then re-arm in the dashboard only after they pass; and
 - `switch strategy after this action` — change strategy only between safe action windows.
 
 During a live clock, Codex should report only the decision-critical line, for example:
@@ -235,7 +242,7 @@ Record the room ID, format, roster, prices/budget when applicable, audit result,
 
 - The server-only Tradyr credential is present in the certified Mac's Keychain. Production startup now performs one bounded, non-logging read of that exact item when `TRADYR_API_KEY` is absent; denied or locked Keychain access remains an explicit source blocker instead of silently trusting unkeyed data. Authenticated launch remains blocked until a fresh schema-v3 snapshot passes exact profile, canonical timestamp, authenticated ESPN provenance, atomic keyed-board completeness, coverage, and digest checks. Tradyr's unkeyed bulk response is capped at 50 and may contain decoys; the stale schema-v1 salary capture is regression-only evidence and must never arm a draft. Chrome must then prove the installed unpacked companion was reloaded to v0.2.31 before the exact two-tab no-click, authenticated normal/rapid/recovery salary-cap, snake regression, and three-hour soak gates run.
 
-- Historical internal companion/dashboard recovery passed a clean two-tab cold start and a deliberate in-room dashboard reload, including Auto-Draft resetting off, exact-room re-import, full revalidation, safe re-arming, 16/16 parity, and automatic shutdown. External Chrome-controller claim/reclaim and the installed v0.2.31 identity are not yet proven for the current candidate. ESPN/Chrome drift can recur, so every real draft must run both READY gates.
+- Historical internal companion/dashboard recovery passed a clean two-tab cold start and a deliberate in-room dashboard reload, including Auto-Draft resetting off, exact-room re-import, full revalidation, safe re-arming, 16/16 parity, and automatic shutdown. The installed v0.2.31 identity and its exact current two-tab writer binding are not yet proven for the current candidate; external Chrome-controller claim/reclaim is intentionally outside certification. ESPN/Chrome drift can recur, so every real draft must run both READY gates.
 - The expanded 2026-08-19 snapshot improved player-level coverage to 60.12% at four or more sources and 47.62% at all five, but GNG remains the shortest model board at 150 rows and not every late player can be corroborated. Treat confidence and sleeper labels accordingly.
 - The immutable expanded snapshot produced zero production-qualified sleeper signals. The latest fresh saved-snake pre-room state now produces two unchanged-threshold, five-source candidates (Jalen Hurts and Kyler Murray), while salary cap produces none. Treat these as current recommendation evidence, not authenticated sleeper-acquisition outcome evidence, until countable rooms exercise them.
 - Fresh room imports forcibly reset Auto-Draft and old-room telemetry. The one-shot pre-room watch now carries explicit arm intent into exactly one rule-matching room and revalidates the live tab before enabling Auto-Draft. Any missed identity, source, Autopick, player-pool, roster, clock, or action-surface check leaves it off; sound state remains visible telemetry. Any ESPN Autopick contamination excludes that room.

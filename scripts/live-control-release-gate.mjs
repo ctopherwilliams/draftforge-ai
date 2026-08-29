@@ -15,6 +15,7 @@ const testFiles = [
   "tests/background-action-authorization.test.mjs",
   "tests/background-import-deadlines.test.mjs",
   "tests/background-polling.test.mjs",
+  "tests/control-plane-boundary.test.mjs",
   "tests/draft-audit-publisher.test.mjs",
   "tests/draft-audit-checkpoint-route.test.mjs",
   "tests/draft-audit-checkpoint-store.test.mjs",
