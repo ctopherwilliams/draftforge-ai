@@ -6,52 +6,52 @@
     "pre-room-desktop": {
       "width": 1440,
       "height": 1000,
-      "hash": "cc7c416d69596daf"
+      "hash": "cc7c616dd959a98f"
     },
     "snake-desktop": {
       "width": 1440,
       "height": 1000,
-      "hash": "4cc96959bd8fef47"
+      "hash": "4cc9d959ad8fcf4f"
     },
     "salary-desktop": {
       "width": 1440,
       "height": 1000,
-      "hash": "4c49e95979c5a5c7"
+      "hash": "4c497979c9e5a547"
     },
     "snake-wide": {
       "width": 1728,
       "height": 1000,
-      "hash": "ecc9ed4f6767c7f1"
+      "hash": "eccb6d6f67c7c7f1"
     },
     "salary-wide": {
       "width": 1728,
       "height": 1000,
-      "hash": "ecc9ed5f6525e7f1"
+      "hash": "eccbed5f2525c771"
     },
     "snake-ultrawide": {
       "width": 2560,
       "height": 1200,
-      "hash": "ecebd947d3c3e8ab"
+      "hash": "eccbd947d3c3e8ab"
     },
     "salary-ultrawide": {
       "width": 2560,
       "height": 1200,
-      "hash": "ec4bd961a3d389a9"
+      "hash": "ec4bdb61a3d389a9"
     },
     "pre-room-mobile": {
       "width": 390,
       "height": 844,
-      "hash": "31576b297b2f3777"
+      "hash": "31576f296b2f3777"
     },
     "snake-mobile": {
       "width": 390,
       "height": 844,
-      "hash": "3537777d6fef3be7"
+      "hash": "353777bd2feffb67"
     },
     "salary-mobile": {
       "width": 390,
       "height": 844,
-      "hash": "3527776d7f0f7fb7"
+      "hash": "352777ad6f0f7f3f"
     }
   }
 }

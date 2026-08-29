@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { terminateProfileProcesses } from "../scripts/lib/exact-profile-process-cleanup.mjs";
 
-const [page, css, presentation, auditPublisher, visualCertification] = await Promise.all([
+const [page, css, presentation, auditPublisher, visualCertification, layout, packageText] = await Promise.all([
   readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/draft-command.css", import.meta.url), "utf8"),
   readFile(new URL("../app/lib/draft-presentation.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/lib/draft-audit-publisher.ts", import.meta.url), "utf8"),
   readFile(new URL("../scripts/ui-visual-certification.mjs", import.meta.url), "utf8"),
+  readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../package.json", import.meta.url), "utf8"),
 ]);
+const packageManifest = JSON.parse(packageText);
 
 test("live decision precedes secondary player-board detail", () => {
   const decision = page.indexOf('className="coach-column"');
@@ -62,6 +66,16 @@ test("live decision precedes secondary player-board detail", () => {
 
 test("command-center styles preserve readable and responsive controls", () => {
   assert.match(css, /html\s*\{[^}]*font-size:\s*16px/);
+  assert.match(css, /--sans:\s*"Inter Variable"/);
+  assert.match(css, /--mono:\s*"Source Code Pro Variable"/);
+  assert.match(css, /"Noto Sans Symbols 2"/);
+  assert.match(css, /html\s*\{[^}]*font-synthesis:\s*none/);
+  assert.match(layout, /import "@fontsource-variable\/inter"/);
+  assert.match(layout, /import "@fontsource-variable\/source-code-pro"/);
+  assert.match(layout, /import "@fontsource\/noto-sans-symbols-2"/);
+  assert.equal(packageManifest.dependencies["@fontsource-variable/inter"], "5.3.0");
+  assert.equal(packageManifest.dependencies["@fontsource-variable/source-code-pro"], "5.3.0");
+  assert.equal(packageManifest.dependencies["@fontsource/noto-sans-symbols-2"], "5.3.0");
   assert.match(css, /min-height: 44px/);
   assert.match(css, /grid-template-areas:\s*"coach players roster"/);
   assert.match(css, /grid-template-areas:\s*"coach roster"\s*"players roster"/);
@@ -92,14 +106,50 @@ test("visual certification serves its own built artifact without weakening produ
   assert.match(visualCertification, /visual baseline schema or hash algorithm mismatch/);
   assert.match(visualCertification, /visual baseline scenario set mismatch/);
   assert.match(visualCertification, /visual baseline scenario is malformed/);
+  assert.match(visualCertification, /document\.fonts\.load\("400 16px 'Inter Variable'"/);
+  assert.match(visualCertification, /document\.fonts\.check\("700 16px 'Source Code Pro Variable'"/);
+  assert.match(visualCertification, /document\.fonts\.check\("400 16px 'Noto Sans Symbols 2'"/);
+  assert.match(visualCertification, /clipped critical text/);
+  assert.match(visualCertification, /auditAdversarialLongContent/);
+  assert.match(visualCertification, /Marquez Valdes-Scantling/);
+  assert.match(visualCertification, /scrollbar-width:none/);
+  assert.match(visualCertification, /visual scrollbar normalization was not applied/);
   assert.doesNotMatch(visualCertification, /0000000000000000/);
   assert.doesNotMatch(visualCertification, /ffmpeg|execFileSync/);
-  assert.match(visualCertification, /detached:\s*process\.platform !== "win32"/);
+  assert.match(visualCertification, /detached:\s*process\.platform === "linux"/);
   assert.match(visualCertification, /process\.kill\(-child\.pid, name\)/);
+  assert.match(visualCertification, /terminateProfileProcesses\(temporaryDirectory\)/);
   assert.match(visualCertification, /signal\("SIGKILL"\);\s*if \(!await waitForStop\(3000\)\)/);
   assert.match(visualCertification, /clearTimeout\(timeout\)/);
   assert.match(visualCertification, /maxRetries:\s*8/);
   assert.match(visualCertification, /retryDelay:\s*100/);
   assert.match(visualCertification, /throw new AggregateError\(errors, "visual certification and cleanup both failed"\)/);
   assert.doesNotMatch(visualCertification, /spawn\("npm", \["run", "start"/);
+});
+
+test("visual certification escalates exact-profile cleanup and verifies every process exits", async () => {
+  const observations = [[4101, 4102], [4102], []];
+  const signals = [];
+  const profiles = [];
+  await terminateProfileProcesses("/tmp/exact-visual-profile", {
+    listProcessIds: async (profilePath) => {
+      profiles.push(profilePath);
+      return observations.shift() ?? [];
+    },
+    killProcess: (pid, signal) => signals.push([pid, signal]),
+    termTimeoutMs: 0,
+    killTimeoutMs: 0,
+    platform: "linux",
+  });
+  assert.deepEqual(signals, [
+    [4101, "SIGTERM"],
+    [4102, "SIGTERM"],
+    [4102, "SIGKILL"],
+  ]);
+  assert.deepEqual(profiles, [
+    "/tmp/exact-visual-profile",
+    "/tmp/exact-visual-profile",
+    "/tmp/exact-visual-profile",
+  ]);
+  assert.equal(observations.length, 0, "the post-KILL verification must observe an empty exact profile");
 });

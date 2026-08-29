@@ -1,4 +1,7 @@
 import type { Metadata } from "next";
+import "@fontsource-variable/inter";
+import "@fontsource-variable/source-code-pro";
+import "@fontsource/noto-sans-symbols-2";
 import "./draft-command.css";
 
 export const metadata: Metadata = {

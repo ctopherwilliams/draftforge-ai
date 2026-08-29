@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { terminateProfileProcesses } from "./lib/exact-profile-process-cleanup.mjs";
 
 const chromeBinary = process.env.CHROME_BIN
   || (process.platform === "darwin" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : "google-chrome");
@@ -232,6 +233,22 @@ const auditExpression = `(() => {
     if (Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1) overlaps.push([panels[left].selector, panels[right].selector]);
   }
   const progress = document.querySelector('[role="progressbar"]');
+  const recommendationTitle = document.querySelector('.decision-head h1');
+  const playerName = document.querySelector('.rec-player h2');
+  const clippedCriticalText = [playerName].filter(Boolean).filter((node) => { const style = getComputedStyle(node); return ['hidden', 'clip'].includes(style.overflowX) && (node.scrollWidth > node.clientWidth + 1 || node.scrollHeight > node.clientHeight + 1); }).map((node) => node.className || node.tagName);
+  const recommendationStyle = recommendationTitle ? getComputedStyle(recommendationTitle) : null;
+  const recommendationLineHeight = recommendationStyle ? Number.parseFloat(recommendationStyle.lineHeight) : 0;
+  const recommendationLines = recommendationTitle && recommendationLineHeight > 0 ? Math.round(recommendationTitle.getBoundingClientRect().height / recommendationLineHeight) : 0;
+  const playerNameStyle = playerName ? getComputedStyle(playerName) : null;
+  const playerNameLineHeight = playerNameStyle ? Number.parseFloat(playerNameStyle.lineHeight) : 0;
+  const playerNameLines = playerName && playerNameLineHeight > 0 ? Math.round(playerName.getBoundingClientRect().height / playerNameLineHeight) : 0;
+  const fontFamilies = [...document.fonts].filter((face) => face.status === 'loaded').map((face) => face.family.replaceAll('"', '')).sort();
+  const computedSans = getComputedStyle(document.body).fontFamily.split(',')[0].replaceAll('"', '').trim();
+  const computedMono = getComputedStyle(document.querySelector('.eyebrow')).fontFamily.split(',')[0].replaceAll('"', '').trim();
+  const horizontalRegions = [...document.querySelectorAll('.recommendation, .players-panel, .roster-panel, .player-list, .roster-list')];
+  const overflowingRegions = horizontalRegions.filter((node) => node.scrollWidth > node.clientWidth + 1).map((node) => node.className || node.tagName);
+  const scrollbarTargets = [document.documentElement, ...document.querySelectorAll('.player-list, .roster-list, .filters')];
+  const scrollbarsNormalized = scrollbarTargets.every((node) => getComputedStyle(node).scrollbarWidth === 'none');
   return {
     title: document.title,
     viewportWidth: innerWidth,
@@ -245,8 +262,58 @@ const auditExpression = `(() => {
     progressValid: Boolean(progress && progress.getAttribute('aria-valuemin') !== null && progress.getAttribute('aria-valuemax') !== null && progress.getAttribute('aria-valuenow') !== null),
     mainLandmarks: document.querySelectorAll('main').length,
     h1Count: document.querySelectorAll('h1').length,
+    clippedCriticalText,
+    recommendationLines,
+    playerNameLines,
+    overflowingRegions,
+    scrollbarsNormalized,
+    requiredFontsLoaded: fontFamilies.includes('Inter Variable')
+      && fontFamilies.includes('Source Code Pro Variable')
+      && fontFamilies.includes('Noto Sans Symbols 2')
+      && document.fonts.check("400 16px 'Inter Variable'", 'DraftForge AI')
+      && document.fonts.check("700 16px 'Source Code Pro Variable'", 'DRAFT CONTROL ROOM')
+      && document.fonts.check("400 16px 'Noto Sans Symbols 2'", '✓○●⌕')
+      && computedSans === 'Inter Variable'
+      && computedMono === 'Source Code Pro Variable',
   };
 })()`;
+
+function auditFailures(metrics, expectedH1Count, maxRecommendationLines, requireNormalizedScrollbars) {
+  return [
+    metrics.horizontalOverflow && "horizontal overflow",
+    metrics.unnamedControls && `${metrics.unnamedControls} unnamed controls`,
+    metrics.undersizedControls.length && `undersized controls: ${metrics.undersizedControls.join(", ")}`,
+    metrics.duplicateIds.length && `duplicate IDs: ${metrics.duplicateIds.join(", ")}`,
+    metrics.panelCount !== 3 && `expected 3 command panels, found ${metrics.panelCount}`,
+    metrics.overlaps.length && `panel overlaps: ${JSON.stringify(metrics.overlaps)}`,
+    !metrics.progressValid && "invalid progressbar semantics",
+    metrics.mainLandmarks !== 1 && `expected one main landmark, found ${metrics.mainLandmarks}`,
+    metrics.h1Count !== expectedH1Count && `expected ${expectedH1Count} h1 elements, found ${metrics.h1Count}`,
+    metrics.clippedCriticalText.length && `clipped critical text: ${metrics.clippedCriticalText.join(", ")}`,
+    (metrics.playerNameLines < 1 || metrics.playerNameLines > 2) && `recommended player name used ${metrics.playerNameLines} lines`,
+    metrics.overflowingRegions.length && `horizontal content overflow: ${metrics.overflowingRegions.join(", ")}`,
+    (metrics.recommendationLines < 1 || metrics.recommendationLines > maxRecommendationLines) && `recommendation title used ${metrics.recommendationLines} lines`,
+    requireNormalizedScrollbars && !metrics.scrollbarsNormalized && "visual scrollbar normalization was not applied",
+    !metrics.requiredFontsLoaded && "required bundled fonts were not loaded",
+    !/DraftForge AI/.test(metrics.title) && "missing DraftForge title",
+  ].filter(Boolean);
+}
+
+async function auditAdversarialLongContent(client, command, scenarioName) {
+  const evaluated = await client.call("Runtime.evaluate", {
+    expression: `(() => { const source = document.querySelector('.recommendation'); if (!source) return null; const clone = source.cloneNode(true); clone.style.position = 'absolute'; clone.style.left = '-10000px'; clone.style.top = '0'; clone.style.width = source.getBoundingClientRect().width + 'px'; clone.style.visibility = 'hidden'; clone.style.pointerEvents = 'none'; const name = 'Marquez Valdes-Scantling'; const title = clone.querySelector('.decision-head h1'); const player = clone.querySelector('.rec-player h2'); if (!title || !player) return null; title.replaceChildren(document.createTextNode(${JSON.stringify(command)} + ' ' + name)); player.replaceChildren(document.createTextNode(name)); document.body.append(clone); try { const titleStyle = getComputedStyle(title); const playerStyle = getComputedStyle(player); const titleLineHeight = Number.parseFloat(titleStyle.lineHeight); const playerLineHeight = Number.parseFloat(playerStyle.lineHeight); return { titleLines: Math.round(title.getBoundingClientRect().height / titleLineHeight), playerLines: Math.round(player.getBoundingClientRect().height / playerLineHeight), panelOverflow: clone.scrollWidth > clone.clientWidth + 1, playerClipped: ['hidden', 'clip'].includes(playerStyle.overflowX) && (player.scrollWidth > player.clientWidth + 1 || player.scrollHeight > player.clientHeight + 1) }; } finally { clone.remove(); } })()`,
+    returnByValue: true,
+  });
+  const metrics = evaluated.result.value;
+  const failures = [
+    !metrics && "adversarial recommendation clone was unavailable",
+    metrics?.titleLines > 4 && `adversarial recommendation used ${metrics.titleLines} lines`,
+    metrics?.playerLines > 2 && `adversarial player name used ${metrics.playerLines} lines`,
+    metrics?.panelOverflow && "adversarial recommendation overflowed horizontally",
+    metrics?.playerClipped && "adversarial player name was clipped",
+  ].filter(Boolean);
+  if (failures.length) throw new Error(`${scenarioName}: ${failures.join("; ")}`);
+}
 
 let serverProcess;
 let chromeProcess;
@@ -291,7 +358,7 @@ try {
     "about:blank",
   ], {
     stdio: "ignore",
-    detached: process.platform !== "win32",
+    detached: process.platform === "linux",
   });
   const activePortFile = join(temporaryDirectory, "DevToolsActivePort");
   const debuggerPort = await waitFor(async () => {
@@ -343,23 +410,23 @@ try {
       }, 5000, `${scenario.name} setup drawer`);
     }
     await client.call("Runtime.evaluate", {
-      expression: `(() => { let style = document.getElementById('visual-cert-style'); if (!style) { style = document.createElement('style'); style.id = 'visual-cert-style'; document.head.append(style); } style.textContent = '*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}'; return document.fonts.ready; })()`,
+      expression: `(async () => { await Promise.all([document.fonts.load("400 16px 'Inter Variable'", 'DraftForge AI'), document.fonts.load("700 16px 'Source Code Pro Variable'", 'DRAFT CONTROL ROOM'), document.fonts.load("400 16px 'Noto Sans Symbols 2'", '✓○●⌕')]); await document.fonts.ready; })()`,
       awaitPromise: true,
+    });
+    const rawAudit = await client.call("Runtime.evaluate", { expression: auditExpression, returnByValue: true });
+    const expectedH1Count = scenario.format ? 1 : 2;
+    const maxRecommendationLines = scenario.maxRecommendationLines || 2;
+    const rawFailures = auditFailures(rawAudit.result.value, expectedH1Count, maxRecommendationLines, false);
+    if (rawFailures.length) throw new Error(`${scenario.name} before scrollbar normalization: ${rawFailures.join("; ")}`);
+    if (scenario.name === "snake-desktop") await auditAdversarialLongContent(client, "PREPARE", scenario.name);
+    if (scenario.name === "salary-desktop") await auditAdversarialLongContent(client, "TRACK", scenario.name);
+    await client.call("Runtime.evaluate", {
+      expression: `(() => { let style = document.getElementById('visual-cert-style'); if (!style) { style = document.createElement('style'); style.id = 'visual-cert-style'; document.head.append(style); } style.textContent = '*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important;scrollbar-width:none!important}*::-webkit-scrollbar{width:0!important;height:0!important}'; })()`,
     });
     await new Promise((resolveWait) => setTimeout(resolveWait, 150));
     const audit = await client.call("Runtime.evaluate", { expression: auditExpression, returnByValue: true });
     const metrics = audit.result.value;
-    const failures = [
-      metrics.horizontalOverflow && "horizontal overflow",
-      metrics.unnamedControls && `${metrics.unnamedControls} unnamed controls`,
-      metrics.undersizedControls.length && `undersized controls: ${metrics.undersizedControls.join(", ")}`,
-      metrics.duplicateIds.length && `duplicate IDs: ${metrics.duplicateIds.join(", ")}`,
-      metrics.panelCount !== 3 && `expected 3 command panels, found ${metrics.panelCount}`,
-      metrics.overlaps.length && `panel overlaps: ${JSON.stringify(metrics.overlaps)}`,
-      !metrics.progressValid && "invalid progressbar semantics",
-      metrics.mainLandmarks !== 1 && `expected one main landmark, found ${metrics.mainLandmarks}`,
-      !/DraftForge AI/.test(metrics.title) && "missing DraftForge title",
-    ].filter(Boolean);
+    const failures = auditFailures(metrics, expectedH1Count, maxRecommendationLines, true);
     if (failures.length) throw new Error(`${scenario.name}: ${failures.join("; ")}`);
     const screenshot = await client.call("Page.captureScreenshot", { format: "png", captureBeyondViewport: false, fromSurface: true });
     const screenshotPath = join(outputDirectory, `${scenario.name}.png`);
@@ -419,7 +486,8 @@ try {
 
 const cleanupErrors = [];
 try { await closeBrowser(client); } catch (error) { cleanupErrors.push(error); }
-try { await terminate(chromeProcess, { processGroup: true }); } catch (error) { cleanupErrors.push(error); }
+try { await terminate(chromeProcess, { processGroup: process.platform === "linux" }); } catch (error) { cleanupErrors.push(error); }
+try { await terminateProfileProcesses(temporaryDirectory); } catch (error) { cleanupErrors.push(error); }
 try { await terminate(serverProcess); } catch (error) { cleanupErrors.push(error); }
 if (temporaryDirectory) {
   try {
