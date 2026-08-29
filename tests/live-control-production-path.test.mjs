@@ -7,6 +7,7 @@ import {
   evaluateProductionPathMemory,
   percentile,
   runObserverCadence,
+  runCertifiedLiveControlProductionPath,
   runLiveControlProductionPath,
 } from "../scripts/live-control-production-path.mjs";
 import {
@@ -22,7 +23,7 @@ test("production-path percentile accounting is deterministic", () => {
   assert.equal(percentile([], .99), Number.POSITIVE_INFINITY);
 });
 
-test("production-path memory gate uses the absolute production ceiling, not allocator-relative RSS", () => {
+test("production-path memory gate bounds absolute RSS and post-GC retention", async () => {
   const mib = 1024 * 1024;
   const allocatorExpansion = evaluateProductionPathMemory({
     baselineRss: 100 * mib,
@@ -42,6 +43,43 @@ test("production-path memory gate uses the absolute production ceiling, not allo
   const invalid = evaluateProductionPathMemory({ baselineRss: 0, peakRss: 0 });
   assert.equal(invalid.passed, false);
   assert.equal(invalid.checks.measurements, false);
+
+  const baseline = { rss: 110 * mib, heapUsed: 16 * mib, external: 8 * mib };
+  const retained = evaluateProductionPathMemory({
+    baseline,
+    postRun: { rss: 180 * mib, heapUsed: 32 * mib, external: 9 * mib },
+    peakRss: 350 * mib,
+    requireRetention: true,
+  });
+  assert.equal(retained.passed, true);
+  assert.deepEqual(retained.checks, {
+    measurements: true,
+    peakRss: true,
+    postGcHeap: true,
+    postGcExternal: true,
+    retainedHeap: true,
+    retainedExternal: true,
+  });
+  assert.deepEqual(retained.retainedGrowthMb, { heapUsed: 16, external: 1 });
+
+  for (const [label, input, failedCheck] of [
+    ["post-GC heap", { postRun: { rss: 180 * mib, heapUsed: 65 * mib, external: 9 * mib }, peakRss: 350 * mib }, "postGcHeap"],
+    ["post-GC external", { postRun: { rss: 180 * mib, heapUsed: 32 * mib, external: 33 * mib }, peakRss: 350 * mib }, "postGcExternal"],
+    ["retained heap", { postRun: { rss: 180 * mib, heapUsed: 41 * mib, external: 9 * mib }, peakRss: 350 * mib }, "retainedHeap"],
+    ["retained external", { postRun: { rss: 180 * mib, heapUsed: 32 * mib, external: 13 * mib }, peakRss: 350 * mib }, "retainedExternal"],
+    ["absolute peak", { postRun: { rss: 180 * mib, heapUsed: 32 * mib, external: 9 * mib }, peakRss: 385 * mib }, "peakRss"],
+  ]) {
+    const failed = evaluateProductionPathMemory({ baseline, ...input, requireRetention: true });
+    assert.equal(failed.passed, false, label);
+    assert.equal(failed.checks[failedCheck], false, label);
+  }
+
+  if (typeof globalThis.gc !== "function") {
+    await assert.rejects(
+      runCertifiedLiveControlProductionPath({ observerDurationMs: 1_000, actionSamplesPerOperation: 5 }),
+      /PRODUCTION_PATH_REQUIRES_EXPOSE_GC/,
+    );
+  }
 });
 
 test("contention cadences are phase-separated with meaningful tail samples", () => {
@@ -122,9 +160,9 @@ test("the production-path probe is a first-class package and release-gate comman
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../scripts/live-control-release-gate.mjs", import.meta.url), "utf8"),
   ]);
-  assert.equal(JSON.parse(packageJson).scripts["test:production-path"], "node scripts/live-control-production-path.mjs");
+  assert.equal(JSON.parse(packageJson).scripts["test:production-path"], "node --expose-gc scripts/live-control-production-path.mjs");
   assert.equal(JSON.parse(packageJson).scripts["test:contention"], "node --expose-gc scripts/live-control-contention.mjs");
-  assert.match(releaseGate, /runBoundedNode\(\["scripts\/live-control-production-path\.mjs"\], 30_000\)/);
+  assert.match(releaseGate, /runBoundedNode\(\["--expose-gc", "scripts\/live-control-production-path\.mjs"\], 30_000\)/);
   assert.match(releaseGate, /runBoundedNode\(\["--expose-gc", "scripts\/live-control-contention\.mjs"\], 40_000\)/);
   assert.match(releaseGate, /"tests\/live-control-production-path\.test\.mjs"/);
   assert.match(releaseGate, /contentionWarmSeconds: 5/);
@@ -265,6 +303,14 @@ test("the bounded production path covers snake and salary-cap actions under chur
   assert.equal(result.latencyMs.criticalAuditPosts.count, 12);
   assert.ok(result.latencyMs.criticalAuditPosts.p99 <= 450);
   assert.ok(result.resources.peakRssMb <= result.budgets.peakRssMb);
+  assert.ok([
+    "INITIAL",
+    "PRESEED",
+    "ACTION_MATRIX",
+    "CHECKPOINT_CHURN",
+    "SNAKE_OVERLAP",
+    "FINAL_AUCTION",
+  ].includes(result.resources.peakRssPhase));
   assert.equal(result.resources.passed, true);
   assert.deepEqual(result.resources.checks, { measurements: true, peakRss: true });
   assert.deepEqual(result.finalControl, { sequence: 5, pendingActionCount: 0, eventCount: 5 });

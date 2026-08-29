@@ -125,7 +125,7 @@ async function main() {
       "--require-stable-sequence",
     ], 45_000);
     await runBoundedNode(["--expose-gc", "scripts/live-control-contention.mjs"], 40_000);
-    await runBoundedNode(["scripts/live-control-production-path.mjs"], 30_000);
+    await runBoundedNode(["--expose-gc", "scripts/live-control-production-path.mjs"], 30_000);
     await runBoundedCommand(
       process.platform === "win32" ? "npm.cmd" : "npm",
       ["run", "test:visual"],

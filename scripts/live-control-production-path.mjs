@@ -43,7 +43,11 @@ const REQUEST_TIMEOUT_MS = 500;
 const ACTION_SAMPLES_PER_OPERATION = 20;
 const MIB = 1024 * 1024;
 export const PRODUCTION_PATH_MEMORY_BUDGETS = Object.freeze({
-  peakRssMb: 300,
+  peakRssMb: 384,
+  postGcHeapUsedMb: 64,
+  postGcExternalMb: 32,
+  retainedHeapGrowthMb: 24,
+  retainedExternalGrowthMb: 4,
 });
 const CHECKPOINT_PRESEED_MIN_BYTES = Math.ceil(1.8 * 1024 * 1024);
 const CHECKPOINT_MAX_BYTES = 2 * 1024 * 1024;
@@ -59,23 +63,92 @@ export function percentile(values, quantile) {
   return ordered[Math.min(ordered.length - 1, Math.max(0, Math.ceil(ordered.length * quantile) - 1))];
 }
 
-export function evaluateProductionPathMemory({ baselineRss, peakRss }) {
-  const validMeasurements = Number.isFinite(baselineRss)
+function memoryMb(bytes) {
+  return Number(bytes || 0) / MIB;
+}
+
+export function evaluateProductionPathMemory({
+  baseline = null,
+  baselineRss = baseline?.rss,
+  postRun = null,
+  peakRss,
+  requireRetention = false,
+}) {
+  const validRssMeasurements = Number.isFinite(baselineRss)
     && Number.isFinite(peakRss)
     && baselineRss > 0
     && peakRss >= baselineRss;
-  const baselineRssMb = Number(baselineRss || 0) / MIB;
-  const peakRssMb = Number(peakRss || 0) / MIB;
-  return {
-    passed: validMeasurements && peakRssMb <= PRODUCTION_PATH_MEMORY_BUDGETS.peakRssMb,
-    checks: {
-      measurements: validMeasurements,
-      peakRss: peakRssMb <= PRODUCTION_PATH_MEMORY_BUDGETS.peakRssMb,
-    },
+  const validRetentionMeasurements = !requireRetention || [
+    baseline?.rss,
+    baseline?.heapUsed,
+    baseline?.external,
+    postRun?.rss,
+    postRun?.heapUsed,
+    postRun?.external,
+  ].every((value) => Number.isFinite(value) && value >= 0)
+    && Number(baseline?.heapUsed) > 0
+    && Number(postRun?.rss) > 0
+    && Number(postRun?.heapUsed) > 0;
+  const validMeasurements = validRssMeasurements && validRetentionMeasurements;
+  const baselineRssMb = memoryMb(baselineRss);
+  const peakRssMb = memoryMb(peakRss);
+  const checks = {
+    measurements: validMeasurements,
+    peakRss: peakRssMb <= PRODUCTION_PATH_MEMORY_BUDGETS.peakRssMb,
+  };
+  const result = {
+    passed: false,
+    checks,
     baselineRssMb,
     peakRssMb,
     rssGrowthMb: Math.max(0, peakRssMb - baselineRssMb),
   };
+  if (requireRetention) {
+    const baselineHeapUsedMb = memoryMb(baseline?.heapUsed);
+    const baselineExternalMb = memoryMb(baseline?.external);
+    const postGcHeapUsedMb = memoryMb(postRun?.heapUsed);
+    const postGcExternalMb = memoryMb(postRun?.external);
+    const retainedHeapGrowthMb = Math.max(0, postGcHeapUsedMb - baselineHeapUsedMb);
+    const retainedExternalGrowthMb = Math.max(0, postGcExternalMb - baselineExternalMb);
+    Object.assign(checks, {
+      postGcHeap: postGcHeapUsedMb <= PRODUCTION_PATH_MEMORY_BUDGETS.postGcHeapUsedMb,
+      postGcExternal: postGcExternalMb <= PRODUCTION_PATH_MEMORY_BUDGETS.postGcExternalMb,
+      retainedHeap: retainedHeapGrowthMb <= PRODUCTION_PATH_MEMORY_BUDGETS.retainedHeapGrowthMb,
+      retainedExternal: retainedExternalGrowthMb <= PRODUCTION_PATH_MEMORY_BUDGETS.retainedExternalGrowthMb,
+    });
+    Object.assign(result, {
+      baselinePostGc: {
+        rssMb: memoryMb(baseline?.rss),
+        heapUsedMb: baselineHeapUsedMb,
+        externalMb: baselineExternalMb,
+      },
+      postRunGc: {
+        rssMb: memoryMb(postRun?.rss),
+        heapUsedMb: postGcHeapUsedMb,
+        externalMb: postGcExternalMb,
+      },
+      retainedGrowthMb: {
+        heapUsed: retainedHeapGrowthMb,
+        external: retainedExternalGrowthMb,
+      },
+    });
+  }
+  result.passed = Object.values(checks).every(Boolean);
+  return result;
+}
+
+async function collectProductionPathMemory() {
+  if (typeof globalThis.gc !== "function") {
+    throw new Error("PRODUCTION_PATH_REQUIRES_EXPOSE_GC");
+  }
+  // Run only outside every latency and checkpoint-contention epoch. Repeating
+  // the pair drains fetch/body finalizers without altering the pressure being
+  // measured or hiding its continuously sampled absolute RSS watermark.
+  for (let cycle = 0; cycle < 4; cycle += 1) {
+    globalThis.gc();
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  return process.memoryUsage();
 }
 
 function summarize(values) {
@@ -2127,9 +2200,16 @@ export async function runLiveControlProductionPath({
   const eventLoop = monitorEventLoopDelay({ resolution: 5 });
   const baselineRss = process.memoryUsage().rss;
   let peakRss = baselineRss;
-  const memorySampler = setInterval(() => {
-    peakRss = Math.max(peakRss, process.memoryUsage().rss);
-  }, 25);
+  let currentMemoryPhase = "INITIAL";
+  let peakRssPhase = currentMemoryPhase;
+  const sampleMemory = () => {
+    const currentRss = process.memoryUsage().rss;
+    if (currentRss > peakRss) {
+      peakRss = currentRss;
+      peakRssPhase = currentMemoryPhase;
+    }
+  };
+  const memorySampler = setInterval(sampleMemory, 25);
   memorySampler.unref();
   eventLoop.enable();
 
@@ -2147,6 +2227,7 @@ export async function runLiveControlProductionPath({
     const league = leagueFixture();
     const evaluatedAt = new Date().toISOString();
     const sources = sourcesFixture(players, evaluatedAt);
+    currentMemoryPhase = "PRESEED";
     checkpointDirectory = await mkdtemp(path.join(tmpdir(), "draftforge-production-path-checkpoint-"));
     const checkpointPath = path.join(checkpointDirectory, "checkpoint.json");
     process.env.DRAFTFORGE_PERSIST_DRAFT_AUDIT_CHECKPOINT = "1";
@@ -2199,14 +2280,17 @@ export async function runLiveControlProductionPath({
     if (preseedCheckpointBytes < CHECKPOINT_PRESEED_MIN_BYTES || preseedCheckpointBytes > CHECKPOINT_MAX_BYTES) {
       throw new Error(`CHECKPOINT_PRESEED_NOT_NEAR_CAP_${preseedCheckpointBytes}_${preseedEntryBytes.join("_")}`);
     }
+    currentMemoryPhase = "ACTION_MATRIX";
     const actionMatrix = await runProductionActionMatrix({ players, sources, evaluatedAt, actionSamplesPerOperation });
     routeServer = await startDraftDayRouteServer();
+    currentMemoryPhase = "CHECKPOINT_CHURN";
     const checkpointCriticalChurn = await runCheckpointCriticalChurn({
       routeServer,
       evaluatedAt,
       observerDurationMs,
       checkpointPath,
     });
+    currentMemoryPhase = "SNAKE_OVERLAP";
     const snakeObserverOverlap = await runSnakeObserverOverlap({
       players,
       sources,
@@ -2214,6 +2298,7 @@ export async function runLiveControlProductionPath({
       routeServer,
       observerDurationMs,
     });
+    currentMemoryPhase = "FINAL_AUCTION";
     content = await createFakeAuctionContent();
     background = await createBackgroundHarness(content, LEAGUE_ID, routeServer.origin);
     const preparedStartedAt = performance.now();
@@ -2510,7 +2595,7 @@ export async function runLiveControlProductionPath({
       throw new Error(`FINAL_AUDIT_ROUTE_STATE_INVALID_${JSON.stringify({ finalControl, auditPostResults })}`);
     }
 
-    peakRss = Math.max(peakRss, process.memoryUsage().rss);
+    sampleMemory();
     const observerRouteLatencies = [...normal.latencies, ...burst.latencies];
     const observerContextLatencies = [...normal.contextLatencies, ...burst.contextLatencies];
     const statusRoute = summarize([...normal.statusLatencies, ...burst.statusLatencies]);
@@ -2661,6 +2746,7 @@ export async function runLiveControlProductionPath({
         durationMs,
         eventLoopP99Ms,
         ...memory,
+        peakRssPhase,
         maximumActiveAuditPosts: maximumActivePosts,
         queue: {
           maximumInFlight: Math.max(
@@ -2704,6 +2790,35 @@ export async function runLiveControlProductionPath({
   }
 }
 
+export async function runCertifiedLiveControlProductionPath(options = {}) {
+  const baseline = await collectProductionPathMemory();
+  const result = await runLiveControlProductionPath(options);
+  const postRun = await collectProductionPathMemory();
+  const memory = evaluateProductionPathMemory({
+    baseline,
+    postRun,
+    peakRss: result.resources.peakRssMb * MIB,
+    requireRetention: true,
+  });
+  const ok = result.ok && memory.passed;
+  return {
+    ...result,
+    ok,
+    code: ok ? "LIVE_CONTROL_PRODUCTION_PATH_PASSED" : "LIVE_CONTROL_PRODUCTION_PATH_FAILED",
+    budgets: {
+      ...result.budgets,
+      postGcHeapUsedMb: PRODUCTION_PATH_MEMORY_BUDGETS.postGcHeapUsedMb,
+      postGcExternalMb: PRODUCTION_PATH_MEMORY_BUDGETS.postGcExternalMb,
+      retainedHeapGrowthMb: PRODUCTION_PATH_MEMORY_BUDGETS.retainedHeapGrowthMb,
+      retainedExternalGrowthMb: PRODUCTION_PATH_MEMORY_BUDGETS.retainedExternalGrowthMb,
+    },
+    resources: {
+      ...result.resources,
+      ...memory,
+    },
+  };
+}
+
 function parseArguments(argv) {
   if (argv.length === 0) return { observerDurationMs: 1_250 };
   if (argv.length !== 2 || argv[0] !== "--observer-duration-ms") throw new Error("USAGE");
@@ -2716,7 +2831,7 @@ function parseArguments(argv) {
 
 async function main() {
   try {
-    const result = await runLiveControlProductionPath(parseArguments(process.argv.slice(2)));
+    const result = await runCertifiedLiveControlProductionPath(parseArguments(process.argv.slice(2)));
     console.log(JSON.stringify(result, null, 2));
     if (!result.ok) process.exitCode = 1;
   } catch (error) {

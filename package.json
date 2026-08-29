@@ -20,7 +20,7 @@
     "pretest:live-control": "node scripts/live-code-freeze.mjs check --operation test",
     "test:live-control": "node scripts/live-control-release-gate.mjs",
     "pretest:production-path": "node scripts/live-code-freeze.mjs check --operation test",
-    "test:production-path": "node scripts/live-control-production-path.mjs",
+    "test:production-path": "node --expose-gc scripts/live-control-production-path.mjs",
     "pretest:load": "node scripts/live-code-freeze.mjs check --operation test",
     "test:load": "node scripts/live-control-load.mjs",
     "pretest:chaos": "node scripts/live-code-freeze.mjs check --operation test",
