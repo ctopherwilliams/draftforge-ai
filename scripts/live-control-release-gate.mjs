@@ -139,7 +139,7 @@ async function main() {
       contentionWarmSeconds: 5,
       productionContentionSeconds: 25,
       productionPathBidChurnMs: 75,
-      visualScenarios: 10,
+      visualScenarios: 11,
     }, null, 2));
   } catch (error) {
     console.error(JSON.stringify({ ok: false, code: "LIVE_CONTROL_RELEASE_GATE_FAILED", message: error instanceof Error ? error.message : String(error) }));

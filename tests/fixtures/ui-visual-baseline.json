@@ -11,32 +11,37 @@
     "snake-desktop": {
       "width": 1440,
       "height": 1000,
-      "hash": "4cc9d959ad8fcf4f"
+      "hash": "4cc9d959ad8fcd4d"
     },
     "salary-desktop": {
       "width": 1440,
       "height": 1000,
-      "hash": "4c497979c9e5a547"
+      "hash": "4c497979c9edad4d"
+    },
+    "snake-three-column-breakpoint": {
+      "width": 1321,
+      "height": 1000,
+      "hash": "4c6dc959a98f6f4d"
     },
     "snake-wide": {
       "width": 1728,
       "height": 1000,
-      "hash": "eccb6d6f67c7c7f1"
+      "hash": "eccb6d6d6fcdcdf1"
     },
     "salary-wide": {
       "width": 1728,
       "height": 1000,
-      "hash": "eccbed5f2525c771"
+      "hash": "eccbed5d2d29cd71"
     },
     "snake-ultrawide": {
       "width": 2560,
       "height": 1200,
-      "hash": "eccbd947d3c3e8ab"
+      "hash": "eccbd94bcbc9e8ab"
     },
     "salary-ultrawide": {
       "width": 2560,
       "height": 1200,
-      "hash": "ec4bdb61a3d389a9"
+      "hash": "ec4bdb69a9c989a9"
     },
     "pre-room-mobile": {
       "width": 390,

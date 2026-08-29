@@ -112,7 +112,7 @@ Final v0.2.30 local mechanics evidence:
 
 - package identity: 18 source files; unpacked-source SHA-256 `837bc692506a7833ad059aeb9d529af72c3b3a80f2f9cfb6b3d9951dc3f28b13`; ZIP SHA-256 `1f903d6ead73e393bc7f38824c80e4f04dfc26a29ed62572144dfd1b832d820a`;
 - `npm run check`: 655/655 after typecheck and production build, including 20 complete deterministic snake drafts (2,560 picks) and 20 complete deterministic salary-cap drafts (2,560 sales);
-- visual certification: 10/10 states;
+- visual certification: 11/11 states, including the narrowest three-column breakpoint;
 - `npm run test:live-control`: 465/465 focused checks plus 9/9 chaos cases;
 - GET-only load: 1,000 requests, p95 2.42 ms, p99 3.69 ms;
 - writer/observer contention: observer p95 4.89 ms, observer p99 5.30 ms, writer p99 7.97 ms, availability p99 5.25 ms, event-loop p99 12.57 ms, and peak RSS 134.89 MB;

@@ -80,7 +80,11 @@ test("command-center styles preserve readable and responsive controls", () => {
   assert.match(css, /grid-template-areas:\s*"coach players roster"/);
   assert.match(css, /grid-template-areas:\s*"coach roster"\s*"players roster"/);
   assert.match(css, /grid-template-areas: "coach" "roster" "players"/);
-  assert.match(css, /\.player-list \{[^}]*max-height:\s*390px/s);
+  assert.match(css, /\.player-list \{[^}]*max-height:\s*390px;[^}]*scrollbar-gutter:\s*stable/s);
+  assert.match(css, /grid-template-columns:\s*34px minmax\(0, 1fr\) 44px 58px 62px 58px/,
+    "desktop player columns must flex inside a classic-scrollbar scrollport");
+  assert.match(css, /\.player-row \{[^}]*width:\s*auto;[^}]*min-width:\s*0/s,
+    "player rows must size to the scrollport content box instead of the classic scrollbar box");
   assert.match(css, /\.completion-hero \.rec-player h2 \{[^}]*white-space:\s*normal/s);
   assert.match(css, /\.workspace \{[^}]*max-width:\s*none/s);
   assert.match(css, /prefers-reduced-motion: reduce/);

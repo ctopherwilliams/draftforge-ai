@@ -19,6 +19,7 @@ const scenarios = [
   { name: "pre-room-desktop", format: null, width: 1440, height: 1000 },
   { name: "snake-desktop", format: "Snake", width: 1440, height: 1000 },
   { name: "salary-desktop", format: "Salary cap", width: 1440, height: 1000 },
+  { name: "snake-three-column-breakpoint", format: "Snake", width: 1321, height: 1000 },
   { name: "snake-wide", format: "Snake", width: 1728, height: 1000 },
   { name: "salary-wide", format: "Salary cap", width: 1728, height: 1000 },
   { name: "snake-ultrawide", format: "Snake", width: 2560, height: 1200 },
@@ -246,7 +247,11 @@ const auditExpression = `(() => {
   const computedSans = getComputedStyle(document.body).fontFamily.split(',')[0].replaceAll('"', '').trim();
   const computedMono = getComputedStyle(document.querySelector('.eyebrow')).fontFamily.split(',')[0].replaceAll('"', '').trim();
   const horizontalRegions = [...document.querySelectorAll('.recommendation, .players-panel, .roster-panel, .player-list, .roster-list')];
-  const overflowingRegions = horizontalRegions.filter((node) => node.scrollWidth > node.clientWidth + 1).map((node) => node.className || node.tagName);
+  const overflowingRegions = horizontalRegions.filter((node) => node.scrollWidth > node.clientWidth + 1).map((node) => ({
+    region: node.className || node.tagName,
+    clientWidth: node.clientWidth,
+    scrollWidth: node.scrollWidth,
+  }));
   const scrollbarTargets = [document.documentElement, ...document.querySelectorAll('.player-list, .roster-list, .filters')];
   const scrollbarsNormalized = scrollbarTargets.every((node) => getComputedStyle(node).scrollbarWidth === 'none');
   return {
@@ -291,7 +296,7 @@ function auditFailures(metrics, expectedH1Count, maxRecommendationLines, require
     metrics.h1Count !== expectedH1Count && `expected ${expectedH1Count} h1 elements, found ${metrics.h1Count}`,
     metrics.clippedCriticalText.length && `clipped critical text: ${metrics.clippedCriticalText.join(", ")}`,
     (metrics.playerNameLines < 1 || metrics.playerNameLines > 2) && `recommended player name used ${metrics.playerNameLines} lines`,
-    metrics.overflowingRegions.length && `horizontal content overflow: ${metrics.overflowingRegions.join(", ")}`,
+    metrics.overflowingRegions.length && `horizontal content overflow: ${JSON.stringify(metrics.overflowingRegions)}`,
     (metrics.recommendationLines < 1 || metrics.recommendationLines > maxRecommendationLines) && `recommendation title used ${metrics.recommendationLines} lines`,
     requireNormalizedScrollbars && !metrics.scrollbarsNormalized && "visual scrollbar normalization was not applied",
     !metrics.requiredFontsLoaded && "required bundled fonts were not loaded",
