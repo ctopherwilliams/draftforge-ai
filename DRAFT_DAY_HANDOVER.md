@@ -1,6 +1,6 @@
 # DraftForge draft-day handover
 
-This is the operational source of truth for running an ESPN draft with Codex as the strategy/status cockpit, DraftForge as the command center and sole production writer, and Chrome as the execution surface. Read it before every rehearsal and real draft. Update the **Certification ledger** and **Known launch risks** whenever a rehearsal changes the evidence.
+This is the operational source of truth for running an ESPN draft with Codex as the strategy/status cockpit, DraftForge as the command center and sole production writer, and Chrome as the execution surface. New operators should first read [DRAFT_DAY_OPERATOR_CANVAS.md](DRAFT_DAY_OPERATOR_CANVAS.md). Read this handover before every rehearsal and real draft. Update the **Certification ledger** and **Known launch risks** whenever a rehearsal changes the evidence.
 
 For implementation history and exclusions, see [AGENT_HANDOFF.md](AGENT_HANDOFF.md). For installation or migration, see [MIGRATION.md](MIGRATION.md). For source definitions and weights, see [docs/data-sources.md](docs/data-sources.md).
 
