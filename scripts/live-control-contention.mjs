@@ -390,7 +390,7 @@ export async function runLiveControlContention({ durationMs = CONTENTION_DURATIO
       scanReceipt: {
         completedAt: timestamp(-1_500),
         feeds: [
-          { id: "authenticated_espn_player_news", url: "https://fantasy.espn.com/football/players/news", retrievedAt, status: "ok" },
+          { id: "authenticated_espn_player_news", url: "https://fantasy.espn.com/football/playernews", retrievedAt, status: "ok" },
           { id: "official_nfl_news", url: "https://www.nfl.com/news/", retrievedAt, status: "ok" },
         ],
       },

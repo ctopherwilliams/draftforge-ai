@@ -58,7 +58,7 @@
                 "required": ["id", "url"],
                 "properties": {
                   "id": { "const": "authenticated_espn_player_news" },
-                  "url": { "pattern": "^https://fantasy\\.espn\\.com/football/players/news/?$" }
+                  "url": { "pattern": "^https://fantasy\\.espn\\.com/football/playernews/?$" }
                 }
               },
               "minContains": 1,

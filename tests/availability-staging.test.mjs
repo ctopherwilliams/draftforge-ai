@@ -25,7 +25,7 @@ function currentArtifact(overrides = {}) {
     scanReceipt: {
       completedAt: timestamp(-40_000),
       feeds: [
-        { id: "authenticated_espn_player_news", url: "https://fantasy.espn.com/football/players/news", retrievedAt: timestamp(-50_000), status: "ok" },
+        { id: "authenticated_espn_player_news", url: "https://fantasy.espn.com/football/playernews", retrievedAt: timestamp(-50_000), status: "ok" },
         { id: "official_nfl_news", url: "https://www.nfl.com/news/", retrievedAt: timestamp(-50_000), status: "ok" },
       ],
     },

@@ -4,7 +4,7 @@
   "scanReceipt": {
     "completedAt": "2026-08-27T23:49:30.000Z",
     "feeds": [
-      { "id": "authenticated_espn_player_news", "url": "https://fantasy.espn.com/football/players/news", "retrievedAt": "2026-08-27T23:49:00.000Z", "status": "ok" },
+      { "id": "authenticated_espn_player_news", "url": "https://fantasy.espn.com/football/playernews", "retrievedAt": "2026-08-27T23:49:00.000Z", "status": "ok" },
       { "id": "official_nfl_news", "url": "https://www.nfl.com/news/", "retrievedAt": "2026-08-27T23:49:00.000Z", "status": "ok" }
     ]
   },

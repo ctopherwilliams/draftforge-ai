@@ -199,7 +199,7 @@ const SCAN_FEED_URL_RULES: Record<typeof REQUIRED_SCAN_FEEDS[number], {
 }> = {
   authenticated_espn_player_news: {
     hostname: "fantasy.espn.com",
-    pathname: (pathname) => pathname === "/football/players/news" || pathname === "/football/players/news/",
+    pathname: (pathname) => pathname === "/football/playernews" || pathname === "/football/playernews/",
   },
   official_nfl_news: {
     hostname: "www.nfl.com",

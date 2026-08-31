@@ -59,7 +59,7 @@ function artifact(records, overrides = {}) {
     scanReceipt: {
       completedAt: "2026-08-27T23:49:30.000Z",
       feeds: [
-        { id: "authenticated_espn_player_news", url: "https://fantasy.espn.com/football/players/news", retrievedAt: "2026-08-27T23:49:00.000Z", status: "ok" },
+        { id: "authenticated_espn_player_news", url: "https://fantasy.espn.com/football/playernews", retrievedAt: "2026-08-27T23:49:00.000Z", status: "ok" },
         { id: "official_nfl_news", url: "https://www.nfl.com/news/", retrievedAt: "2026-08-27T23:49:00.000Z", status: "ok" },
       ],
     },
@@ -210,6 +210,7 @@ test("scan receipts bind each required feed id to its exact credential-safe host
     }],
     ["sensitive ESPN query", (value) => { value.scanReceipt.feeds[0].url += "?memberId=secret"; }],
     ["nonstandard NFL port", (value) => { value.scanReceipt.feeds[1].url = "https://www.nfl.com:8443/news/"; }],
+    ["obsolete ESPN path", (value) => { value.scanReceipt.feeds[0].url = "https://fantasy.espn.com/football/players/news"; }],
     ["unrelated ESPN path", (value) => { value.scanReceipt.feeds[0].url = "https://fantasy.espn.com/football/team"; }],
   ];
   for (const [label, mutate] of mutations) {

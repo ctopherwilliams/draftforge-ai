@@ -25,7 +25,7 @@ const artifact = {
   scanReceipt: {
     completedAt: iso(-20_000),
     feeds: [
-      { id: "authenticated_espn_player_news", url: "https://fantasy.espn.com/football/players/news", retrievedAt: iso(-20_000), status: "ok" },
+      { id: "authenticated_espn_player_news", url: "https://fantasy.espn.com/football/playernews", retrievedAt: iso(-20_000), status: "ok" },
       { id: "official_nfl_news", url: "https://www.nfl.com/news/", retrievedAt: iso(-20_000), status: "ok" },
     ],
   },
