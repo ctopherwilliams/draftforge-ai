@@ -180,6 +180,8 @@ export type DraftAuditSleeperCandidate = {
 
 export type DraftRuntimeDiagnostics = {
   capturedAt: string;
+  extensionRuntimeId?: string;
+  bridgeProtocolVersion?: number;
   extensionVersion: string;
   extensionSourceSha256: string;
   extensionSourceFileCount: number;

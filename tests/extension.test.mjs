@@ -59,6 +59,8 @@ test("installed companion diagnostics hash the complete extension source tree", 
   assert.match(background, /crypto\.subtle\.digest\("SHA-256"/);
   assert.match(background, /extensionSourceSha256: extensionIntegrity\.sha256/);
   assert.match(background, /extensionSourceFileCount: extensionIntegrity\.fileCount/);
+  assert.match(background, /extensionRuntimeId: chrome\.runtime\.id/);
+  assert.match(background, /bridgeProtocolVersion: 2/);
 
   const runtimeSource = background.match(/const EXTENSION_INTEGRITY_DOMAIN[\s\S]+?(?=\nconst installedExtensionIntegrityPromise)/)?.[0];
   assert.ok(runtimeSource);
@@ -84,6 +86,8 @@ test("privileged runtime messages require the exact DraftForge or ESPN sender or
   assert.equal(authorizeRuntimeMessage("APP_HELLO", production).senderKind, "app-observer");
   assert.equal(authorizeRuntimeMessage("GET_RUNTIME_DIAGNOSTICS", production).ok, true);
   assert.equal(authorizeRuntimeMessage("RELOAD_EXTENSION", localhost).ok, true);
+  assert.equal(authorizeRuntimeMessage("RELOAD_EXACT_ESPN_TAB", localhost).ok, true);
+  assert.equal(authorizeRuntimeMessage("RELOAD_EXACT_ESPN_TAB", production).ok, false);
   assert.equal(authorizeRuntimeMessage("CLOSE_PRACTICE_ROOM", localhost).ok, true);
   assert.equal(authorizeRuntimeMessage("RECOVER_LIVE_WORKSPACE", localhost).ok, true);
   assert.equal(authorizeRuntimeMessage("ARM_LIVE_ROOM_WATCH", localhost).ok, true);
@@ -98,6 +102,7 @@ test("privileged runtime messages require the exact DraftForge or ESPN sender or
   assert.equal(authorizeRuntimeMessage("FUTURE_UNCLASSIFIED_ACTION", production).code, "UNKNOWN_MESSAGE");
   for (const type of [
     "RELOAD_EXTENSION",
+    "RELOAD_EXACT_ESPN_TAB",
     "ARM_LIVE_ROOM_WATCH",
     "CLOSE_PRACTICE_ROOM",
     "CLEAN_LOCAL_WORKSPACE",
@@ -334,6 +339,10 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.doesNotMatch(content, /}, 250\);/);
   assert.doesNotMatch(content, /return executeAction\(/);
   assert.match(bridge, /function announceReady\(\)/);
+  assert.match(bridge, /APP_SOURCE = "draftforge-web-v2"/);
+  assert.match(bridge, /EXTENSION_SOURCE = "draftforge-extension-v2"/);
+  assert.match(bridge, /EXTENSION_RUNTIME_ID = chrome\.runtime\.id/);
+  assert.match(bridge, /expectedRuntimeId !== EXTENSION_RUNTIME_ID/);
   assert.match(bridge, /event\.data\.type === "APP_HELLO"/);
   assert.match(bridge, /commandType: event\.data\.type/);
   assert.match(page, /sendToExtension\("APP_HELLO", \{ commandCenterSessionId: COMMAND_CENTER_PUBLISHER\.sessionId \}\)/);

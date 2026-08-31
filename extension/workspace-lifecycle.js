@@ -127,6 +127,19 @@ export function selectManagedWorkspaceCleanup(tabs, {
   };
 }
 
+export function selectExactEspnReloadTab(tabs) {
+  const espnTabs = (tabs || [])
+    .map(parsedTab)
+    .filter(Boolean)
+    .filter(({ tab, url }) => url.origin === "https://fantasy.espn.com"
+      && exactPositiveTabId(tab?.id) !== null)
+    .map(({ tab }) => Number(tab.id));
+  if (espnTabs.length !== 1) {
+    return { ok: false, code: "ESPN_TAB_RELOAD_AMBIGUOUS", tabId: null };
+  }
+  return { ok: true, code: "ESPN_TAB_RELOAD_EXACT", tabId: espnTabs[0] };
+}
+
 export function completedAuditProvesPracticeRoom({
   proof,
   draftLeagueId,

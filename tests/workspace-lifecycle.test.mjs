@@ -6,6 +6,7 @@ import {
   practiceWorkspaceCleanupTabIds,
   resolveWorkspaceRole,
   resolveWorkspaceWriterTabId,
+  selectExactEspnReloadTab,
   selectManagedWorkspaceCleanup,
 } from "../extension/workspace-lifecycle.js";
 import { tabRemovalInvalidatesActionBinding } from "../extension/action-binding.js";
@@ -135,6 +136,22 @@ test("managed cleanup fails closed for a non-DraftForge sender", () => {
     electNewest: true,
   });
   assert.deepEqual(result, { ok: false, code: "LOCAL_WORKSPACE_SENDER_MISMATCH" });
+});
+
+test("companion update reloads only one exact ESPN tab", () => {
+  assert.deepEqual(selectExactEspnReloadTab([
+    { id: 10, url: "http://127.0.0.1:3000/" },
+    { id: 22, url: "https://fantasy.espn.com/football/draft?leagueId=44050" },
+    { id: 30, url: "https://example.com/" },
+  ]), { ok: true, code: "ESPN_TAB_RELOAD_EXACT", tabId: 22 });
+  assert.equal(selectExactEspnReloadTab([]).code, "ESPN_TAB_RELOAD_AMBIGUOUS");
+  assert.equal(selectExactEspnReloadTab([
+    { id: 22, url: "https://fantasy.espn.com/football/draft?leagueId=44050" },
+    { id: 23, url: "https://fantasy.espn.com/football/team?leagueId=44050" },
+  ]).code, "ESPN_TAB_RELOAD_AMBIGUOUS");
+  assert.equal(selectExactEspnReloadTab([
+    { id: 22, url: "https://fantasy.espn.com.attacker.example/football/draft" },
+  ]).code, "ESPN_TAB_RELOAD_AMBIGUOUS");
 });
 
 test("completed audit proof binds an exact generated practice room", () => {

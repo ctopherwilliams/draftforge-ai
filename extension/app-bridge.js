@@ -1,9 +1,17 @@
-const APP_SOURCE = "draftforge-web";
-const EXTENSION_SOURCE = "draftforge-extension";
+const BRIDGE_PROTOCOL_VERSION = 2;
+const APP_SOURCE = "draftforge-web-v2";
+const EXTENSION_SOURCE = "draftforge-extension-v2";
+const EXTENSION_RUNTIME_ID = chrome.runtime.id;
 let latestWriterBinding = null;
 
 function publish(type, payload = {}) {
-  window.postMessage({ source: EXTENSION_SOURCE, type, payload }, window.location.origin);
+  window.postMessage({
+    source: EXTENSION_SOURCE,
+    bridgeProtocolVersion: BRIDGE_PROTOCOL_VERSION,
+    extensionRuntimeId: EXTENSION_RUNTIME_ID,
+    type,
+    payload,
+  }, window.location.origin);
 }
 
 function announceReady() {
@@ -15,6 +23,10 @@ function announceReady() {
 window.addEventListener("message", async (event) => {
   if (event.source !== window || event.origin !== window.location.origin) return;
   if (event.data?.source !== APP_SOURCE) return;
+  if (event.data?.bridgeProtocolVersion !== BRIDGE_PROTOCOL_VERSION) return;
+  const expectedRuntimeId = String(event.data?.expectedExtensionRuntimeId || "");
+  if (event.data?.type !== "APP_HELLO" && expectedRuntimeId !== EXTENSION_RUNTIME_ID) return;
+  if (event.data?.type === "APP_HELLO" && expectedRuntimeId && expectedRuntimeId !== EXTENSION_RUNTIME_ID) return;
 
   const payload = event.data.payload ?? {};
   if (typeof payload.commandCenterSessionId === "string"

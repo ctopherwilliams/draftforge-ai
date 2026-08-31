@@ -7,6 +7,7 @@ import {
   writerLeaseHeartbeatAcknowledged,
   writerLeaseHeartbeatAllowed,
   writerLeaseHeartbeatSnapshotStillCurrent,
+  writerLeaseHelloRecoveryAllowed,
 } from "../app/lib/live-control.ts";
 import {
   renewExistingWriterLease,
@@ -67,6 +68,24 @@ test("a delayed heartbeat success is accepted only while its authoritative lease
   assert.equal(writerLeaseHeartbeatAcknowledged(true, Number.NaN, 2_000), false);
 });
 
+test("an expired idle exact binding gets one bounded hello recovery", () => {
+  assert.equal(writerLeaseHelloRecoveryAllowed(
+    "WRITER_LEASE_EXPIRED", false, "44050:7:11", "44050:7:11", "",
+  ), true);
+  assert.equal(writerLeaseHelloRecoveryAllowed(
+    "WRITER_LEASE_EXPIRED", false, "44050:7:11", "44050:7:11", "44050:7:11",
+  ), false);
+  assert.equal(writerLeaseHelloRecoveryAllowed(
+    "WRITER_LEASE_EXPIRED", true, "44050:7:11", "44050:7:11", "",
+  ), false);
+  assert.equal(writerLeaseHelloRecoveryAllowed(
+    "WRITER_LEASE_EXPIRED", false, "44050:7:12", "44050:7:11", "",
+  ), false);
+  assert.equal(writerLeaseHelloRecoveryAllowed(
+    "WRITER_LEASE_INVALID", false, "44050:7:11", "44050:7:11", "",
+  ), false);
+});
+
 test("the dashboard consumes writer-heartbeat results before generic command failures", async () => {
   const source = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   const background = await readFile(new URL("../extension/background.js", import.meta.url), "utf8");
@@ -83,6 +102,9 @@ test("the dashboard consumes writer-heartbeat results before generic command fai
   assert.match(source, /pending\.timedOut = true;[\s\S]*?setAutoDraft\(false\)/);
   assert.match(heartbeatBranch, /pending\.failed = true;[\s\S]*?setAutoDraft\(false\)/);
   assert.match(heartbeatBranch, /pending\.failed = true;[\s\S]*?updateWriterLeaseHealth\(false\)/);
+  assert.match(heartbeatBranch, /writerLeaseHelloRecoveryAllowed\(/);
+  assert.match(heartbeatBranch, /sendToExtension\("APP_HELLO"/);
+  assert.match(heartbeatBranch, /no draft action will be retried/);
   assert.doesNotMatch(
     heartbeatBranch.slice(heartbeatBranch.indexOf("pending.failed = true")),
     /writerHeartbeatPendingRef\.current = null/,
@@ -100,6 +122,7 @@ test("the dashboard consumes writer-heartbeat results before generic command fai
   assert.match(source, /label: "Exact ESPN writer heartbeat is current", ok: writerLeaseHealthy/);
   assert.match(source, /if \(!writerLeaseHealthyRef\.current\) return "WRITER_LEASE_UNHEALTHY"/);
   assert.match(source, /acceptLiveProducerContext\(roomContext\)[\s\S]*?if \(writerLeaseHealthyRef\.current\) setExtension\("connected"\)/);
+  assert.match(source, /payload\.writerLeaseEstablished === true[\s\S]*?setAutoDraft\(false\)[\s\S]*?updateWriterLeaseHealth\(true\)/);
   const timeoutBranch = source.slice(
     source.indexOf("pending.timeoutId = window.setTimeout"),
     source.indexOf("writerHeartbeatPendingRef.current = pending"),

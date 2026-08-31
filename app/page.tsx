@@ -32,6 +32,13 @@ import {
   sanitizeAuthenticatedEspnPlayers,
 } from "./lib/authenticated-espn-capture";
 import { contextCanRebindDraftTab, contextMatchesActiveDraftTab } from "./lib/espn-context";
+import {
+  COMPANION_APP_SOURCE,
+  COMPANION_BRIDGE_PROTOCOL_VERSION,
+  COMPANION_EXTENSION_SOURCE,
+  companionBridgeEnvelopeMatches,
+  electCompanionRuntime,
+} from "./lib/companion-bridge";
 import { resolveEspnNominatedPlayer, resolveLiveBoardDisplayRank, resolveOwnNominationIntent, stabilizeEspnContext, type EspnContext } from "./lib/espn-context-state";
 import { canArmAutoDraft } from "./lib/auto-draft-safety";
 import { liveEspnRecommendations, reconcileEspnPicks, resolveAuctionSales, resolveOwnRoster } from "./lib/espn-reconciliation";
@@ -84,6 +91,7 @@ import {
   writerLeaseHeartbeatAcknowledged,
   writerLeaseHeartbeatAllowed,
   writerLeaseHeartbeatSnapshotStillCurrent,
+  writerLeaseHelloRecoveryAllowed,
   type LiveActionLifecyclePhase,
   type LiveControlEvent,
   type LiveControlFreshness,
@@ -188,14 +196,31 @@ const STRATEGIES: { id: StrategyId; label: string; description: string }[] = [
 type ExtensionStatus = "checking" | "missing" | "ready" | "connecting" | "connected" | "error";
 type WorkspaceRole = "unknown" | "writer" | "observer";
 
+let electedCompanionRuntimeId = "";
+let companionRuntimeConflict = false;
+
 function sendToExtension(type: string, payload: Record<string, unknown> = {}) {
+  if (companionRuntimeConflict) return;
   window.postMessage({
-    source: "draftforge-web",
+    source: COMPANION_APP_SOURCE,
+    bridgeProtocolVersion: COMPANION_BRIDGE_PROTOCOL_VERSION,
+    expectedExtensionRuntimeId: electedCompanionRuntimeId,
     type,
     payload: {
       ...payload,
       commandCenterDocumentId: COMMAND_CENTER_PUBLISHER.documentId,
     },
+  }, window.location.origin);
+}
+
+function requestLegacyCompanionBootstrapReload() {
+  // Migration-only bootstrap: old bridges understand this one local reload
+  // message, but no pick, bid, nomination, binding, or heartbeat ever uses
+  // the legacy channel.
+  window.postMessage({
+    source: "draftforge-web",
+    type: "RELOAD_EXTENSION",
+    payload: {},
   }, window.location.origin);
 }
 
@@ -218,7 +243,7 @@ function requestExtensionCommand(
     const onMessage = (event: MessageEvent) => {
       if (event.source !== window
         || event.origin !== window.location.origin
-        || event.data?.source !== "draftforge-extension"
+        || !companionBridgeEnvelopeMatches(event.data, electedCompanionRuntimeId)
         || event.data?.type !== "COMMAND_RESULT"
         || event.data?.payload?.commandType !== type
         || String(event.data?.payload?.transitionRequestId || "") !== transitionRequestId) return;
@@ -895,6 +920,7 @@ export default function Home() {
     timedOut: boolean;
     failed: boolean;
   } | null>(null);
+  const writerLeaseHelloRecoveryBindingRef = useRef("");
   const writerLeaseHealthyRef = useRef(true);
   const liveControlActionsRef = useRef(new Map<number, PendingLiveAction>());
   const liveControlObservedRosterRef = useRef(new Set<number>());
@@ -1290,6 +1316,7 @@ export default function Home() {
     // the existing-control fast path so a verified re-import can resume lease
     // renewal without discarding the append-only live-control history.
     retirePendingWriterHeartbeat();
+    writerLeaseHelloRecoveryBindingRef.current = "";
     if (liveControlRef.current) {
       if (liveControlBindingRef.current !== binding) {
         failClosedLiveControl("EXACT_BINDING_CHANGED");
@@ -1361,6 +1388,7 @@ export default function Home() {
   }, [transitionLiveControl]);
   const clearLiveControl = useCallback(() => {
     retirePendingWriterHeartbeat();
+    writerLeaseHelloRecoveryBindingRef.current = "";
     draftAuditPublisherRef.current?.clear("LIVE_CONTROL_CLEARED");
     setAuditPublisherAuthorized(false);
     liveControlRef.current = null;
@@ -1583,10 +1611,14 @@ export default function Home() {
           season: Number(currentUrl.searchParams.get("season") || 0),
         }
       : null;
+    let reloadCompanionRequested = reloadCompanion;
+    let companionBootstrapReloadTimer = 0;
     if (reloadCompanion) {
       currentUrl.searchParams.delete("reloadCompanion");
       window.history.replaceState(null, "", `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`);
-      sendToExtension("RELOAD_EXTENSION");
+      window.sessionStorage.setItem("draftforge-companion-reload-pending", "1");
+      requestLegacyCompanionBootstrapReload();
+      companionBootstrapReloadTimer = window.setTimeout(() => window.location.reload(), 750);
     }
     if (recoverLive || closePractice || cleanWorkspace) {
       ["recoverLive", "closePractice", "cleanWorkspace", "ownedBlankTabIds", "draftLeagueId", "sourceLeagueId", "teamId", "season"].forEach((key) => currentUrl.searchParams.delete(key));
@@ -1707,10 +1739,52 @@ export default function Home() {
       return true;
     }
     function onMessage(event: MessageEvent) {
-      if (event.source !== window || event.origin !== window.location.origin || event.data?.source !== "draftforge-extension") return;
+      if (event.source !== window
+        || event.origin !== window.location.origin
+        || event.data?.source !== COMPANION_EXTENSION_SOURCE
+        || event.data?.bridgeProtocolVersion !== COMPANION_BRIDGE_PROTOCOL_VERSION) return;
+      const election = electCompanionRuntime(electedCompanionRuntimeId, event.data?.extensionRuntimeId);
+      if (!election.ok) {
+        // Cancel against the previously elected runtime before removing its
+        // address. No other bridge is allowed to inherit this authority.
+        if (electedCompanionRuntimeId) setAutoDraft(false);
+        electedCompanionRuntimeId = "";
+        companionRuntimeConflict = true;
+        updateWriterLeaseHealth(false);
+        setExtension("error");
+        setActionState(election.code === "MULTIPLE_COMPANION_RUNTIMES"
+          ? "Action stopped: multiple DraftForge companion runtimes answered. Keep the canonical companion only; no ESPN command was sent."
+          : "Action stopped: the DraftForge companion did not provide a valid runtime identity.");
+        return;
+      }
+      electedCompanionRuntimeId = election.runtimeId;
+      if (!companionBridgeEnvelopeMatches(event.data, electedCompanionRuntimeId)) return;
       const { type, payload } = event.data;
+      if (payload?.runtime
+        && (String(payload.runtime.extensionRuntimeId || "") !== electedCompanionRuntimeId
+          || Number(payload.runtime.bridgeProtocolVersion) !== COMPANION_BRIDGE_PROTOCOL_VERSION)) {
+        setAutoDraft(false);
+        companionRuntimeConflict = true;
+        electedCompanionRuntimeId = "";
+        updateWriterLeaseHealth(false);
+        setExtension("error");
+        setActionState("Action stopped: companion runtime diagnostics did not match the elected command channel.");
+        return;
+      }
       if ((type === "EXTENSION_READY" || type === "COMMAND_RESULT") && payload?.runtime) {
         setRuntimeDiagnostics(payload.runtime as DraftRuntimeDiagnostics);
+      }
+      if (type === "EXTENSION_READY" && reloadCompanionRequested) {
+        reloadCompanionRequested = false;
+        sendToExtension("RELOAD_EXTENSION");
+        setActionState("Reloading the exact local companion from disk. Refreshing the two workspace tabs is sufficient; reinstall is not required.");
+        return;
+      }
+      if (type === "EXTENSION_READY"
+        && window.sessionStorage.getItem("draftforge-companion-reload-pending") === "1") {
+        window.sessionStorage.removeItem("draftforge-companion-reload-pending");
+        sendToExtension("RELOAD_EXACT_ESPN_TAB");
+        setActionState("Companion reload verified. Refreshing the single managed ESPN tab with the same installed extension; reinstall is not required.");
       }
       if (type === "EXTENSION_READY" || (type === "COMMAND_RESULT" && payload?.ready)) {
         const reportedWorkspaceRole = String(payload?.workspace?.role || "");
@@ -1728,6 +1802,30 @@ export default function Home() {
         // tab select a league or make this dashboard look actionable.
         if (contextMatchesActiveDraftTab(roomContext, activeLeagueRef.current, activeEspnTabRef.current)
           && acceptLiveProducerContext(roomContext)) {
+          if (payload.writerLeaseEstablished === true) {
+            const recoveredBinding = draftAuditChecklistBindingKey(
+              activeLeagueRef.current,
+              Number(activeEspnTeamRef.current),
+              Number(activeEspnTabRef.current),
+            );
+            if (inFlightActionRef.current
+              || !liveControlRef.current
+              || !recoveredBinding
+              || liveControlBindingRef.current !== recoveredBinding) {
+              setAutoDraft(false);
+              updateWriterLeaseHealth(false);
+              setExtension("error");
+              setActionState("Action stopped: a recovered writer lease did not match the exact idle live-room binding.");
+              return;
+            }
+            setAutoDraft(false);
+            retirePendingWriterHeartbeat();
+            writerLeaseHelloRecoveryBindingRef.current = "";
+            lastValidatedLiveChecklistBindingRef.current = "";
+            updateWriterLeaseHealth(true);
+            setExtension("connected");
+            setActionState("Exact writer lease recovered in place. Reinstall was not required; Auto-Draft remains off until the live checklist is current.");
+          }
           if (payload.rebound === true) {
             if (inFlightActionRef.current) {
               setAutoDraft(false);
@@ -2383,7 +2481,24 @@ export default function Home() {
         const heartbeatCode = safeLiveControlCode(payload?.code, "WRITER_LEASE_HEARTBEAT_FAILED");
         setAutoDraft(false);
         setExtension("error");
-        setActionState(`Action stopped: the exact ESPN writer lease failed (${heartbeatCode}). Rebind the room and rerun the live checklist before drafting.`);
+        if (writerLeaseHelloRecoveryAllowed(
+          heartbeatCode,
+          Boolean(inFlightActionRef.current),
+          liveControlBindingRef.current,
+          currentExpectedBinding,
+          writerLeaseHelloRecoveryBindingRef.current,
+        )) {
+          writerLeaseHelloRecoveryBindingRef.current = liveControlBindingRef.current;
+          sendToExtension("APP_HELLO", {
+            commandCenterSessionId: COMMAND_CENTER_PUBLISHER.sessionId,
+            expectedLeagueId: activeLeagueRef.current,
+            expectedTeamId: activeEspnTeamRef.current,
+            expectedTabId: activeEspnTabRef.current,
+          });
+          setActionState("Writer lease expired between heartbeats. DraftForge is making one exact in-place recovery attempt; no draft action will be retried.");
+        } else {
+          setActionState(`Action stopped: the exact ESPN writer lease failed (${heartbeatCode}). Reload or rebind the room and rerun the live checklist; reinstall is not required.`);
+        }
         return;
       }
       if (type === "COMMAND_RESULT" && payload?.ok === false) {
@@ -2434,9 +2549,11 @@ export default function Home() {
       }
     }
     window.addEventListener("message", onMessage);
-    // The content script can initialize before React attaches this listener; request a second handshake.
+    // The content script can initialize before React attaches this listener;
+    // request a second handshake. The exact elected runtime must also answer
+    // before a local self-reload command is addressed to it.
+    sendToExtension("APP_HELLO", { commandCenterSessionId: COMMAND_CENTER_PUBLISHER.sessionId });
     if (!reloadCompanion) {
-      sendToExtension("APP_HELLO", { commandCenterSessionId: COMMAND_CENTER_PUBLISHER.sessionId });
       if (recoveryPayload) window.setTimeout(async () => {
         const controller = new AbortController();
         const deadline = window.setTimeout(() => controller.abort(), 1_000);
@@ -2583,6 +2700,7 @@ export default function Home() {
     window.addEventListener("beforeunload", revokeWriterOnPageHide);
     return () => {
       retirePendingWriterHeartbeat();
+      if (companionBootstrapReloadTimer) window.clearTimeout(companionBootstrapReloadTimer);
       window.clearTimeout(timeout);
       window.clearInterval(writerHeartbeat);
       window.removeEventListener("pagehide", revokeWriterOnPageHide);

@@ -32,7 +32,7 @@ The old Codex task, its goal state, and its private Sites ownership should not b
 4. Select **Load unpacked** and choose the extracted `extension` directory.
 5. Sign into ESPN in Chrome and open the relevant league or draft room.
 
-After updating an unpacked companion, reload both the local DraftForge tab and the ESPN draft tab. An `Extension context invalidated` message from an already-open draft tab is expected during that transition and must not be treated as an ESPN action.
+After the first installation, update the unpacked companion by opening `http://127.0.0.1:3000/?reloadCompanion=1`. The local-only bootstrap reloads the exact installed companion and then refreshes the dashboard plus the single managed ESPN tab. An `Extension context invalidated` message during that bounded transition is not an ESPN action and does not require reinstalling the extension.
 
 ESPN authentication stays in Chrome. No ESPN cookies or credentials are present in this repository.
 

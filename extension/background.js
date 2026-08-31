@@ -41,6 +41,7 @@ import {
   practiceWorkspaceCleanupTabIds,
   resolveWorkspaceRole,
   resolveWorkspaceWriterTabId,
+  selectExactEspnReloadTab,
   selectManagedWorkspaceCleanup,
 } from "./workspace-lifecycle.js";
 import { renewExistingWriterLease, writerLeaseMatchesBinding } from "./writer-lease.js";
@@ -1093,6 +1094,8 @@ async function runtimeDiagnostics() {
   ]);
   return {
     capturedAt: new Date().toISOString(),
+    extensionRuntimeId: chrome.runtime.id,
+    bridgeProtocolVersion: 2,
     extensionVersion: chrome.runtime.getManifest().version,
     extensionSourceSha256: extensionIntegrity.sha256,
     extensionSourceFileCount: extensionIntegrity.fileCount,
@@ -1735,6 +1738,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       await clearActionBinding();
       setTimeout(() => chrome.runtime.reload(), 100);
       return { ok: true, code: "RELOADING", message: "Reloading the local DraftForge companion." };
+    }
+    if (message.type === "RELOAD_EXACT_ESPN_TAB") {
+      const lifecycleFence = await durableAuctionLifecycleFence();
+      if (lifecycleFence) return lifecycleFence;
+      if (!isLocalDraftForgeSenderUrl(sender.url || sender.tab?.url || "") || actionBinding) {
+        return { ok: false, code: "ESPN_TAB_RELOAD_FORBIDDEN", message: "The ESPN tab can reload only from an idle local command center." };
+      }
+      const selection = selectExactEspnReloadTab(await chrome.tabs.query({}));
+      if (!selection.ok) {
+        return { ok: false, code: "ESPN_TAB_RELOAD_AMBIGUOUS", message: "Keep exactly one ESPN tab before reloading the companion workspace." };
+      }
+      const tabId = Number(selection.tabId);
+      await chrome.tabs.reload(tabId);
+      return { ok: true, code: "ESPN_TAB_RELOADED", tabId, runtime: await runtimeDiagnostics() };
     }
     if (message.type === "GET_RUNTIME_DIAGNOSTICS") {
       return { ok: true, runtime: await runtimeDiagnostics() };

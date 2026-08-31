@@ -201,6 +201,20 @@ export function writerLeaseHeartbeatAcknowledged(
   return ok === true && Number.isFinite(expiresAt) && expiresAt > now;
 }
 
+export function writerLeaseHelloRecoveryAllowed(
+  failureCode: string,
+  actionInFlight: boolean,
+  currentBinding: string,
+  expectedBinding: string | null,
+  attemptedBinding: string,
+) {
+  return failureCode === "WRITER_LEASE_EXPIRED"
+    && actionInFlight === false
+    && Boolean(expectedBinding)
+    && currentBinding === expectedBinding
+    && attemptedBinding !== currentBinding;
+}
+
 export function authenticatedImportRetiresLiveControl(
   currentLeagueId: string,
   importedLeagueId: string,
