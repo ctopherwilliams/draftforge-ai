@@ -2679,14 +2679,7 @@ export default function Home() {
   }, [espnPlayers]);
 
   useEffect(() => {
-    // A league lobby import proves the authenticated league, team, rules, and
-    // player pool, but it is not yet an ESPN draft-room binding. The companion
-    // intentionally rejects REFRESH_ESPN_CONTEXT for non-room tabs, so keep the
-    // exact-tab watchdog dormant until the verified live room is present.
-    if (workspaceRole !== "writer"
-      || league.id === "demo"
-      || extension !== "connected"
-      || context.inDraftRoom !== true) return;
+    if (workspaceRole !== "writer" || league.id === "demo" || extension !== "connected") return;
     activeLeagueRef.current = league.id;
     activeLeagueSettingsRef.current = league;
     // Persist a snapshot whenever ESPN sends new draft state so league switches stay isolated.
@@ -2695,7 +2688,14 @@ export default function Home() {
   }, [league, espnPlayers, authoritativePicks, settingsConfirmed, strategy, extension, workspaceRole]);
 
   useEffect(() => {
-    if (workspaceRole !== "writer" || league.id === "demo" || extension !== "connected") return;
+    // A league lobby import proves the authenticated league, team, rules, and
+    // player pool, but it is not yet an ESPN draft-room binding. The companion
+    // intentionally rejects REFRESH_ESPN_CONTEXT for non-room tabs, so keep the
+    // exact-tab watchdog dormant until the verified live room is present.
+    if (workspaceRole !== "writer"
+      || league.id === "demo"
+      || extension !== "connected"
+      || context.inDraftRoom !== true) return;
     const refreshExactDraftTab = () => {
       const expectedTabId = activeEspnTabRef.current;
       if (!Number.isInteger(expectedTabId)) return;

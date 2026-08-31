@@ -393,7 +393,8 @@ test("draft actions fail closed and private ESPN credentials are not persisted",
   assert.match(page, /expectedTabId/);
   assert.match(page, /REFRESH_ESPN_CONTEXT/);
   assert.match(page, /EXACT_TAB_WATCHDOG_MS = 5000/);
-  assert.match(page, /extension !== "connected"[\s\S]*context\.inDraftRoom !== true\) return;[\s\S]*const refreshExactDraftTab/);
+  const exactTabWatchdog = page.match(/useEffect\(\(\) => \{\n\s*\/\/ A league lobby import[\s\S]*?const refreshExactDraftTab[\s\S]*?EXACT_TAB_WATCHDOG_MS[\s\S]*?\}, \[context\.inDraftRoom, extension, league\.id, workspaceRole\]\);/)?.[0] || "";
+  assert.match(exactTabWatchdog, /context\.inDraftRoom !== true\) return;/);
   assert.match(page, /contextCanRebindDraftTab/);
   assert.match(page, /ESPN_ROSTER_CONFIRMATION_GRACE_MS = 6000/);
   assert.match(page, /preflightChecks/);
