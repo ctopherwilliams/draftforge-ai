@@ -879,7 +879,10 @@ function getContext(advanceTracking = true) {
     && auctionTransaction.ready === true
     && [...document.querySelectorAll("button[data-player-id], button[data-playerid], button")]
       .some((button) => isElementVisible(button) && /^select$/i.test((button.textContent || "").trim()));
-  const inDraftRoom = /\/football\/draft(?:\/|$)/i.test(url.pathname) || /on the clock:\s*pick|you(?:'|’)re on the clock(?!\s+in\b)|your turn to (?:pick|nominate)|nominate player|current (?:bid|offer)/i.test(text);
+  // Draft-room authority comes from ESPN's exact route, never from generic
+  // clubhouse copy such as "current offer" or "nominate player". Those words
+  // can appear on ordinary league pages and must not create a live binding.
+  const inDraftRoom = /\/football\/draft(?:\/|$)/i.test(url.pathname);
   // ESPN keeps every volume icon in a hidden SVG sprite, so the mere presence
   // of #icon__controls__volume_mute does not prove the audible control is off.
   // Read the <use> reference rendered inside the visible draft header instead.

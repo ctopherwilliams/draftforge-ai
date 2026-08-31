@@ -861,6 +861,16 @@ test("waiting-room context derives the signed-in team from ESPN's settings link"
   assert.equal(context.teamId, 8);
 });
 
+test("ordinary ESPN clubhouse auction copy cannot impersonate a live draft room", async () => {
+  const { context } = await loadDraftContext({
+    text: "Salary Cap Draft\nNominate Player\nCurrent Offer\nYour draft is scheduled",
+    waitingTeamId: 8,
+    href: "https://fantasy.espn.com/football/team?leagueId=701&teamId=8&seasonId=2026",
+  });
+
+  assert.equal(context.inDraftRoom, false);
+});
+
 test("short, unknown, or another team's ESPN clock is not actionable", async () => {
   const short = await loadDraftContext({
     text: "RND 5 OF 16\n00:04\nON THE CLOCK: PICK 47\nChris's Cool Team",
