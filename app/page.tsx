@@ -2679,7 +2679,14 @@ export default function Home() {
   }, [espnPlayers]);
 
   useEffect(() => {
-    if (workspaceRole !== "writer" || league.id === "demo" || extension !== "connected") return;
+    // A league lobby import proves the authenticated league, team, rules, and
+    // player pool, but it is not yet an ESPN draft-room binding. The companion
+    // intentionally rejects REFRESH_ESPN_CONTEXT for non-room tabs, so keep the
+    // exact-tab watchdog dormant until the verified live room is present.
+    if (workspaceRole !== "writer"
+      || league.id === "demo"
+      || extension !== "connected"
+      || context.inDraftRoom !== true) return;
     activeLeagueRef.current = league.id;
     activeLeagueSettingsRef.current = league;
     // Persist a snapshot whenever ESPN sends new draft state so league switches stay isolated.
@@ -2703,7 +2710,7 @@ export default function Home() {
     refreshExactDraftTab();
     const refreshTimer = window.setInterval(refreshExactDraftTab, EXACT_TAB_WATCHDOG_MS);
     return () => window.clearInterval(refreshTimer);
-  }, [extension, league.id, workspaceRole]);
+  }, [context.inDraftRoom, extension, league.id, workspaceRole]);
 
   useEffect(() => {
     if (!league.teamId || !Array.isArray(context.ownRoster)) return;
