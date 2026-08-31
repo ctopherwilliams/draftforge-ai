@@ -381,7 +381,13 @@ export async function persistDraftAuditCheckpoint(
   let renamed = false;
   try {
     await handle.writeFile(serialized, "utf8");
-    await handle.sync();
+    // fdatasync persists the checkpoint bytes and the metadata required to
+    // retrieve them without forcing unrelated file metadata to disk. The
+    // directory fsync below still makes the atomic rename durable. On APFS,
+    // this avoids multi-hundred-millisecond fsync outliers in the live auction
+    // authorization path while preserving the write -> flush -> rename ->
+    // directory-flush ordering.
+    await handle.datasync();
     await handle.close();
     await rename(temporaryPath, checkpointPath);
     renamed = true;
