@@ -2,6 +2,8 @@
 
 New to DraftForge or preparing for a real draft? For the September 8, 2026 “It’s Fun To Do Bad Things” salary-cap draft, use the focused [September 8 auction runbook](docs/september-9-auction-runbook.md). The general operator flow is in the [day-one draft canvas](DRAFT_DAY_OPERATOR_CANVAS.md), and [DRAFT_DAY_HANDOVER.md](DRAFT_DAY_HANDOVER.md) contains the full release gates and certification ledger. Moving the project to another computer or Codex account? Start with [MIGRATION.md](MIGRATION.md) and [AGENT_HANDOFF.md](AGENT_HANDOFF.md).
 
+Post-draft lineup and waiver management is a separately gated, recommendation-only expansion and is not part of the current live-draft release. Its approved scope, evidence model, safety boundary, delivery phases, and acceptance criteria are documented in the [post-draft lineup and waiver plan](docs/post-draft-lineup-waiver-plan.md).
+
 DraftForge is an ESPN-only fantasy football draft copilot. The local dashboard and DraftForge Chrome companion are the production control plane: together they import the league's authenticated settings, follow a live snake or salary-cap draft, combine five public player-intelligence feeds, and drive the exact ESPN room within explicit safety guardrails. The Codex conversation is the strategy and status cockpit; it observes only the sanitized loopback status surface and is never an ESPN action writer. The isolated single-tab browser runtime is a lab-only, read-only test observer and is not a production recovery or action path.
 
 Post-draft league management is intentionally out of scope.
