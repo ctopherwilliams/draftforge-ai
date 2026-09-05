@@ -172,4 +172,12 @@ test("readiness config tracks both authenticated ESPN formats", () => {
   assert.equal(config.profiles.snake.scoringRules, 29);
   assert.equal(config.profiles["salary-cap"].draftType, "AUCTION");
   assert.equal(config.profiles["salary-cap"].keeperCount, 2);
+  assert.equal(config.profiles["salary-cap"].event.draftAt, "2026-09-08T20:00:00-05:00");
+  assert.deepEqual(config.profiles["salary-cap"].event.selectedKeepers, [
+    { espnPlayerId: 3916148, name: "Tony Pollard", position: "RB", amount: 0 },
+    { espnPlayerId: 3121422, name: "Terry McLaurin", position: "WR", amount: 1 },
+  ]);
+  assert.equal(config.profiles["salary-cap"].event.keeperSpend, 1);
+  assert.equal(config.profiles["salary-cap"].event.remainingBudget, 199);
+  assert.equal(config.profiles["salary-cap"].event.remainingRosterSlots, 12);
 });
