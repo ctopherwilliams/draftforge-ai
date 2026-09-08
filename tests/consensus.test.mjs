@@ -19,7 +19,7 @@ const sources = [
     { name: "Bijan Robinson", team: "ATL", pos: "RB", rank: 1, adp: 1 },
     { name: "Jamar Chase", team: "CIN", pos: "WR", rank: 2, adp: 2 },
   ] },
-  { id: "gng", name: "GNG", kind: "model", weight: .20, status: "ok", updatedAt: null, attribution: "gng", players: [
+  { id: "fantasypros", name: "FANTASYPROS", kind: "model", weight: .20, status: "ok", updatedAt: null, attribution: "fantasypros", players: [
     { name: "Bijan Robinson", team: "ATL", pos: "RB", rank: 1 },
     { name: "Ja'Marr Chase", team: "CIN", pos: "WR", rank: 2 },
   ] },
@@ -46,11 +46,11 @@ test("consensus combines sources deterministically and exposes provenance", () =
   assert.equal(bijan.sourceCount, 3);
   assert.equal(bijan.sourceRanks.espn, 2);
   assert.equal(bijan.sourceRanks.ffc, 1);
-  assert.equal(bijan.sourceRanks.gng, 1);
+  assert.equal(bijan.sourceRanks.fantasypros, 1);
   assert.equal(bijan.consensusRank, 1);
   assert.ok(bijan.sourceAuctions.espn > 0);
   assert.ok(bijan.sourceAuctions.ffc > 0);
-  assert.ok(bijan.sourceAuctions.gng > 0);
+  assert.ok(bijan.sourceAuctions.fantasypros > 0);
 });
 
 test("source payload metadata cannot alter the fixed five-source weights", () => {
@@ -64,7 +64,7 @@ test("source payload metadata cannot alter the fixed five-source weights", () =>
 
 test("a globally healthy five-source snapshot cannot inflate an ESPN-only player to a perfect score", () => {
   const positions = ["QB", "RB", "WR", "TE"];
-  const healthyBoards = ["ffc", "mfl", "tradyr", "gng"].map((id) => ({
+  const healthyBoards = ["ffc", "mfl", "tradyr", "fantasypros"].map((id) => ({
     id,
     name: id.toUpperCase(),
     kind: id === "ffc" || id === "mfl" ? "market" : "model",
@@ -129,7 +129,7 @@ test("player corroboration is an ESPN-backed live-action gate with the specialis
 
   const ordered = [
     { id: 1, pos: "WR", sourceRanks: { espn: 1, ffc: 2, mfl: 3 } },
-    { id: 2, pos: "RB", sourceRanks: { espn: 2, ffc: 3, mfl: 4, gng: 5 } },
+    { id: 2, pos: "RB", sourceRanks: { espn: 2, ffc: 3, mfl: 4, fantasypros: 5 } },
     { id: 3, pos: "K", sourceRanks: { espn: 1 } },
     { id: 4, pos: "DST", sourceRanks: { espn: 1, mfl: 2 } },
   ];
@@ -189,7 +189,7 @@ test("consensus separates corroborated model value from market price without add
     ranked("ffc", 2, 1),
     ranked("mfl", 2, 1),
     ranked("tradyr", 1, 2),
-    ranked("gng", 1, 2),
+    ranked("fantasypros", 1, 2),
   ]);
   const hidden = merged.find((player) => player.id === 12);
 
@@ -203,6 +203,6 @@ test("consensus separates corroborated model value from market price without add
     ranked("ffc", 2, 1),
     ranked("mfl", 2, 1),
     ranked("tradyr", 1, 2),
-    ranked("gng", 1, 2),
+    ranked("fantasypros", 1, 2),
   ]));
 });

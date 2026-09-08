@@ -14,7 +14,7 @@ function warmPayload(overrides = {}) {
     profile: { scoring: "PPR", teams: 12, season: 2026, qbs: 1 },
     sourceSnapshotId,
     sourceGeneratedAt: new Date().toISOString(),
-    sources: ["ffc", "mfl", "tradyr", "gng"].map((id) => ({
+    sources: ["ffc", "mfl", "tradyr", "fantasypros"].map((id) => ({
       id,
       status: "ok",
       players: 500,

@@ -47,7 +47,7 @@ function auditSnapshot({ sourceId, generatedAt }) {
       settingsConfirmed: true,
       extensionConnected: true,
       sourceCoverage: 5,
-      sourceIds: ["espn", "ffc", "mfl", "tradyr", "gng"],
+      sourceIds: ["espn", "ffc", "mfl", "tradyr", "fantasypros"],
       sourceSnapshotId: sourceId,
       sourceSnapshotGeneratedAt: generatedAt,
       autoDraft: false,
@@ -78,7 +78,7 @@ function warmPayload({ sourceId = sourceSnapshotId, generatedAt, overrides = {} 
     sourceSnapshotId: sourceId,
     sourceGeneratedAt: generatedAt,
     profile: { scoring: "PPR", teams: 12, season: 2026, qbs: 2 },
-    sources: ["ffc", "mfl", "tradyr", "gng"].map((id) => ({ id, status: "ok", players: 100 })),
+    sources: ["ffc", "mfl", "tradyr", "fantasypros"].map((id) => ({ id, status: "ok", players: 100 })),
     ...overrides,
   };
 }

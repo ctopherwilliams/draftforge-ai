@@ -41,6 +41,13 @@ import {
 } from "./lib/companion-bridge";
 import { resolveEspnNominatedPlayer, resolveLiveBoardDisplayRank, resolveOwnNominationIntent, stabilizeEspnContext, type EspnContext } from "./lib/espn-context-state";
 import { canArmAutoDraft } from "./lib/auto-draft-safety";
+import { pinnedKeeperPicksReady } from "./lib/keeper-readiness";
+import {
+  availabilityStageReadLabel,
+  classifyAvailabilityStageRead,
+  type AvailabilityStage,
+  type AvailabilityStageReadStatus,
+} from "./lib/availability-stage-read";
 import { liveEspnRecommendations, reconcileEspnPicks, resolveAuctionSales, resolveOwnRoster } from "./lib/espn-reconciliation";
 import { draftUiReducer, INITIAL_DRAFT_UI_STATE } from "./lib/draft-ui-state";
 import { buildDraftPresentation, resolveActionSurfaceStatus, resolveLiveOperatorStatus } from "./lib/draft-presentation";
@@ -335,7 +342,7 @@ type AcceptedIntelligenceSnapshot = Readonly<{
 const EMPTY_INTELLIGENCE_SOURCES: IntelligenceSource[] = [];
 const EXPECTED_INTELLIGENCE_WEIGHTS = Object.freeze({
   espn: .30,
-  gng: .20,
+  fantasypros: .20,
   tradyr: .20,
   ffc: .15,
   mfl: .15,
@@ -404,7 +411,7 @@ function acceptDraftDayWarmResponse(
     || response.sourceCoverage !== 5
     || sourceIds.length !== 5
     || new Set(sourceIds).size !== 5
-    || !["espn", "ffc", "mfl", "tradyr", "gng"].every((id) => sourceIds.includes(id))
+    || !["espn", "ffc", "mfl", "tradyr", "fantasypros"].every((id) => sourceIds.includes(id))
     || profile?.scoring !== expected.scoring
     || profile?.teams !== expected.teams
     || profile?.season !== expected.season
@@ -845,12 +852,8 @@ export default function Home() {
     players: [],
     evaluatedAt: new Date().toISOString(),
   }));
-  const [availabilityStage, setAvailabilityStage] = useState<{
-    artifact: unknown;
-    policy: unknown;
-    stagedAt: string;
-  } | null>(null);
-  const [availabilityTransportDegraded, setAvailabilityTransportDegraded] = useState(false);
+  const [availabilityStage, setAvailabilityStage] = useState<AvailabilityStage | null>(null);
+  const [availabilityStageReadStatus, setAvailabilityStageReadStatus] = useState<AvailabilityStageReadStatus>("missing");
   const [pendingAuctionNomination, setPendingAuctionNomination] = useState<{
     playerId: number;
     playerName: string;
@@ -861,6 +864,7 @@ export default function Home() {
   const lastAutoAction = useRef("");
   const profilesRef = useRef<Record<string, DraftProfile>>({});
   const espnPlayersRef = useRef<DraftPlayer[]>(DEMO_PLAYERS);
+  const keeperAuthorizationPicksRef = useRef<DraftPick[]>([]);
   const activeLeagueSettingsRef = useRef<LeagueSettings>(DEMO_LEAGUE);
   const activeLeagueRef = useRef("demo");
   const activeSourceLeagueRef = useRef("demo");
@@ -1425,7 +1429,8 @@ export default function Home() {
     deferredAvailabilityGateRef.current = null;
     setAvailabilityGate(blockedAvailability);
     setAvailabilityStage(null);
-    setAvailabilityTransportDegraded(false);
+    setAvailabilityStageReadStatus("missing");
+    keeperAuthorizationPicksRef.current = [];
     setLiveControlVersion((version) => version + 1);
   }, [retirePendingWriterHeartbeat, setPickFeedHealth]);
   const authoritativeRosterContext = useMemo(() => ({
@@ -1639,6 +1644,17 @@ export default function Home() {
       }
       const observedAt = new Date().toISOString();
       latestEspnContextRef.current = roomContext;
+      // Keep authorization evidence current synchronously across awaited
+      // availability/audit work. Partial DOM frames cannot erase confirmed
+      // ownership; a fresh authenticated import resets this proof below.
+      keeperAuthorizationPicksRef.current = reconcileEspnPicks(
+        pickFeedPicks ? mergeDraftPicks(keeperAuthorizationPicksRef.current, pickFeedPicks) : keeperAuthorizationPicksRef.current,
+        roomContext, activeEspnTeamRef.current, espnPlayersRef.current, activeLeagueSettingsRef.current,
+      );
+      if (autoDraftRef.current && !pinnedKeeperPicksReady(activeLeagueSettingsRef.current, keeperAuthorizationPicksRef.current, espnPlayersRef.current)) {
+        setAutoDraft(false);
+        setActionState("Auto-Draft disarmed: the exact selected keeper identities and prices are no longer verified.");
+      }
       espnContextObservedAtRef.current = observedAt;
       let feedFreshness: Partial<LiveControlFreshness> = {};
       if (pickFeedPicks) {
@@ -2095,6 +2111,7 @@ export default function Home() {
         }
         setLeague(importedLeague);
         espnPlayersRef.current = importedPlayers;
+        keeperAuthorizationPicksRef.current = importedPicks;
         if (importedContext) {
           initializeLiveControl(importedLeague, importedContext, importedPlayers);
           observeLiveContext(importedContext, importedPicks);
@@ -2989,28 +3006,26 @@ export default function Home() {
     const refreshAvailability = async () => {
       try {
         const response = await fetch(AVAILABILITY_STAGE_PATH, { cache: "no-store" });
-        const staged = await response.json().catch(() => null) as {
-          artifact?: unknown;
-          policy?: unknown;
-          stagedAt?: string;
-        } | null;
-        if ((!response.ok && response.status !== 409) || !staged?.artifact || !staged?.policy) {
-          throw new Error("AVAILABILITY_STAGE_MISSING");
-        }
+        const read = classifyAvailabilityStageRead(response.status, await response.json().catch(() => null));
         if (!cancelled) {
-          setAvailabilityTransportDegraded(false);
-          setAvailabilityStage({
-            artifact: staged.artifact,
-            policy: staged.policy,
-            stagedAt: String(staged.stagedAt || new Date().toISOString()),
-          });
+          setAvailabilityStageReadStatus(read.status);
+          if (read.status !== "unavailable") setAvailabilityStage(read.stage);
+          if (read.status === "missing" || read.status === "invalid") {
+            // An explicit revocation is not a transient transport outage.
+            // Revoke synchronously even while a pending decision is frozen.
+            const blocked = evaluateAvailabilityGate({ artifact: null, policy: null, players: [], evaluatedAt: new Date().toISOString() });
+            availabilityGateRef.current = blocked;
+            deferredAvailabilityGateRef.current = blocked;
+            setAvailabilityGate(blocked);
+            setAutoDraft(false);
+          }
         }
       } catch {
         // Keep a still-fresh, previously validated artifact visible through a
         // transient loopback read failure. The action-time fetch below remains
         // mandatory and fail closed, so this cannot authorize a click from
         // cached evidence after its exact freshUntil deadline.
-        if (!cancelled) setAvailabilityTransportDegraded(true);
+        if (!cancelled) setAvailabilityStageReadStatus("unavailable");
       }
     };
     void refreshAvailability();
@@ -3019,7 +3034,7 @@ export default function Home() {
       cancelled = true;
       window.clearInterval(refreshTimer);
     };
-  }, [league.id]);
+  }, [league.id, setAutoDraft]);
 
   const players = useMemo(() => mergeConsensus(espnPlayers, sources, league), [espnPlayers, sources, league]);
   const actionablePlayers = useMemo(
@@ -3296,10 +3311,12 @@ export default function Home() {
   }, [intelligenceSnapshot, sourceCoverageReady, updateLiveControlFreshness]);
   const pickFeedHealthy = pickFeedHealth.fresh && !pickFeedHealth.lagging;
   const runtimeWorkspaceReady = draftRuntimeWorkspaceReady(runtimeDiagnostics);
-  const actionWindowOpen = workspaceRole === "writer" && writerLeaseHealthy && runtimeWorkspaceReady && authenticatedEspnPlayerPoolReady && sourceCoverageReady && pickFeedHealthy && availabilityGate.armingAllowed && context.actionSurfaceReady === true && context.autopickActive === false && Boolean(context.onClock) && Number.isFinite(remainingSeconds) && remainingSeconds >= minimumActionWindow;
+  const pinnedKeepersReady = pinnedKeeperPicksReady(league, authoritativePicks, espnPlayers);
+  const actionWindowOpen = workspaceRole === "writer" && writerLeaseHealthy && runtimeWorkspaceReady && pinnedKeepersReady && authenticatedEspnPlayerPoolReady && sourceCoverageReady && pickFeedHealthy && availabilityGate.armingAllowed && context.actionSurfaceReady === true && context.autopickActive === false && Boolean(context.onClock) && Number.isFinite(remainingSeconds) && remainingSeconds >= minimumActionWindow;
   const bidWindowOpen = workspaceRole === "writer"
     && writerLeaseHealthy
     && runtimeWorkspaceReady
+    && pinnedKeepersReady
     && authenticatedEspnPlayerPoolReady
     && sourceCoverageReady
     && pickFeedHealthy
@@ -3354,8 +3371,9 @@ export default function Home() {
     { label: `${league.scoringLabel} scoring and ${league.scoringRules} ESPN scoring rules`, ok: Boolean(league.scoringLabel) && league.scoringRules > 0 },
     { label: `${espnPlayers.length}/500 unique authenticated ESPN players`, ok: authenticatedEspnPlayerPoolReady },
     { label: `${healthySources.length + 1}/5 fresh deterministic sources`, ok: healthySources.length === 4 },
-    { label: `Availability veto ${availabilityGate.status.toLowerCase()}${availabilityTransportDegraded ? " · cached (live read degraded)" : ""} · ${availabilityGate.digest.slice(0, 15)}…`, ok: availabilityGate.armingAllowed },
-    { label: "Exactly one DraftForge tab and one ESPN tab under companion cleanup", ok: runtimeWorkspaceReady },
+    { label: "Exact selected keeper identities and prices are verified for the pinned event", ok: pinnedKeepersReady },
+    { label: `Availability veto ${availabilityGate.status.toLowerCase()}${availabilityStageReadLabel(availabilityStageReadStatus, availabilityStage !== null)} · ${availabilityGate.digest.slice(0, 15)}…`, ok: availabilityGate.armingAllowed },
+    { label: "Exactly two Chrome tabs total: one DraftForge and one ESPN", ok: runtimeWorkspaceReady },
     { label: `${strategyInfo.label} strategy and ${league.draftType === "AUCTION" ? "$" + Object.values(auctionPlan.positionBudgets).reduce((sum, amount) => sum + amount, 0) + " planned" : "position priorities"}`, ok: league.draftType !== "AUCTION" || Object.values(auctionPlan.positionBudgets).reduce((sum, amount) => sum + amount, 0) === league.auctionBudget },
   ];
   const preflightReady = preflightChecks.every((check) => check.ok);
@@ -3721,7 +3739,12 @@ export default function Home() {
     }
     if (!runtimeWorkspaceReady) {
       setAutoDraft(false);
-      setActionState("Action stopped: Chrome must contain exactly one DraftForge tab and one ESPN tab. No ESPN action was sent.");
+      setActionState("Action stopped: Chrome must contain exactly two tabs total, one DraftForge and one ESPN. No ESPN action was sent.");
+      return;
+    }
+    if (!pinnedKeeperPicksReady(activeLeagueSettingsRef.current, keeperAuthorizationPicksRef.current, espnPlayersRef.current)) {
+      setAutoDraft(false);
+      setActionState("Action stopped: the exact selected keeper identities and prices are not verified. No ESPN action was sent.");
       return;
     }
     if (league.id !== "demo" && !classifyPlayerConsensusCorroboration(player).corroborated) {
@@ -3795,6 +3818,7 @@ export default function Home() {
       if (automatic && !autoDraftRef.current) return "AUTO_DRAFT_DISARMED";
       if (!writerLeaseHealthyRef.current) return "WRITER_LEASE_UNHEALTHY";
       if (workspaceRoleRef.current !== "writer") return "COMMAND_CENTER_WRITER_LOST";
+      if (!pinnedKeeperPicksReady(activeLeagueSettingsRef.current, keeperAuthorizationPicksRef.current, espnPlayersRef.current)) return "EXACT_KEEPERS_UNVERIFIED";
       if (!acceptedIntelligenceSnapshotFresh(intelligenceSnapshot, Date.now(), activeIntelligenceSnapshotKey)) return "FIVE_SOURCE_COVERAGE_BLOCKED";
       const feed = pickFeedHealthRef.current;
       if (!feed.fresh || feed.lagging) return "PICK_FEED_UNHEALTHY";
@@ -4878,7 +4902,7 @@ export default function Home() {
           </div>
           {league.draftType === "SNAKE" ? <button className="draft-button full" onClick={() => submit(focusPlayer, false, "SELECT")} disabled={!settingsConfirmed || extension !== "connected" || !actionWindowOpen}>Draft {focusPlayer.name} in ESPN<small>{Number.isFinite(remainingSeconds) ? `${remainingSeconds}s remaining` : "Waiting for verified clock"}</small></button> : <div className="pick-actions"><button className="draft-button" onClick={() => auctionNomination && submit(auctionNomination.player, false, "NOMINATE", auctionNomination.openingBid, auctionNomination.intent)} disabled={!settingsConfirmed || extension !== "connected" || !actionWindowOpen || auctionClickUncertainty || Boolean(nominated || context.nominatedPlayer || Number(context.currentBid || 0) > 0) || !auctionNomination}>Nominate {auctionNomination?.intent === "DRAIN" ? "budget drain" : "target"}<small>{auctionClickUncertainty ? "Waiting for exact reconciliation" : `Open $${auctionNomination?.openingBid || 1}`}</small></button><button className="bid-button" onClick={() => submit(focusPlayer, false, "BID", nextBid)} disabled={!settingsConfirmed || extension !== "connected" || auctionClickUncertainty || !nominated || nominatedAvailabilityVetoed || context.leadingBid !== false || ownNominationIntent === "DRAIN" || nextBid > exactLiveBidCeiling || !bidWindowOpen}>{auctionClickUncertainty ? "Hold — reconciling prior click" : nominatedAvailabilityVetoed ? "Pass — player unavailable" : ownNominationIntent === "DRAIN" ? "Pass — no price enforcing" : context.leadingBid === true ? "Hold — already leading" : context.leadingBid !== false ? "Pass — lead state unknown" : nextBid > exactLiveBidCeiling ? "Pass — ceiling reached" : `Bid $${nextBid}`}<small>{auctionClickUncertainty ? "Exact ESPN state required" : nominatedAvailabilityVetoed ? "Availability veto active" : ownNominationIntent === "DRAIN" ? "Decoy nomination" : context.leadingBid !== false ? "Waiting for authoritative bidder state" : `Hard stop $${exactLiveBidCeiling}`}</small></button></div>}
           {!settingsConfirmed && <small className="locked-note">Confirm imported league rules to unlock ESPN actions.</small>}
-          <details className="decision-details"><summary>Decision intelligence <span>{focusPlayer.confidence}% confidence</span></summary><div className="confidence"><div><span>Source agreement · {focusPlayer.sourceCount || 1}/5 sources</span><b>{focusPlayer.confidence}%</b></div><div className="confidence-track"><i style={{ width: `${focusPlayer.confidence}%` }} /></div></div><p className="reason">{describeRecommendation(focusPlayer, league, strategy)}</p>{league.draftType === "AUCTION" && focusPlayer.sourceAuctions && <div className="source-values">{Object.entries(focusPlayer.sourceAuctions).map(([source, amount]) => <span key={source}>{source.toUpperCase()} <b>${Math.round(amount)}</b></span>)}</div>}<ul className="reason-list">{focusPlayer.reasons.slice(0, 4).map((reason) => <li key={reason}>{reason}</li>)}</ul></details>
+          <details className="decision-details"><summary>Decision intelligence <span>{focusPlayer.confidence}% confidence</span></summary><div className="confidence"><div><span>Source agreement · {focusPlayer.sourceCount || 1}/5 sources</span><b>{focusPlayer.confidence}%</b></div><div className="confidence-track"><i style={{ width: `${focusPlayer.confidence}%` }} /></div></div><p className="reason">{describeRecommendation(focusPlayer, league, strategy)}</p>{league.draftType === "AUCTION" && focusPlayer.sourceAuctions && <div className="source-values" aria-label="League-normalized auction estimates, not provider price quotes" title="League-normalized auction estimates, not provider price quotes">{Object.entries(focusPlayer.sourceAuctions).map(([source, amount]) => <span key={source}>{source.toUpperCase()} <b>${Math.round(amount)}</b></span>)}</div>}<ul className="reason-list">{focusPlayer.reasons.slice(0, 4).map((reason) => <li key={reason}>{reason}</li>)}</ul></details>
           </> : null}
         </section>}
         <section className="on-clock-card panel"><span className={actionWindowOpen ? "pulse" : ""} aria-hidden="true">●</span><div><b>{actionSurfaceStatus.detail}</b><small>{autoDraft ? "Auto-Draft is armed only for this verified league and tab." : "Guided mode: you approve every pick, nomination, and bid."}</small></div></section>

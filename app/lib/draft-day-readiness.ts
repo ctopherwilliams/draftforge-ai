@@ -5,6 +5,7 @@ import {
   MAX_DRAFT_ACTION_TELEMETRY_EVENTS,
   type DraftAuditSnapshot,
 } from "./draft-audit.ts";
+import { exactSelectedKeepersReady } from "./keeper-readiness.ts";
 
 export type DraftDayReadinessPhase = "pre-room" | "live" | "complete";
 
@@ -82,7 +83,7 @@ export function evaluateDraftDayReadiness(input: {
     extensionConnected: snapshot.safety.extensionConnected === true,
     managedWorkspaceCleanup: draftRuntimeWorkspaceReady(snapshot.runtime),
     fiveSources: snapshot.safety.sourceCoverage === 5,
-    exactSourceSet: JSON.stringify([...new Set(snapshot.safety.sourceIds)].sort()) === JSON.stringify(["espn", "ffc", "gng", "mfl", "tradyr"]),
+    exactSourceSet: JSON.stringify([...new Set(snapshot.safety.sourceIds)].sort()) === JSON.stringify(["espn", "fantasypros", "ffc", "mfl", "tradyr"]),
     autoDraftOff: snapshot.safety.autoDraft === false,
     espnAutopickOff: snapshot.safety.autopickActive === false,
     actionHealthy: !/stopped|excluded|autopick|fatal/i.test(snapshot.safety.actionState),
@@ -104,13 +105,7 @@ export function evaluateDraftDayReadiness(input: {
   if (selectedKeepers !== undefined) {
     const appRoster = snapshot.draft?.appRoster ?? [];
     const keeperSpend = selectedKeepers.reduce((sum, keeper) => sum + keeper.amount, 0);
-    checks.exactSelectedKeepers = selectedKeepers.length <= expected.keeperCount
-      && new Set(selectedKeepers.map((keeper) => keeper.espnPlayerId)).size === selectedKeepers.length
-      && selectedKeepers.every((keeper) => Number.isSafeInteger(keeper.espnPlayerId)
-        && keeper.espnPlayerId > 0 && Number.isSafeInteger(keeper.amount) && keeper.amount >= 0
-        && appRoster.filter((entry) => entry.playerId === keeper.espnPlayerId).length === 1
-        && appRoster.some((entry) => entry.playerId === keeper.espnPlayerId
-          && entry.position === keeper.position && entry.amount === keeper.amount));
+    checks.exactSelectedKeepers = exactSelectedKeepersReady(selectedKeepers, expected.keeperCount, appRoster);
     checks.keeperPlanConsistent = expected.event?.keeperSpend === keeperSpend
       && expected.event?.remainingBudget === expected.auctionBudget - keeperSpend
       && expected.event?.remainingRosterSlots === expected.rosterSize - selectedKeepers.length;

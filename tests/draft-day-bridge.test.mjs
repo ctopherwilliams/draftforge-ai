@@ -36,7 +36,7 @@ function sources() {
     ["ffc", "market", .15],
     ["mfl", "market", .15],
     ["tradyr", "composite", .20],
-    ["gng", "model", .20],
+    ["fantasypros", "model", .20],
   ].map(([id, kind, weight]) => ({
     id,
     name: String(id).toUpperCase(),
@@ -90,7 +90,7 @@ test("chat bridge monitors safely and exposes deterministic five-source coverage
   assert.equal(decision.ok, true);
   assert.equal(decision.code, "MONITORING");
   assert.equal(decision.sourceCoverage, 5);
-  assert.deepEqual(decision.sourceIds, ["espn", "ffc", "mfl", "tradyr", "gng"]);
+  assert.deepEqual(decision.sourceIds, ["espn", "ffc", "mfl", "tradyr", "fantasypros"]);
   assert.equal(decision.action, null);
 });
 

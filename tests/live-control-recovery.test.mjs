@@ -78,7 +78,7 @@ function audit(overrides = {}) {
       autopickActive: false,
       autoDraft: true,
       sourceCoverage: 5,
-      sourceIds: ["espn", "ffc", "mfl", "tradyr", "gng"],
+      sourceIds: ["espn", "ffc", "mfl", "tradyr", "fantasypros"],
       sourceSnapshotId,
       sourceSnapshotGeneratedAt: at(-1_000),
       actionState: "Live auction active.",

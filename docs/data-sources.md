@@ -8,7 +8,15 @@ DraftForge uses five complementary signals. ESPN remains the source of league tr
 | Fantasy Football Calculator | Recent redraft ADP, dispersion, and draft sample size | `GET /api/v1/adp/{format}?teams={n}&year={yyyy}` | Daily; DraftForge caches six hours | 15% |
 | MyFantasyLeague | Cross-platform ADP and average auction value from completed leagues | Public MFL export API: `TYPE=players`, `TYPE=adp`, and `TYPE=aav` | Six-hour cache | 15% |
 | Tradyr | Independent redraft-PPR composite | One server-only bearer-authenticated atomic request to `GET https://api.tradyr.app/v1/players?format=redraft&numQbs={1\|2}&limit=1000&offset=0` | Daily | 20% |
-| The GNG Pigskin Rankings | Model ranking, tiers, movement, and projected PPG | `GET https://www.thegng.us/api/rankings.json?profile={standard|half_ppr|ppr}` | Source-generated timestamp; six-hour cache | 20% |
+| FantasyPros Expert Consensus Rankings | Expert-consensus player-quality rank (not an auction-price or projection feed) | Public scoring-specific draft cheatsheet; bounded JSON extraction from its published ECR data | Board and every selected expert's publication timestamp; six-hour cache | 20% |
+
+## September 7 source replacement
+
+The user authorized replacing GNG with FantasyPros after GNG's live API still reported `generated_at: 2026-08-19T11:37:39Z` and board version `unified-ppr-fable-v1-20260819113729`, despite `synced_at: 2026-09-07T12:17:17Z`. Sync time is not evidence of a new ranking version. The five weights stay ESPN30/FantasyPros20/Tradyr20/FFC15/MFL15; source IDs, snapshot validation, and readiness contracts now require `fantasypros`, not `gng`. Historical GNG captures remain historical artifacts, not current authorization.
+
+FantasyPros publishes a general draft ECR board for Standard, Half PPR, and PPR. DraftForge verifies NFL, season, draft/overall context, scoring, selected-expert identities, and actual publication dates. It conservatively records the oldest selected expert's date and rejects any selected expert or board outside the unchanged 14-day/five-minute-future limits. Page access time never substitutes for publication time. The public board is not a custom two-QB or league-auction calculator: ESPN scoring/roster projections and the matching Tradyr QB profile continue to supply that context. The adapter reports ranks only, never provider-published dollars or projected points. The existing engine can derive league-normalized auction estimates from ranks; those estimates are not FantasyPros price quotes.
+
+A broader board is improved reach, not proof of better season outcomes. Sleeper thresholds, fixed weights, bid ceilings, reserve, and selection formulas are unchanged. Revalidate actual player-level matches after importing ESPN; do not interpret provider health as universal five-source player coverage.
 
 ## Current certification boundary — 2026-08-28
 
@@ -29,7 +37,7 @@ Official availability news is intentionally outside this weighted table. Authent
 5. Blend ESPN, FFC, and MFL ADP into the market-availability estimate. Blend ESPN and MFL auction values into the initial salary-cap market price.
 6. Feed consensus, ESPN league-specific projected points, value over replacement, tier scarcity, roster construction, and selected strategy into the deterministic draft score.
 
-The model never treats the five ranks as five equal expert opinions. ESPN projections answer “how valuable is this player in this league?”, while FFC/MFL answer “when or for how much will the room draft him?” Tradyr and The GNG add independent player-quality priors.
+The model never treats the five ranks as five equal expert opinions. ESPN projections answer “how valuable is this player in this league?”, while FFC/MFL answer “when or for how much will the room draft him?” Tradyr and FantasyPros add player-quality priors; their underlying inputs may overlap, so these are not five statistically independent experiments.
 
 Tradyr remains one 20% source. Since the documented 2026-08-15 access change, trustworthy bulk use requires the server-only `TRADYR_API_KEY`; unkeyed results stop at 50 rows and may contain decoys. A healthy refresh is one bounded atomic keyed response, never a merge of independently generated pages. DraftForge sends the key only in the Authorization header and fails closed unless the response proves the exact redraft and one-QB/two-QB profile, `limit=1000`, `offset=0`, a fresh generation timestamp, more than 50 and at most 1,000 total rows, an exact returned-row count, and unique canonical player identities. It also rejects limited/ignored access flags and inconsistent optional access counts. The key never enters URLs, browser storage, logs, snapshots, or committed files. DraftForge requests Tradyr's two-QB board only when the authenticated ESPN starter slots contain QB plus OP (or otherwise permit two starting quarterbacks); one-QB and two-QB snapshots use separate cache keys.
 
@@ -43,9 +51,9 @@ ESPN negative D/ST IDs are preserved; placeholder IDs `0` and `-1`, raw settings
 
 ## Deterministic sleeper signal
 
-Sleepers are derived from these same five sources; no editorial list or sixth weighted feed can override the consensus. DraftForge separates the ESPN/FFC/MFL market percentile from the Tradyr/GNG model percentile, then labels a player only when:
+Sleepers are derived from these same five sources; no editorial list or sixth weighted feed can override the consensus. DraftForge separates the ESPN/FFC/MFL market percentile from the Tradyr/FantasyPros model percentile, then labels a player only when:
 
-- both independent model feeds match the player and agree within 12 percentile points;
+- both player-quality feeds match the player and agree within 12 percentile points;
 - ESPN plus at least one external market feed match the player, with at least four of five total sources present;
 - the model percentile leads the market percentile by at least eight points;
 - the player has positive scoring-adjusted value over replacement and no ESPN injury flag; and
@@ -64,5 +72,5 @@ A separate authenticated 10-team Standard snake capture (`38604a70ba64ff02c7b019
 - [Fantasy Football Calculator ADP API](https://help.fantasyfootballcalculator.com/article/42-adp-rest-api) permits free personal and commercial use with requested attribution.
 - [MyFantasyLeague](https://myfantasyleague.wordpress.com/2008/08/06/developer-api/) provides an open developer export API.
 - [Tradyr API](https://api.tradyr.app/docs) documents free keyed access for commercial or automated bulk use and requires attribution.
-- [The GNG rankings](https://www.thegng.us/ranks) declares the JSON feed free to use with attribution and a link.
+- [FantasyPros PPR ECR](https://www.fantasypros.com/nfl/rankings/ppr-cheatsheets.php) is attributed in the source panel. This adapter reads publicly delivered rankings for the user's draft; it does not establish redistribution or commercial licensing rights. A blocked response or changed page contract fails closed rather than bypassing access controls.
 - ESPN's fantasy endpoints are undocumented and may change; the extension uses the user's existing ESPN session and fails closed if expected draft-room controls are not present.

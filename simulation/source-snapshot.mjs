@@ -9,7 +9,7 @@ import {
 
 export const SOURCE_SNAPSHOT_SCHEMA_VERSION = 3;
 export const CURRENT_SOURCE_SNAPSHOT_MAX_AGE_MS = 30 * 60 * 1000;
-export const PUBLIC_SOURCE_IDS = ["ffc", "mfl", "tradyr", "gng"];
+export const PUBLIC_SOURCE_IDS = ["ffc", "mfl", "tradyr", "fantasypros"];
 const POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"];
 const REQUIRED_SOURCE_POSITIONS = ["QB", "RB", "WR", "TE"];
 const MIN_SOURCE_PLAYER_COVERAGE = 25;
@@ -185,7 +185,7 @@ export function validateSourceSnapshot(snapshot) {
   const provenance = snapshot?.provenance;
   const espnProvenance = provenance?.espnCapture;
   const publicProvenance = provenance?.publicConsensus;
-  const fixedWeights = { espn: .30, gng: .20, tradyr: .20, ffc: .15, mfl: .15 };
+  const fixedWeights = { espn: .30, fantasypros: .20, tradyr: .20, ffc: .15, mfl: .15 };
   if (!provenance || typeof provenance !== "object" || Array.isArray(provenance)
     || !espnProvenance || typeof espnProvenance !== "object" || Array.isArray(espnProvenance)
     || espnProvenance.schemaVersion !== 2
@@ -269,7 +269,7 @@ export function validateSourceSnapshot(snapshot) {
   const sources = Array.isArray(snapshot?.sources) ? snapshot.sources : [];
   const sourceIds = sources.map((source) => source.id).sort();
   if (stableSnapshotJson(sourceIds) !== stableSnapshotJson([...PUBLIC_SOURCE_IDS].sort())) {
-    errors.push("Snapshot must contain exactly FFC, MFL, Tradyr, and GNG once each.");
+    errors.push("Snapshot must contain exactly FFC, MFL, Tradyr, and FANTASYPROS once each.");
   }
   const summaries = sources.map((source) => sourceSummary(source, publicProvenance?.generatedAt || snapshot?.capturedAt));
   for (let index = 0; index < summaries.length; index += 1) {

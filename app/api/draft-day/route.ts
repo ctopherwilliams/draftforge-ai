@@ -107,7 +107,7 @@ function sourceSnapshotAccepted(
   evaluatedAt: number,
 ) {
   const generatedAtMs = Date.parse(snapshot.generatedAt);
-  const expectedWeights = { espn: .30, gng: .20, tradyr: .20, ffc: .15, mfl: .15 } as const;
+  const expectedWeights = { espn: .30, fantasypros: .20, tradyr: .20, ffc: .15, mfl: .15 } as const;
   let snapshotBytes = Number.POSITIVE_INFINITY;
   try {
     snapshotBytes = new TextEncoder().encode(JSON.stringify(snapshot)).byteLength;
@@ -652,7 +652,7 @@ export function buildDraftDayObserverHealth(snapshot: DraftAuditSnapshot, now = 
     ? Math.trunc(Date.parse(snapshot.availability.freshUntil) - now)
     : null;
   const exactSources = JSON.stringify([...new Set(snapshot.safety.sourceIds)].sort())
-    === JSON.stringify(["espn", "ffc", "gng", "mfl", "tradyr"]);
+    === JSON.stringify(["espn", "fantasypros", "ffc", "mfl", "tradyr"]);
   const blockers: string[] = [];
   if (auditAgeMs === null || auditAgeMs < -DRAFT_DAY_STATUS_FUTURE_SKEW_MS) blockers.push("AUDIT_CLOCK_SKEW");
   else if (auditAgeMs > DRAFT_DAY_STATUS_AUDIT_MAX_AGE_MS) blockers.push("AUDIT_STALE");

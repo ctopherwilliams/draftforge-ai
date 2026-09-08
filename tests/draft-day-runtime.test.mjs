@@ -145,7 +145,7 @@ test("dashboard retains the server source identity atomically and never synthesi
 });
 
 function retainedSnapshot(generatedAt, digestCharacter, profile = { scoring: "PPR", teams: 12, season: 2026, qbs: 1 }) {
-  const weights = { ffc: .15, mfl: .15, tradyr: .20, gng: .20 };
+  const weights = { ffc: .15, mfl: .15, tradyr: .20, fantasypros: .20 };
   return {
     ...profile,
     generatedAt,
@@ -160,7 +160,7 @@ function retainedSnapshot(generatedAt, digestCharacter, profile = { scoring: "PP
       players: [{ name: `${id} player`, pos: "WR", rank: 1 }],
     })),
     methodology: {
-      weights: { espn: .30, gng: .20, tradyr: .20, ffc: .15, mfl: .15 },
+      weights: { espn: .30, fantasypros: .20, tradyr: .20, ffc: .15, mfl: .15 },
       method: "freshness-gated weighted percentile consensus",
     },
   };

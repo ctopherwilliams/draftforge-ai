@@ -34,7 +34,7 @@ This section is retained as the auditable contract for the implemented availabil
 
 ### Goal
 
-Add a deterministic, fail-closed **availability veto layer** that can prevent DraftForge from recommending or submitting a player when current evidence says the player cannot materially contribute this season or is not eligible to play. This is a safety overlay, not a new ranking source. The five-source consensus must remain exactly ESPN, FFC, MFL, Tradyr, and GNG with the existing weights.
+Add a deterministic, fail-closed **availability veto layer** that can prevent DraftForge from recommending or submitting a player when current evidence says the player cannot materially contribute this season or is not eligible to play. This is a safety overlay, not a new ranking source. The five-source consensus must remain exactly ESPN, FFC, MFL, Tradyr, and FantasyPros with the existing weights.
 
 ### Required workflow
 
@@ -147,7 +147,7 @@ The work is complete only when the full gate passes, deterministic replay is pro
 - Snake recommendations and salary-cap nominations/max bids
 - Guided mode (recommend in conversation, execute after the user's approval) and explicitly armed Auto mode
 - A timing-first action gate: recommendations are staged before the turn, and DraftForge rechecks ESPN's imported browser tab, league, pick, visible player, and format-specific safety window immediately before submission
-- Deterministic, inspectable consensus using ESPN, Fantasy Football Calculator, MyFantasyLeague, Tradyr, and The GNG
+- Deterministic, inspectable consensus using ESPN, Fantasy Football Calculator, MyFantasyLeague, Tradyr, and FantasyPros
 - Corroborated value, sleeper, and deep-stash signals derived from model-versus-market disagreement within those same five sources
 - Source health, weights, timestamps, and player-level provenance in the UI
 - A compact GET-only chat status command that reads one coherent control-and-board capture without touching the action path
@@ -196,7 +196,7 @@ Draft day is a cold-start workflow, not a continuation of whatever tabs or serve
    npm run draft-day:warm -- --scoring PPR --teams 10 --season 2026 --qbs 2
    ```
 
-   Change scoring and team count to the imported league values. Add `--qbs 2` when the authenticated ESPN starter slots contain QB plus OP; the dashboard and one-command READY path derive this automatically from the imported rules. The command exits nonzero unless ESPN plus FFC, MFL, Tradyr, and GNG are all ready.
+   Change scoring and team count to the imported league values. Add `--qbs 2` when the authenticated ESPN starter slots contain QB plus OP; the dashboard and one-command READY path derive this automatically from the imported rules. The command exits nonzero unless ESPN plus FFC, MFL, Tradyr, and FantasyPros are all ready.
    After importing and confirming the saved league, require the matching one-command pre-room gate:
 
    ```bash
@@ -252,7 +252,7 @@ npm run simulate:monte-carlo -- --drafts 10000 --seed 20260814 --snapshot snapsh
 npm run simulate:matrix -- --drafts 1000 --snapshot snapshots/intelligence/source-v3-....json
 ```
 
-Snapshot capture fails closed unless ESPN, FFC, MFL, Tradyr, and GNG are healthy and fresh and the draftable ESPN pool can fill every roster and mandatory starter slot. A snapshot-backed command automatically selects its one captured snake or salary-cap format and runs every seed against that exact scoring, team-count, season, QB, roster, and budget profile. Explicit cross-format reuse is rejected. Run the browser-free command above without `--snapshot` for the separate synthetic/adversarial stress campaign; never borrow one profile's player evidence for another league. Snapshots are content-addressed, replay freshness at their capture time, and are ignored by Git because they contain large third-party datasets. The matrix runs exact-profile seed families sequentially to bound CPU and memory. Every command exits nonzero if even one requested draft is missing or fails.
+Snapshot capture fails closed unless ESPN, FFC, MFL, Tradyr, and FantasyPros are healthy and fresh and the draftable ESPN pool can fill every roster and mandatory starter slot. A snapshot-backed command automatically selects its one captured snake or salary-cap format and runs every seed against that exact scoring, team-count, season, QB, roster, and budget profile. Explicit cross-format reuse is rejected. Run the browser-free command above without `--snapshot` for the separate synthetic/adversarial stress campaign; never borrow one profile's player evidence for another league. Snapshots are content-addressed, replay freshness at their capture time, and are ignored by Git because they contain large third-party datasets. The matrix runs exact-profile seed families sequentially to bound CPU and memory. Every command exits nonzero if even one requested draft is missing or fails.
 
 ## Data and decision model
 

@@ -29,7 +29,7 @@ const picks = players.slice(0, 96).map((player, index) => ({
   round: 0,
   amount: 10,
 }));
-const sources = ["ffc", "mfl", "tradyr", "gng"].map((id, sourceIndex) => ({
+const sources = ["ffc", "mfl", "tradyr", "fantasypros"].map((id, sourceIndex) => ({
   id,
   name: id,
   kind: "market",

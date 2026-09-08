@@ -45,7 +45,7 @@ function fixture() {
     ["ffc", "market", .15],
     ["mfl", "market", .15],
     ["tradyr", "model", .20],
-    ["gng", "model", .20],
+    ["fantasypros", "model", .20],
   ].map(([id, kind, weight]) => ({
     id,
     name: String(id).toUpperCase(),
@@ -100,7 +100,7 @@ function fixture() {
       sourceSnapshotId: `sha256:${"b".repeat(64)}`,
       generatedAt: CAPTURED_AT,
       methodology: {
-        weights: { espn: .30, gng: .20, tradyr: .20, ffc: .15, mfl: .15 },
+        weights: { espn: .30, fantasypros: .20, tradyr: .20, ffc: .15, mfl: .15 },
         method: "freshness-gated weighted percentile consensus",
       },
     },
@@ -132,7 +132,7 @@ test("five-source snapshots are sanitized, content-addressed, and deterministica
   assert.deepEqual(second, first);
   assert.equal(first.length, 48);
   assert.ok(first.every((player) => player.sourceCount === 5));
-  assert.deepEqual(snapshot.validation.sourceReach, { ffc: 48, mfl: 48, tradyr: 48, gng: 48 });
+  assert.deepEqual(snapshot.validation.sourceReach, { ffc: 48, mfl: 48, tradyr: 48, fantasypros: 48 });
   assert.deepEqual(snapshot.validation.coverageBreakdown.overall, {
     total: 24,
     atLeastFourCount: 24,

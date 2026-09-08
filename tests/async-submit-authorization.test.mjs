@@ -12,6 +12,7 @@ import {
   snakePlanReadyToSubmit,
 } from "../app/lib/live-draft-orchestration.ts";
 import { classifyPlayerConsensusCorroboration } from "../app/lib/consensus.ts";
+import { pinnedKeeperPicksReady } from "../app/lib/keeper-readiness.ts";
 
 const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
 const pageAst = ts.createSourceFile(
@@ -116,6 +117,10 @@ function buildSubmitHarness({
     settingsConfirmed: true,
     extension: "connected",
     runtimeWorkspaceReady: true,
+    pinnedKeeperPicksReady,
+    activeLeagueSettingsRef: { current: { id: "1603083723", teamId: 6, season: 2026, draftType, keeperCount: 0 } },
+    keeperAuthorizationPicksRef: { current: [] },
+    espnPlayersRef: { current: [] },
     sources: { complete: true },
     isCompleteFreshIntelligenceSnapshot: () => true,
     intelligenceSnapshot: {
@@ -280,6 +285,55 @@ function setBidContext(harness, overrides = {}) {
     ...overrides,
   });
 }
+
+function setPinnedKeeperProof(harness) {
+  const pinned = { id: "44050", teamId: 7, season: 2026, draftType: "AUCTION", keeperCount: 2 };
+  Object.assign(harness.league, pinned);
+  harness.activeLeagueSettingsRef.current = { ...harness.league };
+  harness.keeperAuthorizationPicksRef.current = [
+    { playerId: 3916148, teamId: 7, amount: 0 },
+    { playerId: 3121422, teamId: 7, amount: 1 },
+  ];
+  harness.espnPlayersRef.current = [{ id: 3916148, pos: "RB" }, { id: 3121422, pos: "WR" }];
+  harness.context.teamId = 7;
+}
+
+test("missing pinned keepers block manual submission before availability or audit work", async () => {
+  const harness = buildSubmitHarness();
+  setPinnedKeeperProof(harness);
+  harness.keeperAuthorizationPicksRef.current = [];
+  await harness.submit(harness.player, false, "NOMINATE", 1);
+  assert.equal(harness.availabilityWaits.length, 0);
+  assert.equal(harness.auditWaits.length, 0);
+  assert.equal(harness.submissions().length, 0);
+  assert.match(harness.actionStates.at(-1), /keeper identities and prices are not verified/);
+});
+
+test("a keeper price changing during availability cancels before audit or dispatch", async () => {
+  const harness = buildSubmitHarness();
+  setPinnedKeeperProof(harness);
+  const pending = harness.submit(harness.player, false, "NOMINATE", 1);
+  assert.equal(harness.availabilityWaits.length, 1);
+  harness.keeperAuthorizationPicksRef.current[0].amount = 1;
+  await harness.resolveAvailability();
+  await pending;
+  assert.equal(harness.auditWaits.length, 0);
+  assert.equal(harness.submissions().length, 0);
+  assert.ok(harness.actionStates.some((state) => state.includes("EXACT_KEEPERS_UNVERIFIED")));
+});
+
+test("a partial live keeper import during audit cancels the pending action without an ESPN click", async () => {
+  const harness = buildSubmitHarness();
+  setPinnedKeeperProof(harness);
+  const pending = harness.submit(harness.player, false, "NOMINATE", 1);
+  await harness.resolveAvailability();
+  assert.equal(harness.auditWaits.length, 1);
+  harness.keeperAuthorizationPicksRef.current = harness.keeperAuthorizationPicksRef.current.slice(1);
+  await harness.resolveAudit();
+  await pending;
+  assert.equal(harness.submissions().length, 0);
+  assert.ok(harness.actionStates.some((state) => state.includes("EXACT_KEEPERS_UNVERIFIED")));
+});
 
 function stageSnakeDecision(harness, timing, key = "snake-plan-key") {
   const intendedPlayer = {

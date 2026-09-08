@@ -1,5 +1,7 @@
 # September 7 auction preflight
 
+Historical checkpoint: the later user-authorized source replacement and additional safety fixes are documented in [the follow-up](2026-09-07-source-replacement.md). Its FantasyPros source contract supersedes the GNG-specific blocking instruction below; the original evidence is retained unchanged.
+
 ## Verdict
 
 **Not yet cleared to arm.** Local release checks pass, but GNG's underlying rankings are stale. This is a preparation checkpoint, not authenticated live-room certification. The exact real room and clock must be checked when ESPN opens the room tomorrow.

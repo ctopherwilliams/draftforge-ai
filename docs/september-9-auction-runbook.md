@@ -4,7 +4,7 @@ This is the focused operating plan for the September 8, 2026 ESPN salary-cap dra
 
 ## Exact target
 
-Latest preparation evidence: [September 7 preflight](2026-09-07-auction-preflight.md). The local release checks pass, but GNG freshness blocks arming until a genuinely refreshed provider board is available. Tomorrow's live-room checks remain mandatory.
+Latest preparation evidence: [September 7 source replacement and safety follow-up](2026-09-07-source-replacement.md). FantasyPros replaces GNG at the same weight; fresh source identity, availability and live-room checks remain mandatory before arming.
 
 | Field | Required value |
 | --- | --- |
@@ -44,7 +44,7 @@ DraftForge is ready to arm only when all of these are simultaneously true:
 - Chrome contains exactly one DraftForge dashboard and one exact authenticated ESPN league or room tab;
 - the installed unpacked companion matches `config/draft-day-release.json` without reinstalling it;
 - authenticated ESPN settings and the 500-player status pool have been freshly imported;
-- ESPN, FFC, MFL, Tradyr, and GNG are all fresh for the exact PPR/12-team/2026/two-QB profile;
+- ESPN, FFC, MFL, Tradyr, and FantasyPros are all fresh for the exact PPR/12-team/2026/two-QB request profile;
 - the current availability overlay is fresh, exact-identity matched, and free of unresolved definitive events;
 - DraftForge Auto-Draft and ESPN Autopick are off during preflight;
 - the live room has an exact identity, resolved action surface, current nominee/offer, and safe clock; and

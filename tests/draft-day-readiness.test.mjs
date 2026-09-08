@@ -46,7 +46,7 @@ function audit(overrides = {}) {
       autopickActive: false,
       autoDraft: false,
       sourceCoverage: 5,
-      sourceIds: ["espn", "ffc", "mfl", "tradyr", "gng"],
+      sourceIds: ["espn", "ffc", "mfl", "tradyr", "fantasypros"],
       actionState: "Pre-draft checks confirmed.",
     },
     draft: { totalPicks: 2, appRoster: expected.event.selectedKeepers.map((keeper) => ({

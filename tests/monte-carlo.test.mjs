@@ -105,7 +105,7 @@ function capturedSourceSnapshot(format, unavailableId = null, capturedAt = "2026
     ["ffc", "market", .15],
     ["mfl", "market", .15],
     ["tradyr", "composite", .20],
-    ["gng", "model", .20],
+    ["fantasypros", "model", .20],
   ].map(([id, kind, weight]) => ({
     id,
     name: String(id).toUpperCase(),
@@ -158,7 +158,7 @@ function capturedSourceSnapshot(format, unavailableId = null, capturedAt = "2026
         sourceSnapshotId: `sha256:${"e".repeat(64)}`,
         generatedAt: capturedAt,
         methodology: {
-          weights: { espn: .30, gng: .20, tradyr: .20, ffc: .15, mfl: .15 },
+          weights: { espn: .30, fantasypros: .20, tradyr: .20, ffc: .15, mfl: .15 },
           method: "freshness-gated weighted percentile consensus",
         },
       },
@@ -216,7 +216,7 @@ test("seeded player snapshot preserves the production five-source contract", () 
     assert.equal(player.sourceCount, 5);
     assert.equal(player.marketSourceCount, 3);
     assert.equal(player.modelSourceCount, 2);
-    assert.deepEqual(Object.keys(player.sourceRanks).sort(), ["espn", "ffc", "gng", "mfl", "tradyr"]);
+    assert.deepEqual(Object.keys(player.sourceRanks).sort(), ["espn", "fantasypros", "ffc", "mfl", "tradyr"]);
   }
 });
 

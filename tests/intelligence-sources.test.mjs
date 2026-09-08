@@ -41,7 +41,14 @@ function source(id, overrides = {}) {
 }
 
 const evaluatedAt = "2026-08-15T08:00:00.000Z";
-const completeSnapshot = [source("ffc"), source("mfl"), source("tradyr"), source("gng")];
+const completeSnapshot = [source("ffc"), source("mfl"), source("tradyr"), source("fantasypros")];
+
+test("the authorized replacement rejects a fresh legacy GNG snapshot instead of relabeling it", () => {
+  const legacy = completeSnapshot.map((item) => item.id === "fantasypros" ? { ...item, id: "gng" } : item);
+  assert.equal(isCompleteFreshIntelligenceSnapshot(legacy, evaluatedAt), false);
+  assert.equal(isCompleteFreshIntelligenceSnapshot([...completeSnapshot, source("gng")], evaluatedAt), false);
+  assert.equal(isCompleteFreshIntelligenceSnapshot(completeSnapshot, evaluatedAt), true);
+});
 
 function providerRows(count = 28) {
   const positions = ["QB", "RB", "WR", "TE"];
@@ -69,16 +76,16 @@ test("a decision-time intelligence snapshot requires every distinct fresh source
     source("ffc"), source("mfl"), source("tradyr"), source("tradyr"),
   ], evaluatedAt), false);
   assert.equal(isCompleteFreshIntelligenceSnapshot([
-    source("ffc"), source("mfl", { status: "error", players: [] }), source("tradyr"), source("gng"),
+    source("ffc"), source("mfl", { status: "error", players: [] }), source("tradyr"), source("fantasypros"),
   ], evaluatedAt), false);
   assert.equal(isCompleteFreshIntelligenceSnapshot([
-    source("ffc"), source("mfl", { updatedAt: null, retrievedAt: null, coverage: { players: 100, corePositions: ["QB", "RB", "WR", "TE"] } }), source("tradyr"), source("gng"),
+    source("ffc"), source("mfl", { updatedAt: null, retrievedAt: null, coverage: { players: 100, corePositions: ["QB", "RB", "WR", "TE"] } }), source("tradyr"), source("fantasypros"),
   ], evaluatedAt), false, "missing timestamps must fail closed");
   assert.equal(isCompleteFreshIntelligenceSnapshot([
-    source("ffc"), source("mfl", { coverage: { players: 1, corePositions: ["RB"] } }), source("tradyr"), source("gng"),
+    source("ffc"), source("mfl", { coverage: { players: 1, corePositions: ["RB"] } }), source("tradyr"), source("fantasypros"),
   ], evaluatedAt), false, "production coverage metadata must prove a meaningful multi-position board");
   assert.equal(isCompleteFreshIntelligenceSnapshot([
-    source("ffc"), source("mfl", { updatedAt: "2026-08-15T09:00:00.000Z" }), source("tradyr"), source("gng"),
+    source("ffc"), source("mfl", { updatedAt: "2026-08-15T09:00:00.000Z" }), source("tradyr"), source("fantasypros"),
   ], evaluatedAt), false, "future-dated source truth must fail closed");
 });
 
@@ -99,7 +106,7 @@ test("only MFL may use a current rolling-query receipt when provider update time
   const coverage = { players: 100, corePositions: ["QB", "RB", "WR", "TE"] };
   const receiptOnly = { updatedAt: null, retrievedAt: evaluatedAt, coverage };
   assert.equal(isIntelligenceSourceFresh(source("mfl", receiptOnly), evaluatedAt), true);
-  for (const id of ["ffc", "tradyr", "gng"]) {
+  for (const id of ["ffc", "tradyr", "fantasypros"]) {
     assert.equal(
       isIntelligenceSourceFresh(source(id, receiptOnly), evaluatedAt),
       false,
@@ -169,7 +176,7 @@ test("source snapshot identities are deterministic, order independent, and conte
     qbs: 2,
     generatedAt: "2026-08-28T12:00:00.000Z",
     methodology: {
-      weights: { espn: .30, gng: .20, tradyr: .20, ffc: .15, mfl: .15 },
+      weights: { espn: .30, fantasypros: .20, tradyr: .20, ffc: .15, mfl: .15 },
       method: "freshness-gated weighted percentile consensus",
     },
     sources: completeSnapshot.map((item) => ({
@@ -238,11 +245,11 @@ test("1000 adversarial fractional profile requests cannot consume cache, queue, 
 
 test("provider timestamps are required, parseable, current, and not future-dated", () => {
   const reference = "2026-08-27T12:00:00.000Z";
-  assert.equal(validateProviderTimestamp("2026-08-27T11:59:00.000Z", reference, "GNG"), "2026-08-27T11:59:00.000Z");
-  assert.throws(() => validateProviderTimestamp(null, reference, "GNG"), /GNG_PROVIDER_TIMESTAMP_REQUIRED/);
-  assert.throws(() => validateProviderTimestamp("nonsense", reference, "GNG"), /GNG_PROVIDER_TIMESTAMP_INVALID/);
-  assert.throws(() => validateProviderTimestamp("2026-08-27T12:06:00.000Z", reference, "GNG"), /GNG_PROVIDER_TIMESTAMP_FUTURE/);
-  assert.throws(() => validateProviderTimestamp("2026-08-01T00:00:00.000Z", reference, "GNG"), /GNG_PROVIDER_TIMESTAMP_STALE/);
+  assert.equal(validateProviderTimestamp("2026-08-27T11:59:00.000Z", reference, "FANTASYPROS"), "2026-08-27T11:59:00.000Z");
+  assert.throws(() => validateProviderTimestamp(null, reference, "FANTASYPROS"), /FANTASYPROS_PROVIDER_TIMESTAMP_REQUIRED/);
+  assert.throws(() => validateProviderTimestamp("nonsense", reference, "FANTASYPROS"), /FANTASYPROS_PROVIDER_TIMESTAMP_INVALID/);
+  assert.throws(() => validateProviderTimestamp("2026-08-27T12:06:00.000Z", reference, "FANTASYPROS"), /FANTASYPROS_PROVIDER_TIMESTAMP_FUTURE/);
+  assert.throws(() => validateProviderTimestamp("2026-08-01T00:00:00.000Z", reference, "FANTASYPROS"), /FANTASYPROS_PROVIDER_TIMESTAMP_STALE/);
 });
 
 test("live provider boundary filters malformed rows and derives coverage only from canonical rows", () => {

@@ -351,7 +351,7 @@ const DRAFT_AUDIT_SAFE_SOURCE_ID = /^[a-z0-9_-]{1,32}$/;
 const DRAFT_AUDIT_SAFE_MAP_KEY = /^[A-Za-z0-9/]{1,16}$/;
 const DRAFT_AUDIT_SOURCE_SNAPSHOT_ID = /^sha256:[a-f0-9]{64}$/;
 const DRAFT_AUDIT_CANONICAL_UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
-const DRAFT_AUDIT_REQUIRED_SOURCE_IDS = ["espn", "ffc", "gng", "mfl", "tradyr"] as const;
+const DRAFT_AUDIT_REQUIRED_SOURCE_IDS = ["espn", "fantasypros", "ffc", "mfl", "tradyr"] as const;
 const MAX_DRAFT_AUDIT_SOURCE_FUTURE_SKEW_MS = 5_000;
 const POSITION_LIMIT_KEYS: Record<string, string[]> = {
   QB: ["QB", "1"],

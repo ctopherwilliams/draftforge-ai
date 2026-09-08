@@ -181,7 +181,7 @@ function maxLedgerAudit() {
       autopickActive: false,
       autoDraft: false,
       sourceCoverage: 5,
-      sourceIds: ["espn", "ffc", "mfl", "tradyr", "gng"],
+      sourceIds: ["espn", "ffc", "mfl", "tradyr", "fantasypros"],
       sourceSnapshotId: `sha256:${"c".repeat(64)}`,
       sourceSnapshotGeneratedAt: capturedAt,
       actionState: "Contention certification fixture",

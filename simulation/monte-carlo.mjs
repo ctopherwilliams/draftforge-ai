@@ -21,7 +21,7 @@ const POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"];
 const SKILL_POSITIONS = new Set(["QB", "RB", "WR", "TE"]);
 const SPECIALISTS = new Set(["K", "DST"]);
 const STRATEGIES = ["BALANCED", "HERO_RB", "ZERO_RB", "ELITE_QB"];
-const SOURCE_IDS = ["espn", "ffc", "mfl", "tradyr", "gng"];
+const SOURCE_IDS = ["espn", "ffc", "mfl", "tradyr", "fantasypros"];
 const MONTE_CARLO_SCHEMA_VERSION = 3;
 const MONTE_CARLO_EVIDENCE_SCHEMA_VERSION = 2;
 const COUNTERFACTUAL_TRACE_SCHEMA_VERSION = 2;
@@ -471,7 +471,7 @@ function makeRawPlayers(rng) {
 }
 
 function rankedSourcePlayers(players, sourceId, rng) {
-  const isModel = sourceId === "tradyr" || sourceId === "gng";
+  const isModel = sourceId === "tradyr" || sourceId === "fantasypros";
   const noiseById = new Map(players.map((player) => [player.id, rng.normal() * (isModel ? 2.2 : 3.2)]));
   const ordered = [...players].sort((left, right) => {
     const leftBoost = isModel && left.sleeperCandidate ? 45 : 0;
@@ -499,8 +499,11 @@ export function makeConsensusPlayerSnapshot(trialSeed, league) {
   const rng = new SeededRandom(hashSeed(`${trialSeed}:players`));
   const raw = makeRawPlayers(rng);
   const espnPlayers = raw.map((player) => ({ ...player }));
-  const sourceKinds = { ffc: "market", mfl: "market", tradyr: "model", gng: "model" };
-  const sourceWeights = { ffc: .15, mfl: .15, tradyr: .20, gng: .20 };
+  const sourceKinds = { ffc: "market", mfl: "market", tradyr: "model", fantasypros: "model" };
+  const sourceWeights = { ffc: .15, mfl: .15, tradyr: .20, fantasypros: .20 };
+  // Preserve the published synthetic replay stream when a provider is renamed.
+  // This is only a PRNG namespace, never GNG data or a live source identity.
+  const sourceSeedNamespace = { fantasypros: "gng" };
   const sources = Object.keys(sourceKinds).map((sourceId) => ({
     id: sourceId,
     name: sourceId.toUpperCase(),
@@ -509,7 +512,7 @@ export function makeConsensusPlayerSnapshot(trialSeed, league) {
     status: "ok",
     updatedAt: null,
     attribution: "Seeded Monte Carlo fixture; not a live ranking feed",
-    players: rankedSourcePlayers(raw, sourceId, new SeededRandom(hashSeed(`${trialSeed}:${sourceId}`))),
+    players: rankedSourcePlayers(raw, sourceId, new SeededRandom(hashSeed(`${trialSeed}:${sourceSeedNamespace[sourceId] || sourceId}`))),
   }));
   const players = mergeConsensus(espnPlayers, sources, league)
     .sort((left, right) => Number(left.consensusRank || left.rank) - Number(right.consensusRank || right.rank) || left.id - right.id);

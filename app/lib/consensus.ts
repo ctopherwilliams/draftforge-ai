@@ -12,7 +12,7 @@ export type IntelligencePlayer = {
 };
 
 export type IntelligenceSource = {
-  id: "ffc" | "mfl" | "tradyr" | "gng";
+  id: "ffc" | "mfl" | "tradyr" | "fantasypros";
   name: string;
   kind: "market" | "model" | "composite";
   weight: number;
@@ -46,15 +46,15 @@ export type ConsensusPlayer = DraftPlayer & {
   modelSpread: number;
 };
 
-const SOURCE_WEIGHTS: Record<string, number> = { espn: .30, gng: .20, tradyr: .20, ffc: .15, mfl: .15 };
+const SOURCE_WEIGHTS: Record<string, number> = { espn: .30, fantasypros: .20, tradyr: .20, ffc: .15, mfl: .15 };
 const TOTAL_CONSENSUS_WEIGHT = Object.values(SOURCE_WEIGHTS).reduce((sum, weight) => sum + weight, 0);
 const TOTAL_MARKET_WEIGHT = SOURCE_WEIGHTS.espn + SOURCE_WEIGHTS.ffc + SOURCE_WEIGHTS.mfl;
-const TOTAL_MODEL_WEIGHT = SOURCE_WEIGHTS.gng + SOURCE_WEIGHTS.tradyr;
+const TOTAL_MODEL_WEIGHT = SOURCE_WEIGHTS.fantasypros + SOURCE_WEIGHTS.tradyr;
 const MAX_SOURCE_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const MAX_SOURCE_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const MIN_SOURCE_PLAYER_COVERAGE = 25;
 const REQUIRED_SOURCE_POSITIONS = ["QB", "RB", "WR", "TE"];
-const REQUIRED_INTELLIGENCE_SOURCE_IDS: IntelligenceSource["id"][] = ["ffc", "mfl", "tradyr", "gng"];
+const REQUIRED_INTELLIGENCE_SOURCE_IDS: IntelligenceSource["id"][] = ["ffc", "mfl", "tradyr", "fantasypros"];
 
 export type PlayerConsensusCorroboration = Readonly<{
   corroborated: boolean;

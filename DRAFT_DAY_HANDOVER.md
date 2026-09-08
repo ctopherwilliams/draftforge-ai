@@ -6,7 +6,7 @@ For implementation history and exclusions, see [AGENT_HANDOFF.md](AGENT_HANDOFF.
 
 ## Operating model
 
-**September 7 checkpoint:** local release and keeper repairs pass validation, but Auto-Draft is not cleared to arm because GNG's August 19 publication is stale. See [current preflight evidence and remaining checks](docs/2026-09-07-auction-preflight.md). Keep only the companion loaded from `~/github/draftforge-ai/extension` enabled; the legacy duplicate was disabled without reinstalling.
+**September 7 follow-up:** the authorized FantasyPros replacement preserves the five weights and removes dependency on GNG's stale board. Keeper and availability authorization fixes pass the 765-test release check. See [current evidence and remaining live gates](docs/2026-09-07-source-replacement.md). Keep only the companion loaded from `~/github/draftforge-ai/extension` enabled; v0.2.33 is unchanged and does not need reinstalling. No prior source or mock certificate substitutes for fresh draft-day checks.
 
 | Surface | Responsibility |
 | --- | --- |
@@ -28,7 +28,7 @@ Keep Codex open in the desktop app and exactly two companion-managed Chrome tabs
 ## Non-negotiable safety rules
 
 - ESPN-only. No post-draft league management.
-- Five deterministic sources: ESPN, FFC, MFL, Tradyr, and GNG.
+- Five deterministic sources: ESPN, FFC, MFL, Tradyr, and FantasyPros.
 - Never act with stale or incomplete source coverage.
 - Never act on an unverified, short, opponent, or changed clock.
 - Never act in the wrong league, team, tab, player, nominee, or offer state.

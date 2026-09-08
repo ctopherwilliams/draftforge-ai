@@ -78,7 +78,7 @@ const sources = [
   ["ffc", "market", 0.15],
   ["mfl", "market", 0.15],
   ["tradyr", "composite", 0.2],
-  ["gng", "model", 0.2],
+  ["fantasypros", "model", 0.2],
 ].map(([id, kind, weight]) => ({
   id,
   name: String(id).toUpperCase(),

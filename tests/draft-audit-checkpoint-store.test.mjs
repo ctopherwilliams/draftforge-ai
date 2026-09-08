@@ -67,7 +67,7 @@ function snapshot(overrides = {}) {
       autopickActive: false,
       autoDraft: false,
       sourceCoverage: 5,
-      sourceIds: ["espn", "ffc", "mfl", "tradyr", "gng"],
+      sourceIds: ["espn", "ffc", "mfl", "tradyr", "fantasypros"],
       sourceSnapshotId: `sha256:${"c".repeat(64)}`,
       sourceSnapshotGeneratedAt: "2026-08-28T11:59:30.000Z",
       actionState: "Draft room connected and fail-closed.",

@@ -1,4 +1,5 @@
 import { normalizePlayerName, type IntelligencePlayer, type IntelligenceSource } from "./consensus.ts";
+import { fetchFantasyPros } from "./fantasypros-source.ts";
 
 export type IntelligenceRequest = {
   scoring: string;
@@ -12,7 +13,7 @@ export type IntelligenceResponse = IntelligenceRequest & {
   sourceSnapshotId: string;
   sources: IntelligenceSource[];
   methodology: {
-    weights: Record<"espn" | "gng" | "tradyr" | "ffc" | "mfl", number>;
+    weights: Record<"espn" | "fantasypros" | "tradyr" | "ffc" | "mfl", number>;
     method: string;
   };
 };
@@ -84,7 +85,6 @@ const SOURCE_INFO = {
   ffc: { name: "Fantasy Football Calculator", kind: "market" as const, weight: .15, attribution: "Fantasy Football Calculator", url: "https://fantasyfootballcalculator.com" },
   mfl: { name: "MyFantasyLeague", kind: "market" as const, weight: .15, attribution: "MyFantasyLeague", url: "https://www.myfantasyleague.com" },
   tradyr: { name: "Tradyr", kind: "composite" as const, weight: .20, attribution: "Powered by Tradyr", url: "https://tradyr.app" },
-  gng: { name: "The GNG Pigskin Rankings", kind: "model" as const, weight: .20, attribution: "The GNG rankings", url: "https://www.thegng.us/ranks" },
 };
 
 const PROVIDER_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
@@ -458,28 +458,6 @@ async function fetchTradyr(numQbs: 1 | 2): Promise<IntelligenceSource> {
   }
 }
 
-async function fetchGng(scoring: string): Promise<IntelligenceSource> {
-  const retrievedAt = new Date().toISOString();
-  try {
-    const profile = scoring === "PPR" ? "ppr" : scoring === "Half PPR" ? "half_ppr" : "standard";
-    const payload = await fetchJson(`https://www.thegng.us/api/rankings.json?profile=${profile}`);
-    const updatedAt = validateProviderTimestamp(payload.generated_at, retrievedAt, "GNG");
-    return {
-      id: "gng",
-      ...SOURCE_INFO.gng,
-      status: "ok",
-      updatedAt,
-      retrievedAt,
-      players: (payload.players || []).map((player: Record<string, unknown>) => ({
-        name: String(player.player || ""), team: String(player.team || ""), pos: String(player.position || ""),
-        rank: Number(player.rank), projectedPpg: Number(player.projected_ppg), sourceScore: Number(player.score),
-      })),
-    };
-  } catch (error) {
-    return failed("gng", error, retrievedAt);
-  }
-}
-
 function mflName(value: string, position: string) {
   if (position === "Def" && value.includes(",")) return `${value.split(",")[0]} D/ST`;
   const [last, first] = value.split(",").map((part) => part.trim());
@@ -638,7 +616,7 @@ export async function fetchIntelligenceSnapshot(input: IntelligenceRequestInput 
       fetchFfc(request.scoring, request.teams, request.season),
       fetchMfl(request.teams, request.scoring, request.season),
       fetchTradyr(request.qbs),
-      fetchGng(request.scoring),
+      fetchFantasyPros(request.scoring, request.season),
     ]);
     const sources = fetchedSources.map(canonicalizeIntelligenceSource);
     entry.expiresAt = Date.now() + (sources.every((source) => source.status === "ok")
@@ -649,7 +627,7 @@ export async function fetchIntelligenceSnapshot(input: IntelligenceRequestInput 
       ...request,
       sources,
       methodology: {
-        weights: { espn: .30, gng: .20, tradyr: .20, ffc: .15, mfl: .15 },
+        weights: { espn: .30, fantasypros: .20, tradyr: .20, ffc: .15, mfl: .15 },
         method: "freshness-gated weighted percentile consensus",
       },
     };

@@ -9,7 +9,7 @@ Build and verify an ESPN-only fantasy football draft copilot whose sole producti
 - imports and confirms all ESPN league and draft settings;
 - supports snake and salary-cap drafts;
 - synchronizes live draft state;
-- combines ESPN, Fantasy Football Calculator, MyFantasyLeague, Tradyr, and The GNG through a transparent deterministic consensus;
+- combines ESPN, Fantasy Football Calculator, MyFantasyLeague, Tradyr, and FantasyPros through a transparent deterministic consensus;
 - recommends selections, nominations, and bids according to configurable strategy;
 - precomputes a legal ESPN-visible recommendation and can submit it while the draft clock is still safely open;
 - uses the Codex conversation as the primary strategy and status cockpit while the user watches and controls the local dashboard and authenticated ESPN room in Chrome;
@@ -21,7 +21,11 @@ The user has two ESPN leagues on different draft days. Their settings, picks, pl
 
 ## Current checkpoint
 
-### September 7 auction preflight — supersedes prior readiness claims
+### September 7 follow-up — authorized GNG replacement
+
+The user authorized replacing GNG with FantasyPros ECR at unchanged 20% weight. Current source contracts now require ESPN/FantasyPros/Tradyr/FFC/MFL; historical GNG snapshots cannot authorize the current release. Exact keeper authorization now covers the UI and asynchronous submit boundary, and missing availability evidence no longer masquerades as cached. See [follow-up evidence and deployment boundary](docs/2026-09-07-source-replacement.md). The final integrated check passes 765 tests, lint, typecheck and build. Companion 0.2.33 is unchanged; no reinstall is needed. Exact live-room checks and a current news artifact are still mandatory before arming.
+
+### Earlier September 7 auction preflight — historical before source replacement
 
 See [the preflight evidence](docs/2026-09-07-auction-preflight.md). Exact ESPN event, both keeper identities and nested $0/$1 prices verified; keeper/audit and pre-room import fixes pass all 697 tests, lint, typecheck and build. Production-path and contention checks passed. Legacy duplicate companion disabled; current companion reloaded in place to v0.2.33 without reinstall. The pre-room fallback requires the exact pinned roster and explicit nested prices; it never generalizes an ADD entry into a keeper. **Do not arm:** GNG's actual rankings were generated August 19 and fail the unchanged 14-day freshness gate. The 500-player authenticated import succeeded tonight; repeat import, current availability overlay, and exact-room/no-click checks tomorrow. Do not treat older certified runs as current source or live-room proof.
 
@@ -105,7 +109,7 @@ The deployed Sites project is owner-only and tied to the previous Codex workspac
 - `extension/app-bridge.js`: narrow web-app-to-extension message bridge.
 - `docs/data-sources.md`: source endpoints, weights, attribution, cadence, and combination logic.
 
-Consensus weights are ESPN 30%, The GNG 20%, Tradyr 20%, Fantasy Football Calculator 15%, and MyFantasyLeague 15%. Sources older than 14 days are ignored. The recommendation engine is deterministic; generative AI is not allowed to invent projections or silently override the model.
+Consensus weights are ESPN 30%, FantasyPros 20%, Tradyr 20%, Fantasy Football Calculator 15%, and MyFantasyLeague 15%. Sources older than 14 days are ignored. The recommendation engine is deterministic; generative AI is not allowed to invent projections or silently override the model.
 
 The Codex conversation is the strategy/status orchestration surface. It reads only the bounded loopback status view and never owns an ESPN write. The DraftForge dashboard plus companion keep exactly the local dashboard and one authenticated ESPN tab, finish source warmup before creating the room, prepare the indexed consensus during the countdown, record the user's sound preference, keep ESPN Autopick off, and close stale managed tabs after verification. Sound does not grant or remove action authority. A human or optional external controller is required for visible setup, Guided approval, hold/resume, arming, and recovery controls; once armed, the DraftForge control plane operates independently. Codex/ChatGPT Chrome control, Computer Use, CDP, Playwright, Puppeteer, and remote debugging are not production dependencies and can never satisfy a writer or dispatch lease.
 
@@ -121,7 +125,7 @@ Proven by the earlier immutable candidates listed below; these results do not re
 - extension manifest scope and credential non-persistence;
 - fail-closed guard presence;
 - live responses from all four external adapters on PPR, half-PPR, and standard requests.
-- a deterministic sleeper layer that separates the ESPN/FFC/MFL market percentile from the Tradyr/GNG model percentile, requires both model feeds plus at least one external market feed and four-of-five total coverage, rejects injured/non-VORP candidates, times snake priority no more than one league round ahead of market ADP, protects salary-cap sleepers from early nominations, and never raises a max bid;
+- a deterministic sleeper layer that separates the ESPN/FFC/MFL market percentile from the Tradyr/FantasyPros model percentile, requires both model feeds plus at least one external market feed and four-of-five total coverage, rejects injured/non-VORP candidates, times snake priority no more than one league round ahead of market ADP, protects salary-cap sleepers from early nominations, and never raises a max bid;
 - authenticated import of the user's 2026 snake and salary-cap leagues, including ESPN's string `AUCTION` draft type and configured keeper count;
 - authenticated salary-cap nomination, bidding, exact offer changes, walkaways, one-dollar reserve enforcement, and a complete 16-player roster;
 - authenticated armed-auto snake execution with all 16 players confirmed on the exact ESPN roster, no ESPN `AUTO` fallback, and mandatory K/D/ST endgame completion;

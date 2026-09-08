@@ -126,7 +126,7 @@ function snapshot(overrides = {}) {
       autopickActive: false,
       autoDraft: false,
       sourceCoverage: 5,
-      sourceIds: ["espn", "ffc", "mfl", "tradyr", "gng"],
+      sourceIds: ["espn", "ffc", "mfl", "tradyr", "fantasypros"],
       sourceSnapshotId,
       sourceSnapshotGeneratedAt: testCapturedAt(),
       actionState: "Draft complete: ESPN confirmed every roster spot.",

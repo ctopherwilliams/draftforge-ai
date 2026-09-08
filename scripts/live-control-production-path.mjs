@@ -215,7 +215,7 @@ function sourcesFixture(players, updatedAt) {
     ["ffc", "market", .15],
     ["mfl", "market", .15],
     ["tradyr", "composite", .20],
-    ["gng", "model", .20],
+    ["fantasypros", "model", .20],
   ].map(([id, kind, weight], sourceIndex) => ({
     id,
     name: String(id).toUpperCase(),
@@ -1278,7 +1278,7 @@ function auditSnapshot({ league, capturedAt, liveControl, actionState = "Product
       autopickActive: false,
       autoDraft: false,
       sourceCoverage: 5,
-      sourceIds: ["espn", "ffc", "mfl", "tradyr", "gng"],
+      sourceIds: ["espn", "ffc", "mfl", "tradyr", "fantasypros"],
       sourceSnapshotId: SOURCE_SNAPSHOT_ID,
       sourceSnapshotGeneratedAt: liveControl.freshness.sourceSnapshotAt,
       actionState,
