@@ -23,7 +23,7 @@ The user has two ESPN leagues on different draft days. Their settings, picks, pl
 
 ### September 7 auction preflight — supersedes prior readiness claims
 
-See [the preflight evidence](docs/2026-09-07-auction-preflight.md). Exact ESPN event and keeper roster verified; keeper/audit fixes pass all 694 tests, lint, typecheck, build, production-path and contention checks. Legacy duplicate companion disabled; current v0.2.32 retained without reinstall. **Do not arm:** GNG's actual rankings were generated August 19 and fail the unchanged 14-day freshness gate. Fresh 500-player import, current availability overlay, and tomorrow's exact-room/no-click checks remain required. Do not treat older certified runs as current source or live-room proof.
+See [the preflight evidence](docs/2026-09-07-auction-preflight.md). Exact ESPN event, both keeper identities and nested $0/$1 prices verified; keeper/audit and pre-room import fixes pass all 697 tests, lint, typecheck and build. Production-path and contention checks passed. Legacy duplicate companion disabled; current companion reloaded in place to v0.2.33 without reinstall. The pre-room fallback requires the exact pinned roster and explicit nested prices; it never generalizes an ADD entry into a keeper. **Do not arm:** GNG's actual rankings were generated August 19 and fail the unchanged 14-day freshness gate. The 500-player authenticated import succeeded tonight; repeat import, current availability overlay, and exact-room/no-click checks tomorrow. Do not treat older certified runs as current source or live-room proof.
 
 ### Superseding post-live hardening release — 2026-08-28
 
