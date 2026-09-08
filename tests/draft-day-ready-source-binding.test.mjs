@@ -54,6 +54,9 @@ function auditSnapshot({ sourceId, generatedAt }) {
       autopickActive: false,
       actionState: "Pre-room checks confirmed.",
     },
+    draft: { totalPicks: 2, appRoster: expected.event.selectedKeepers.map((keeper) => ({
+      playerId: keeper.espnPlayerId, playerName: keeper.name, position: keeper.position, amount: keeper.amount,
+    })), espnRoster: [] },
     telemetry: { actions: [] },
     sleeperEvidence: { candidateCount: 0, candidates: [] },
     availability: {

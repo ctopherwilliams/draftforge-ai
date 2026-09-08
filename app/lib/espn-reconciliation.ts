@@ -185,6 +185,7 @@ export function reconcileEspnPicks(
   for (const entry of ownRoster) {
     const existing = byPlayer.get(entry.playerId);
     byPlayer.set(entry.playerId, {
+      ...existing,
       playerId: entry.playerId,
       teamId: Number(teamId),
       overall: existing?.overall || maxOverall + entry.index + 1,

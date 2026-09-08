@@ -8,6 +8,22 @@ const players = [
   { id: 2, name: "Opponent Player", team: "BBB", pos: "RB", rank: 2, adp: 2, auction: 9, projected: 250 },
 ];
 
+test("live roster reconciliation preserves authenticated keeper metadata and zero-dollar cost", () => {
+  const keepers = [
+    { playerId: 3916148, teamId: 7, overall: 1, round: 0, amount: 0, keeper: true },
+    { playerId: 3121422, teamId: 7, overall: 2, round: 0, amount: 1, keeper: true },
+  ];
+  const keeperPlayers = [
+    { ...players[0], id: 3916148, name: "Tony Pollard", pos: "RB" },
+    { ...players[1], id: 3121422, name: "Terry McLaurin", pos: "WR" },
+  ];
+  const context = {
+    inDraftRoom: true,
+    ownRoster: keepers.map((pick) => ({ playerId: pick.playerId, amount: pick.amount })),
+  };
+  assert.deepEqual(reconcileEspnPicks(keepers, context, 7, keeperPlayers), keepers);
+});
+
 test("ESPN roster reconciliation prefers a known exact player id and bounds name fallback to unmapped ids", () => {
   const rosterPlayers = [
     { ...players[0], id: 11, name: "Shared Name" },

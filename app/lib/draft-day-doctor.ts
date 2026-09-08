@@ -87,7 +87,9 @@ export function resolveDraftDayDoctorLeague(
   if (!/^\d+$/.test(id) || !Number.isInteger(teamId) || teamId <= 0 || !Number.isInteger(secondsPerPick) || secondsPerPick <= 0) {
     throw new Error("DRAFT_DAY_ROOM_IDENTITY_INVALID");
   }
-  return { ...profile, id, teamId, secondsPerPick };
+  // A generated practice room has its own keeper assignments, not the real team's event plan.
+  return { ...profile, id, teamId, secondsPerPick,
+    event: id === profile.id && teamId === profile.teamId ? profile.event : undefined };
 }
 
 export function evaluateDraftDayDoctor(input: {

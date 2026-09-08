@@ -8,7 +8,14 @@ import {
 
 export type DraftDayReadinessPhase = "pre-room" | "live" | "complete";
 
-export type DraftDayExpectedLeague = DraftAuditSnapshot["league"];
+export type DraftDayExpectedLeague = DraftAuditSnapshot["league"] & {
+  event?: {
+    selectedKeepers?: Array<{ espnPlayerId: number; position: string; amount: number }>;
+    keeperSpend?: number;
+    remainingBudget?: number;
+    remainingRosterSlots?: number;
+  };
+};
 
 export type DraftDayReadinessResult = {
   ready: boolean;
@@ -45,6 +52,7 @@ export function evaluateDraftDayReadiness(input: {
   const availabilityEvaluatedAt = Date.parse(String(availability?.evaluatedAt || ""));
   const availabilityFreshUntil = Date.parse(String(availability?.freshUntil || ""));
   const authenticatedPlayerPool = snapshot.binding.authenticatedPlayerPool;
+  const selectedKeepers = expected.event?.selectedKeepers;
   const checks: Record<string, boolean> = {
     snapshotFresh: Number.isFinite(ageMs) && ageMs >= -5_000 && ageMs <= maxAgeMs,
     exactLeague: String(exactLeague.id) === String(expected.id),
@@ -93,6 +101,25 @@ export function evaluateDraftDayReadiness(input: {
       && availability.vetoedPlayerIds.every((id) => Number.isInteger(id) && id !== 0)
       && new Set(availability.vetoedPlayerIds).size === availability.vetoedPlayerIds.length),
   };
+  if (selectedKeepers !== undefined) {
+    const appRoster = snapshot.draft?.appRoster ?? [];
+    const keeperSpend = selectedKeepers.reduce((sum, keeper) => sum + keeper.amount, 0);
+    checks.exactSelectedKeepers = selectedKeepers.length <= expected.keeperCount
+      && new Set(selectedKeepers.map((keeper) => keeper.espnPlayerId)).size === selectedKeepers.length
+      && selectedKeepers.every((keeper) => Number.isSafeInteger(keeper.espnPlayerId)
+        && keeper.espnPlayerId > 0 && Number.isSafeInteger(keeper.amount) && keeper.amount >= 0
+        && appRoster.filter((entry) => entry.playerId === keeper.espnPlayerId).length === 1
+        && appRoster.some((entry) => entry.playerId === keeper.espnPlayerId
+          && entry.position === keeper.position && entry.amount === keeper.amount));
+    checks.keeperPlanConsistent = expected.event?.keeperSpend === keeperSpend
+      && expected.event?.remainingBudget === expected.auctionBudget - keeperSpend
+      && expected.event?.remainingRosterSlots === expected.rosterSize - selectedKeepers.length;
+    // Before the room opens only the authenticated keepers should be rostered.
+    // During the live draft, acquisitions legitimately change budget and open slots.
+    if (phase === "pre-room") {
+      checks.exactOpeningRoster = Array.isArray(snapshot.draft?.appRoster) && appRoster.length === selectedKeepers.length;
+    }
+  }
   if (phase === "live" || phase === "complete") {
     checks.liveChecklistReady = snapshot.safety.liveChecklistReady === true;
     checks.inDraftRoom = snapshot.safety.inDraftRoom === true;

@@ -21,6 +21,10 @@ The user has two ESPN leagues on different draft days. Their settings, picks, pl
 
 ## Current checkpoint
 
+### September 7 auction preflight — supersedes prior readiness claims
+
+See [the preflight evidence](docs/2026-09-07-auction-preflight.md). Exact ESPN event and keeper roster verified; keeper/audit fixes pass all 694 tests, lint, typecheck, build, production-path and contention checks. Legacy duplicate companion disabled; current v0.2.32 retained without reinstall. **Do not arm:** GNG's actual rankings were generated August 19 and fail the unchanged 14-day freshness gate. Fresh 500-player import, current availability overlay, and tomorrow's exact-room/no-click checks remain required. Do not treat older certified runs as current source or live-room proof.
+
 ### Superseding post-live hardening release — 2026-08-28
 
 - On 2026-09-05, ESPN confirmed the real salary-cap draft for September 8, 2026 at 8:00 PM America/Chicago. Team 7 locked Tony Pollard (ESPN `3916148`, RB) at $0 and Terry McLaurin (ESPN `3121422`, WR) at $1 as its two keepers. The exact opening contract is therefore two rostered players, $1 spent, $199 remaining, and 12 draftable slots open. Pollard is value depth rather than a reason to skip an RB1; McLaurin fills the initial WR slot without closing premium WR value; QB plus OP still requires two playable quarterbacks. Authenticated ESPN must reproduce both keeper identities and prices before Auto-Draft can arm.

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import authenticatedEspnLeagues from "../config/authenticated-espn-leagues.json" with { type: "json" };
 import {
   DRAFT_AUDIT_DASHBOARD_INSTANCE_STALE,
   buildDraftDayObserverHealth,
@@ -26,6 +27,7 @@ import {
   resolveDraftAuditChecklistReady,
   sanitizeDraftLeagueBoardSnapshot,
   sanitizeDraftOperatorSnapshot,
+  trustedDraftKeeperEntries,
 } from "../app/lib/draft-audit.ts";
 import {
   createDraftAuditPublisher,
@@ -348,6 +350,88 @@ test("completed exact ESPN/app audit is final-ready", () => {
     hardViolations: [],
     finalViolations: [],
   });
+});
+
+test("exact authenticated settings accept ESPN unlimited position limits, never negative lineup counts", () => {
+  for (const league of Object.values(authenticatedEspnLeagues.profiles)) {
+    const candidate = snapshot({
+      league,
+      draft: { ...snapshot().draft, totalPicks: league.size * league.rosterSize },
+      salaryCapEvidence: undefined,
+    });
+    assert.equal(isDraftAuditSnapshot(candidate), true, league.id);
+    assert.equal(isDraftAuditSnapshot({
+      ...candidate,
+      league: { ...league, positionLimits: { ...league.positionLimits, "15": -2 } },
+    }), false);
+    assert.equal(isDraftAuditSnapshot({
+      ...candidate,
+      league: { ...league, lineupSlotCounts: { ...league.lineupSlotCounts, "20": -1 } },
+    }), false);
+  }
+});
+
+test("the exact zero-dollar keeper retains its price and $199 budget through the generated audit board", () => {
+  const league = authenticatedEspnLeagues.profiles["salary-cap"];
+  const keepers = trustedDraftKeeperEntries(league);
+  assert.deepEqual(keepers.map((entry) => [entry.playerId, entry.amount]), [[3916148, 0], [3121422, 1]]);
+  const candidate = snapshot({
+    league,
+    draft: { totalPicks: 2, appRoster: keepers, espnRoster: keepers },
+    salaryCapEvidence: { sales: [] },
+    liveControl: attributedLiveControl(keepers),
+  });
+  candidate.leagueBoard = buildDraftLeagueBoardSnapshot({
+    league: { ...league, teams: [{ id: 7 }] },
+    picks: keepers.map((entry, index) => ({ ...entry, teamId: 7, overall: index + 1, round: 0, keeper: true })),
+    playerById: new Map(keepers.map((entry) => [entry.playerId, { id: entry.playerId, name: entry.playerName, pos: entry.position, projected: 200 }])),
+    sourceSnapshotId,
+  });
+  assert.ok(candidate.leagueBoard);
+  assert.deepEqual(candidate.leagueBoard.ourRoster.map((entry) => entry.amount), [0, 1]);
+  assert.equal(candidate.leagueBoard.teams[0].spent, 1);
+  assert.equal(candidate.leagueBoard.teams[0].remainingBudget, 199);
+  assert.equal(isDraftAuditSnapshot(candidate), true);
+  const evaluation = evaluateDraftAuditSnapshot(candidate);
+  assert.equal(evaluation.remainingBudget, 199);
+  assert.equal(evaluation.openSlots, 12);
+  assert.deepEqual(evaluation.hardViolations, []);
+  assert.equal(evaluation.finalViolations.some((violation) => violation.includes("SALARY_CAP")), false);
+});
+
+test("only exact pinned keepers bypass purchase evidence; all twelve auction purchases remain proven", () => {
+  const league = authenticatedEspnLeagues.profiles["salary-cap"];
+  const keepers = trustedDraftKeeperEntries(league);
+  const completeRoster = roster.map((entry, index) => index === 2 ? keepers[0] : index === 5 ? keepers[1] : entry);
+  const evidence = completeSalaryCapEvidence();
+  evidence.sales = evidence.sales.filter((sale) => ![roster[2].playerId, roster[5].playerId].includes(sale.playerId));
+  const candidate = snapshot({
+    league,
+    draft: { totalPicks: 168, appRoster: completeRoster, espnRoster: completeRoster },
+    salaryCapEvidence: evidence,
+    liveControl: attributedLiveControl(completeRoster),
+  });
+  assert.equal(evidence.sales.length, 12);
+  assert.equal(isDraftAuditSnapshot(candidate), true);
+  assert.equal(evaluateDraftAuditSnapshot(candidate).finalReady, true);
+
+  const missingPurchase = { ...candidate, salaryCapEvidence: { sales: evidence.sales.slice(1) } };
+  assert.ok(evaluateDraftAuditSnapshot(missingPurchase).finalViolations.includes("OWN_SALARY_CAP_EVIDENCE_INCOMPLETE"));
+  assert.ok(evaluateDraftAuditSnapshot(missingPurchase).finalViolations.includes("OWN_SALARY_CAP_PRICE_MISMATCH"));
+  const wrongPrice = structuredClone(candidate);
+  wrongPrice.draft.appRoster[2].amount = 1;
+  assert.ok(evaluateDraftAuditSnapshot(wrongPrice).hardViolations.includes("CONFIGURED_KEEPER_MISMATCH"));
+
+  for (const changedIdentity of [{ id: "44051" }, { teamId: 8 }, { season: 2027 }, { draftType: "SNAKE" }, { keeperCount: 1 }]) {
+    const wrongLeague = { ...league, ...changedIdentity };
+    assert.deepEqual(trustedDraftKeeperEntries(wrongLeague), [], JSON.stringify(changedIdentity));
+    if (wrongLeague.draftType === "AUCTION") {
+      assert.ok(evaluateDraftAuditSnapshot({ ...candidate, league: wrongLeague }).hardViolations.includes("INVALID_SALARY"));
+    }
+  }
+  const forgedKeeper = structuredClone(candidate);
+  forgedKeeper.draft.appRoster[0] = { ...forgedKeeper.draft.appRoster[0], keeper: true, amount: 0 };
+  assert.ok(evaluateDraftAuditSnapshot(forgedKeeper).hardViolations.includes("INVALID_SALARY"));
 });
 
 test("authenticated capture receipts require the private current-audit issue token and consume once", async () => {

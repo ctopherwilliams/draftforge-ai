@@ -4,6 +4,8 @@ This is the focused operating plan for the September 8, 2026 ESPN salary-cap dra
 
 ## Exact target
 
+Latest preparation evidence: [September 7 preflight](2026-09-07-auction-preflight.md). The local release checks pass, but GNG freshness blocks arming until a genuinely refreshed provider board is available. Tomorrow's live-room checks remain mandatory.
+
 | Field | Required value |
 | --- | --- |
 | Platform | ESPN only |

@@ -7,6 +7,7 @@ import {
   type Recommendation,
 } from "./draft-engine.ts";
 import { isLiveControlState, type LiveControlState } from "./live-control.ts";
+import authenticatedEspnLeagues from "../../config/authenticated-espn-leagues.json" with { type: "json" };
 
 export const MAX_DRAFT_ACTION_TELEMETRY_EVENTS = 256;
 export const MAX_DRAFT_OPERATOR_ALTERNATIVES = 5;
@@ -129,6 +130,30 @@ export type DraftAuditRosterEntry = {
   position: string;
   amount: number;
 };
+
+/** Keeper exemptions come from the pinned event, never a publisher-supplied flag. */
+export function trustedDraftKeeperEntries(league: {
+  id: string;
+  teamId: number;
+  season: number;
+  draftType: string;
+  keeperCount: number;
+}): DraftAuditRosterEntry[] {
+  const profile = Object.values(authenticatedEspnLeagues.profiles).find((candidate) => (
+    candidate.id === league.id
+    && candidate.teamId === league.teamId
+    && candidate.season === league.season
+    && candidate.draftType === league.draftType
+    && candidate.keeperCount === league.keeperCount
+  ));
+  if (!profile || !("event" in profile)) return [];
+  return profile.event.selectedKeepers.map((keeper) => ({
+    playerId: keeper.espnPlayerId,
+    playerName: keeper.name,
+    position: keeper.position,
+    amount: keeper.amount,
+  }));
+}
 
 export type DraftActionTelemetryEvent = {
   occurredAt: string;
@@ -380,12 +405,12 @@ export function isCanonicalDraftAuditUtcTimestamp(value: unknown): value is stri
   return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
 }
 
-function isBoundedSettingsMap(value: unknown, maximumValue: number) {
+function isBoundedSettingsMap(value: unknown, maximumValue: number, minimumValue = 0) {
   if (!isRecord(value)) return false;
   const entries = Object.entries(value);
   return entries.length <= MAX_DRAFT_AUDIT_MAP_ENTRIES && entries.every(([key, count]) => (
     DRAFT_AUDIT_SAFE_MAP_KEY.test(key)
-    && isBoundedInteger(count, 0, maximumValue)
+    && isBoundedInteger(count, minimumValue, maximumValue)
   ));
 }
 
@@ -623,7 +648,7 @@ export function sanitizeDraftLeagueBoardSnapshot(value: unknown): DraftLeagueBoa
     || recentPicks.some((pick) => !teamSlots.has(pick.teamSlot))
     || [...recentPicks, ...ourRoster].some((pick) => teamBySlot.get(pick.teamSlot)?.ours !== pick.ours)
     || [...recentPicks, ...ourRoster].some((pick) => auction
-      ? pick.amount === null || pick.amount < 1 || pick.round !== null
+      ? pick.amount === null || pick.amount < 0 || pick.round !== null
       : pick.amount !== null || pick.round === null)
     || ourRoster.some((pick) => !pick.ours || !teamSlots.has(pick.teamSlot) || pick.teamSlot !== ownTeam?.teamSlot)
     || ownTeam?.playerCount !== ourRoster.length
@@ -732,7 +757,7 @@ export function buildDraftLeagueBoardSnapshot(input: {
     ours: Number(pick.teamId) === Number(input.league.teamId),
     player: publicPlayer(pick.playerId),
     amount: input.league.draftType === "AUCTION"
-      ? Math.min(MAX_DRAFT_AUDIT_AUCTION_BUDGET, Math.max(1, Math.trunc(Number(pick.amount || 0))))
+      ? Math.min(MAX_DRAFT_AUDIT_AUCTION_BUDGET, Math.max(0, Math.trunc(Number(pick.amount || 0))))
       : null,
   });
   const teamRows = teamIds.map((teamId) => {
@@ -748,7 +773,7 @@ export function buildDraftLeagueBoardSnapshot(input: {
       return counts;
     }, {});
     const spent = input.league.draftType === "AUCTION"
-      ? teamPicks.reduce((sum, pick) => sum + Math.max(1, Math.trunc(Number(pick.amount || 0))), 0)
+      ? teamPicks.reduce((sum, pick) => sum + Math.max(0, Math.trunc(Number(pick.amount || 0))), 0)
       : null;
     return {
       teamSlot: teamSlotById.get(teamId) as number,
@@ -845,7 +870,7 @@ export function isDraftAuditSnapshot(value: unknown): value is DraftAuditSnapsho
     || !isBoundedInteger(league.scoringRules, 1, 512)) return false;
   if (!isBoundedInteger(league.keeperCount, 0, league.rosterSize)) return false;
   if (!isBoundedSettingsMap(league.lineupSlotCounts, league.rosterSize)
-    || !isBoundedSettingsMap(league.positionLimits, league.rosterSize)
+    || !isBoundedSettingsMap(league.positionLimits, league.rosterSize, -1)
     || !binding
     || !isBoundedInteger(binding.tabId, 1, MAX_DRAFT_AUDIT_TAB_ID)) return false;
   if (!isBoundedDate(binding.authenticatedImportAt)) return false;
@@ -1018,6 +1043,13 @@ export function isDraftAuditSnapshot(value: unknown): value is DraftAuditSnapsho
 
 export function evaluateDraftAuditSnapshot(snapshot: DraftAuditSnapshot): DraftAuditEvaluation {
   const roster = snapshot.draft.appRoster;
+  const trustedKeepers = trustedDraftKeeperEntries(snapshot.league);
+  const isTrustedKeeper = (entry: DraftAuditRosterEntry) => trustedKeepers.some((keeper) => (
+    keeper.playerId === entry.playerId
+    && keeper.position === entry.position
+    && keeper.amount === entry.amount
+  ));
+  const auctionPurchases = roster.filter((entry) => !isTrustedKeeper(entry));
   const openSlots = Math.max(0, snapshot.league.rosterSize - roster.length);
   const spent = roster.reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
   const remainingBudget = snapshot.league.draftType === "AUCTION"
@@ -1035,7 +1067,10 @@ export function evaluateDraftAuditSnapshot(snapshot: DraftAuditSnapshot): DraftA
     if (count > positionLimit(snapshot, position)) hardViolations.push(`POSITION_CAP_${position}`);
   }
   if (snapshot.league.draftType === "AUCTION") {
-    if (roster.some((entry) => entry.amount < 1)) hardViolations.push("INVALID_SALARY");
+    if (roster.some((entry) => entry.amount < 0 || (entry.amount < 1 && !isTrustedKeeper(entry)))) hardViolations.push("INVALID_SALARY");
+    if (trustedKeepers.some((keeper) => !roster.some((entry) => (
+      entry.playerId === keeper.playerId && isTrustedKeeper(entry)
+    )))) hardViolations.push("CONFIGURED_KEEPER_MISMATCH");
     if (spent > snapshot.league.auctionBudget) hardViolations.push("SALARY_CAP_EXCEEDED");
     if (remainingBudget < openSlots) hardViolations.push("ONE_DOLLAR_RESERVE_VIOLATION");
   }
@@ -1068,8 +1103,8 @@ export function evaluateDraftAuditSnapshot(snapshot: DraftAuditSnapshot): DraftA
       finalViolations.push("SALARY_CAP_EVIDENCE_MISSING");
     } else {
       const wonByPlayer = new Map(sales.filter((sale) => sale.outcome === "WON").map((sale) => [sale.playerId, sale]));
-      if (wonByPlayer.size !== roster.length) finalViolations.push("OWN_SALARY_CAP_EVIDENCE_INCOMPLETE");
-      if (roster.some((entry) => {
+      if (wonByPlayer.size !== auctionPurchases.length) finalViolations.push("OWN_SALARY_CAP_EVIDENCE_INCOMPLETE");
+      if (auctionPurchases.some((entry) => {
         const sale = wonByPlayer.get(entry.playerId);
         return !sale || sale.position !== entry.position || sale.closingPrice !== entry.amount;
       })) finalViolations.push("OWN_SALARY_CAP_PRICE_MISMATCH");

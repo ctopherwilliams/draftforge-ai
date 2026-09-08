@@ -6,6 +6,8 @@ For implementation history and exclusions, see [AGENT_HANDOFF.md](AGENT_HANDOFF.
 
 ## Operating model
 
+**September 7 checkpoint:** local release and keeper repairs pass validation, but Auto-Draft is not cleared to arm because GNG's August 19 publication is stale. See [current preflight evidence and remaining checks](docs/2026-09-07-auction-preflight.md). Keep only the companion loaded from `~/github/draftforge-ai/extension` enabled; the legacy duplicate was disabled without reinstalling.
+
 | Surface | Responsibility |
 | --- | --- |
 | Codex conversation | Strategy/status cockpit: run terminal checklists, read the sanitized GET-only status, explain decisions, and report exceptions. It never writes ESPN or mutates DraftForge control state. |

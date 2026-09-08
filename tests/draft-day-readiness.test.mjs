@@ -49,7 +49,9 @@ function audit(overrides = {}) {
       sourceIds: ["espn", "ffc", "mfl", "tradyr", "gng"],
       actionState: "Pre-draft checks confirmed.",
     },
-    draft: { totalPicks: 0, appRoster: [], espnRoster: [] },
+    draft: { totalPicks: 2, appRoster: expected.event.selectedKeepers.map((keeper) => ({
+      playerId: keeper.espnPlayerId, playerName: keeper.name, position: keeper.position, amount: keeper.amount,
+    })), espnRoster: [] },
     telemetry: { actions: [] },
     sleeperEvidence: { candidateCount: 0, candidates: [] },
     availability: {
@@ -180,4 +182,30 @@ test("readiness config tracks both authenticated ESPN formats", () => {
   assert.equal(config.profiles["salary-cap"].event.keeperSpend, 1);
   assert.equal(config.profiles["salary-cap"].event.remainingBudget, 199);
   assert.equal(config.profiles["salary-cap"].event.remainingRosterSlots, 12);
+});
+
+test("readiness verifies exact keeper identities and prices, not just configured slots", () => {
+  const now = Date.parse("2026-08-18T12:00:05.000Z");
+  for (const change of [
+    (rows) => rows.slice(1),
+    (rows) => [...rows, rows[0]],
+    (rows) => rows.map((row, index) => index ? row : { ...row, playerId: 12345 }),
+    (rows) => rows.map((row, index) => index ? row : { ...row, amount: 1 }),
+    (rows) => rows.map((row, index) => index ? row : { ...row, position: "WR" }),
+  ]) {
+    const snapshot = audit();
+    snapshot.draft.appRoster = change(snapshot.draft.appRoster);
+    for (const phase of ["pre-room", "live", "complete"]) {
+      assert.ok(evaluateDraftDayReadiness({ snapshot, expected, now, phase }).blockers.includes("exactSelectedKeepers"));
+    }
+  }
+  const snapshot = audit();
+  snapshot.draft.appRoster.push({ playerId: 12345, playerName: "Acquired QB", position: "QB", amount: 20 });
+  snapshot.safety.inDraftRoom = true;
+  snapshot.safety.liveChecklistReady = true;
+  assert.ok(evaluateDraftDayReadiness({ snapshot, expected, now }).blockers.includes("exactOpeningRoster"));
+  assert.equal(evaluateDraftDayReadiness({ snapshot, expected, now, phase: "live" }).ready, true);
+  const wrongBudget = structuredClone(expected);
+  wrongBudget.event.remainingBudget = 198;
+  assert.ok(evaluateDraftDayReadiness({ snapshot: audit(), expected: wrongBudget, now }).blockers.includes("keeperPlanConsistent"));
 });

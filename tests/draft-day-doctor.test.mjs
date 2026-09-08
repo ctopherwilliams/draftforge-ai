@@ -62,7 +62,9 @@ function snapshot(overrides = {}) {
       sourceSnapshotGeneratedAt,
       actionState: "Pre-draft checks confirmed.",
     },
-    draft: { totalPicks: 0, appRoster: [], espnRoster: [] },
+    draft: { totalPicks: 2, appRoster: expected.event.selectedKeepers.map((keeper) => ({
+      playerId: keeper.espnPlayerId, playerName: keeper.name, position: keeper.position, amount: keeper.amount,
+    })), espnRoster: [] },
     telemetry: { actions: [] },
     sleeperEvidence: { candidateCount: 0, candidates: [] },
     availability: {
@@ -304,6 +306,8 @@ test("doctor can bind a temporary ESPN practice-room identity without changing s
   assert.equal(room.secondsPerPick, 30);
   assert.equal(room.draftType, expected.draftType);
   assert.equal(room.rosterSize, expected.rosterSize);
+  assert.equal(room.event, undefined);
+  assert.deepEqual(resolveDraftDayDoctorLeague(expected).event, expected.event);
   assert.throws(() => resolveDraftDayDoctorLeague(expected, "not-an-espn-id", 6), /DRAFT_DAY_ROOM_IDENTITY_INVALID/);
   assert.throws(() => resolveDraftDayDoctorLeague(expected, "1594208142", 6, 0), /DRAFT_DAY_ROOM_IDENTITY_INVALID/);
 });
