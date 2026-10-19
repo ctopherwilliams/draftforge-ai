@@ -145,6 +145,18 @@ import {
   type PickFeedRuntimeHealth,
 } from "./lib/live-draft-orchestration";
 
+function cryptographicId(prefix = ""): string {
+  const webCrypto = globalThis.crypto;
+  if (webCrypto && typeof webCrypto.randomUUID === "function") return `${prefix}${webCrypto.randomUUID()}`;
+  if (!webCrypto || typeof webCrypto.getRandomValues !== "function") {
+    throw new Error("A cryptographic random source is required to mint this identifier.");
+  }
+  const bytes = new Uint8Array(16);
+  webCrypto.getRandomValues(bytes);
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${prefix}${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 const DASHBOARD_LOADED_AT = new Date().toISOString();
 
 const DEMO_PLAYERS: DraftPlayer[] = [
@@ -236,8 +248,7 @@ function requestExtensionCommand(
   payload: Record<string, unknown>,
   timeoutMs = 1_250,
 ): Promise<Record<string, unknown>> {
-  const transitionRequestId = String(payload.transitionRequestId || globalThis.crypto?.randomUUID?.()
-    || `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const transitionRequestId = String(payload.transitionRequestId || cryptographicId());
   return new Promise((resolve) => {
     let settled = false;
     const finish = (result: Record<string, unknown>) => {
@@ -312,8 +323,8 @@ const SNAKE_ACTION_RESPONSE_BUDGET_MS = 6_000;
 // but normal poll timing must not permanently cancel operator intent.
 const PICK_FEED_HEALTH_WINDOW_MS = 4_000;
 const COMMAND_CENTER_PUBLISHER = {
-  sessionId: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-  documentId: globalThis.crypto?.randomUUID?.() || `document-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  sessionId: cryptographicId(),
+  documentId: cryptographicId("document-"),
   startedAt: new Date().toISOString(),
 };
 // Keep action request ids unique across a dashboard-only reload while the ESPN
@@ -1056,8 +1067,7 @@ export default function Home() {
       setActionState("League transition is waiting for the exact ESPN actuator to revoke. No draft action can be sent.");
       return null;
     }
-    const ownerToken = globalThis.crypto?.randomUUID?.()
-      || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const ownerToken = cryptographicId();
     bindingTransitionOwnerRef.current = ownerToken;
     // Revoke the page-local epoch synchronously while the old exact identity
     // is still intact. Clearing any of these refs first would make the cancel

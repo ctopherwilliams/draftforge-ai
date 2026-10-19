@@ -539,6 +539,7 @@ async function loadDraftContext({ text, staleBidText = "", stalePriorPrice = "",
   };
   const sandbox = {
     URL,
+    crypto: globalThis.crypto,
     document,
     window: { location: { get href() { return currentHref; } } },
     setTimeout,

@@ -46,6 +46,18 @@ import {
 } from "./workspace-lifecycle.js";
 import { renewExistingWriterLease, writerLeaseMatchesBinding } from "./writer-lease.js";
 
+function cryptographicId(prefix = "") {
+  const webCrypto = globalThis.crypto;
+  if (webCrypto && typeof webCrypto.randomUUID === "function") return `${prefix}${webCrypto.randomUUID()}`;
+  if (!webCrypto || typeof webCrypto.getRandomValues !== "function") {
+    throw new Error("A cryptographic random source is required to mint this identifier.");
+  }
+  const bytes = new Uint8Array(16);
+  webCrypto.getRandomValues(bytes);
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${prefix}${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 const appTabs = new Set();
 let espnContext = null;
 let liveRoomWatch = null;
@@ -372,8 +384,7 @@ async function auctionUncertaintyMessageNow(message, sender) {
       if (!pending && Object.keys(records).length >= MAX_AUCTION_CLICK_UNCERTAINTIES) {
         return { ok: false, code: "AUCTION_UNCERTAINTY_CAPACITY_REACHED" };
       }
-      const token = pending ? message.payload.token
-        : globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const token = pending ? message.payload.token : cryptographicId();
       const tokenHash = pending?.tokenHash || await auctionTokenHash(token);
       if (actionBinding !== authorizedBinding
         || actionBindingGeneration !== authorizedBindingGeneration
@@ -644,8 +655,7 @@ function successorWatchPreservesEstablishedAuthority(
 
 function newWriterLease(binding, now = Date.now()) {
   if (!binding) return null;
-  const leaseId = globalThis.crypto?.randomUUID?.()
-    || `${now}-${Math.random().toString(36).slice(2)}`;
+  const leaseId = cryptographicId();
   return {
     leaseId,
     appTabId: binding.appTabId,
