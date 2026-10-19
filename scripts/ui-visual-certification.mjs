@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { waitForChromeDebuggerTarget } from "./lib/chrome-debugger-readiness.mjs";
 import { terminateProfileProcesses } from "./lib/exact-profile-process-cleanup.mjs";
+import { jsCodeLiteral } from "./lib/js-code-literal.mjs";
 
 const chromeBinary = process.env.CHROME_BIN
   || (process.platform === "darwin" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : "google-chrome");
@@ -97,7 +98,7 @@ class CdpClient {
 async function perceptualHash(client, screenshotBase64, expectedWidth, expectedHeight) {
   const evaluated = await client.call("Runtime.evaluate", {
     expression: `(async () => {
-      const encoded = ${JSON.stringify(screenshotBase64)};
+      const encoded = ${jsCodeLiteral(screenshotBase64)};
       const binary = atob(encoded);
       const bytes = new Uint8Array(binary.length);
       for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
@@ -308,7 +309,7 @@ function auditFailures(metrics, expectedH1Count, maxRecommendationLines, require
 
 async function auditAdversarialLongContent(client, command, scenarioName) {
   const evaluated = await client.call("Runtime.evaluate", {
-    expression: `(() => { const source = document.querySelector('.recommendation'); if (!source) return null; const clone = source.cloneNode(true); clone.style.position = 'absolute'; clone.style.left = '-10000px'; clone.style.top = '0'; clone.style.width = source.getBoundingClientRect().width + 'px'; clone.style.visibility = 'hidden'; clone.style.pointerEvents = 'none'; const name = 'Marquez Valdes-Scantling'; const title = clone.querySelector('.decision-head h1'); const player = clone.querySelector('.rec-player h2'); if (!title || !player) return null; title.replaceChildren(document.createTextNode(${JSON.stringify(command)} + ' ' + name)); player.replaceChildren(document.createTextNode(name)); document.body.append(clone); try { const titleStyle = getComputedStyle(title); const playerStyle = getComputedStyle(player); const titleLineHeight = Number.parseFloat(titleStyle.lineHeight); const playerLineHeight = Number.parseFloat(playerStyle.lineHeight); return { titleLines: Math.round(title.getBoundingClientRect().height / titleLineHeight), playerLines: Math.round(player.getBoundingClientRect().height / playerLineHeight), panelOverflow: clone.scrollWidth > clone.clientWidth + 1, playerClipped: ['hidden', 'clip'].includes(playerStyle.overflowX) && (player.scrollWidth > player.clientWidth + 1 || player.scrollHeight > player.clientHeight + 1) }; } finally { clone.remove(); } })()`,
+    expression: `(() => { const source = document.querySelector('.recommendation'); if (!source) return null; const clone = source.cloneNode(true); clone.style.position = 'absolute'; clone.style.left = '-10000px'; clone.style.top = '0'; clone.style.width = source.getBoundingClientRect().width + 'px'; clone.style.visibility = 'hidden'; clone.style.pointerEvents = 'none'; const name = 'Marquez Valdes-Scantling'; const title = clone.querySelector('.decision-head h1'); const player = clone.querySelector('.rec-player h2'); if (!title || !player) return null; title.replaceChildren(document.createTextNode(${jsCodeLiteral(command)} + ' ' + name)); player.replaceChildren(document.createTextNode(name)); document.body.append(clone); try { const titleStyle = getComputedStyle(title); const playerStyle = getComputedStyle(player); const titleLineHeight = Number.parseFloat(titleStyle.lineHeight); const playerLineHeight = Number.parseFloat(playerStyle.lineHeight); return { titleLines: Math.round(title.getBoundingClientRect().height / titleLineHeight), playerLines: Math.round(player.getBoundingClientRect().height / playerLineHeight), panelOverflow: clone.scrollWidth > clone.clientWidth + 1, playerClipped: ['hidden', 'clip'].includes(playerStyle.overflowX) && (player.scrollWidth > player.clientWidth + 1 || player.scrollHeight > player.clientHeight + 1) }; } finally { clone.remove(); } })()`,
     returnByValue: true,
   });
   const metrics = evaluated.result.value;
@@ -409,7 +410,7 @@ try {
     }, 15_000, `${scenario.name} hydrated preview controls`);
     if (scenario.format) {
       const clicked = await client.call("Runtime.evaluate", {
-        expression: `(() => { const button = [...document.querySelectorAll('.preview-formats button')].find((node) => node.textContent.trim() === ${JSON.stringify(scenario.format)}); if (!button) return false; button.click(); return true; })()`,
+        expression: `(() => { const button = [...document.querySelectorAll('.preview-formats button')].find((node) => node.textContent.trim() === ${jsCodeLiteral(scenario.format)}); if (!button) return false; button.click(); return true; })()`,
         returnByValue: true,
       });
       if (!clicked.result.value) throw new Error(`${scenario.name}: preview control was not available`);

@@ -83,5 +83,11 @@
     "vite": "8.2.1",
     "wrangler": "4.121.0"
   },
+  "overrides": {
+    "fast-uri": "3.1.8",
+    "js-yaml": "4.3.2",
+    "sharp": "0.35.5",
+    "undici": "7.29.1"
+  },
   "type": "module"
 }

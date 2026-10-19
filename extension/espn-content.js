@@ -39,8 +39,20 @@ let trackedDraftClock = { key: "", seconds: null, observedAt: 0 };
 let trackedDraftNamespace = "";
 let latestProducerContext = null;
 let contextProducerRevision = 0;
-const contextProducerSessionId = globalThis.crypto?.randomUUID?.()
-  || `producer-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+function cryptographicId(prefix = "") {
+  const webCrypto = globalThis.crypto;
+  if (webCrypto && typeof webCrypto.randomUUID === "function") return `${prefix}${webCrypto.randomUUID()}`;
+  if (!webCrypto || typeof webCrypto.getRandomValues !== "function") {
+    throw new Error("A cryptographic random source is required to mint this identifier.");
+  }
+  const bytes = new Uint8Array(16);
+  webCrypto.getRandomValues(bytes);
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${prefix}${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+const contextProducerSessionId = cryptographicId("producer-");
 let actionExecutionTail = Promise.resolve();
 const inFlightActionResults = new Map();
 const completedActionResults = new Map();
