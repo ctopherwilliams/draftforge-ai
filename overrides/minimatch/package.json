@@ -1,0 +1,24 @@
+{
+  "name": "minimatch",
+  "version": "11.0.3",
+  "private": true,
+  "description": "Callable CommonJS facade for minimatch 11. ESLint 9 plugins still invoke the v3 default export.",
+  "main": "./index.cjs",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./index.d.ts",
+        "default": "./index.mjs"
+      },
+      "require": {
+        "types": "./index.d.ts",
+        "default": "./index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "minimatch-11": "npm:minimatch@11.0.3"
+  }
+}

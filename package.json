@@ -75,6 +75,7 @@
     "eslint-plugin-react": "7.37.5",
     "eslint-plugin-react-hooks": "7.1.1",
     "globals": "16.4.0",
+    "minimatch": "file:./overrides/minimatch",
     "react-server-dom-webpack": "19.2.8",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",
@@ -84,8 +85,11 @@
     "wrangler": "4.121.0"
   },
   "overrides": {
+    "@vercel/og": "1.0.3",
     "fast-uri": "3.1.9",
     "js-yaml": "4.3.2",
+    "minimatch": "$minimatch",
+    "satori": "0.33.5",
     "sharp": "0.35.5",
     "undici": "7.30.1"
   },
